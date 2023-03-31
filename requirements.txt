@@ -1,0 +1,6 @@
+discord.py
+Flask
+Flask-RESTful
+Flask-OAuthlib
+websockets
+discord>=2.2.2
