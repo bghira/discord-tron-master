@@ -4,3 +4,6 @@ Flask-RESTful
 Flask-OAuthlib
 websockets
 discord>=2.2.2
+Flask-Migrate
+mysql-connector-python
+python-dotenv
