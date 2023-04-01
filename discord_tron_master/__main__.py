@@ -8,6 +8,11 @@ from discord_tron_master.classes.app_config import AppConfig
 from flask_migrate import Migrate
 from flask import Flask
 
+from discord_tron_master.classes.worker_manager import WorkerManager
+from discord_tron_master.classes.queue_manager import QueueManager
+from discord_tron_master.classes.websocket_server import WebSocketServer
+from discord_tron_master.classes.command_processor import CommandProcessor
+
 config = AppConfig()
 api = API()
 from discord_tron_master.auth import Auth
@@ -24,11 +29,24 @@ import threading, asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor
 
 def main():
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    # Create instances of the worker manager and queue manager
+    worker_manager = WorkerManager()
+    queue_manager = QueueManager(worker_manager)
+
+    # Create a command processor instance
+    command_processor = CommandProcessor(queue_manager, worker_manager)
+
+    # Create the WebSocket server instance
+    websocket_host = config.get_websocket_hub_host()
+    websocket_port = config.get_websocket_hub_port()
+    websocket_server = WebSocketServer(websocket_host, websocket_port, None, command_processor)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
         tasks = [
             executor.submit(run_flask_api),
             executor.submit(asyncio.run, websocket_hub.run()),
             executor.submit(discord_bot.run),
+            executor.submit(websocket_server.start),
         ]
 
         for future in concurrent.futures.as_completed(tasks):
@@ -41,7 +59,6 @@ def main():
 def run_flask_api():
     logging.info("Startup! Begin API.")
     api.run()
-
 
 def create_worker_user(username: str, password: str, email = None):
     from discord_tron_master.models.base import db

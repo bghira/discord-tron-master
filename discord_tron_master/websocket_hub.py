@@ -19,12 +19,17 @@ class WebSocketHub:
         if not access_token or not self.auth.validate_access_token(access_token):
             await websocket.close(code=4001, reason="Invalid access token")
             return
-        self.connected_clients.add(websocket)
+        # Add the client to the set of clients
+        self.clients.add(websocket)
         try:
+            # Process incoming messages
             async for message in websocket:
-                await self.broadcast(message)
+                # Handle messages here
+                pass
         finally:
-            self.connected_clients.remove(websocket)
+            # Remove the client from the set of clients
+            self.clients.remove(websocket)
+
 
     async def broadcast(self, message):
         for client in self.connected_clients:
@@ -32,4 +37,5 @@ class WebSocketHub:
 
     async def run(self, host="0.0.0.0", port=6789):
         server = await websockets.serve(self.handler, host, port)
-        await server.wait_closed()
+        asyncio.get_event_loop().run_until_complete(server)
+        asyncio.get_event_loop().run_forever()
