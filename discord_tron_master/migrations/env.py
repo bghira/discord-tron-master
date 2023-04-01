@@ -1,9 +1,15 @@
+import discord_tron_master.models
+from discord_tron_master.models.base import db
+target_metadata = db.metadata
+
 import logging
 from logging.config import fileConfig
 
 from flask import current_app
 
 from alembic import context
+
+# Add new models, here.
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

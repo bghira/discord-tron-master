@@ -7,7 +7,11 @@ from discord.ext import commands
 class DiscordBot:
     def __init__(self, token):
         self.token = token
-        self.bot = commands.Bot(command_prefix="!")
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.message_content = True
+        intents.presences = True
+        self.bot = commands.Bot(command_prefix="!", intents=intents)
 
     async def on_ready(self):
         print(f"{self.bot.user} is connected")

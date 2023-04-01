@@ -1,17 +1,18 @@
-# In auth.py, import the necessary modules and create the OAuth2Provider class, which will handle the OAuth s2s authentication. Below is a simple example:
-# You will need to create your own clientgetter and tokengetter functions to validate the client and tokens. Then, use the require_oauth decorator to protect your API routes.
-
 from flask import request, jsonify
 from functools import wraps
 from flask_oauthlib.provider import OAuth2Provider
 import uuid
 import datetime
+from .models import OAuthClient, OAuthToken, ApiKey
+from .models.base import db
 
 class Auth:
-    def __init__(self, app):
-        self.oauth = OAuth2Provider(app)
+    def __init__(self):
         self._clientgetter = None
         self._tokengetter = None
+
+    def set_app(self, app):
+        self.oauth = OAuth2Provider(app)
 
     def clientgetter(self, func):
         self._clientgetter = func
@@ -40,17 +41,14 @@ class Auth:
         return self.validate_api_key(access_token)
 
     def create_api_key(self, client_id, user_id):
-        # You can use a UUID or another unique identifier for the API key
         api_key = str(uuid.uuid4())
-        self.api_keys[api_key] = {
-            "client_id": client_id,
-            "user_id": user_id,
-            "expires": datetime.datetime.utcnow() + datetime.timedelta(days=30)  # Set an expiration date
-        }
+        new_api_key = ApiKey(api_key=api_key, client_id=client_id, user_id=user_id, expires=datetime.datetime.utcnow() + datetime.timedelta(days=30))
+        db.session.add(new_api_key)
+        db.session.commit()
         return api_key
 
     def validate_api_key(self, api_key):
-        key_data = self.api_keys.get(api_key)
-        if key_data and key_data["expires"] > datetime.datetime.utcnow():
+        key_data = ApiKey.query.filter_by(api_key=api_key).first()
+        if key_data and key_data.expires > datetime.datetime.utcnow():
             return True
         return False

@@ -40,7 +40,7 @@ class AppConfig:
         return self.config.get("use_attn_scaling", False)
 
     def get_discord_api_key(self):
-        return self.config["discord_api"]["api_key"]
+        return self.config.get("discord_api", {}).get("api_key", None)
 
     def get_huggingface_api_key(self):
         return self.config["huggingface_api"].get("api_key", None)

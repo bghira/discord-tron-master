@@ -7,10 +7,13 @@ from .classes.app_config import AppConfig
 
 class API:
     def __init__(self):
+        config = AppConfig()
         self.app = Flask(__name__)
-        self.api = Api(self.app)
-        self.database_handler = DatabaseHandler(self.app, AppConfig())
-        self.migrate = Migrate(self.app, self.database_handler.db)
+        database_handler = DatabaseHandler(self.app, config)
+        self.db = database_handler.db
+
+        from discord_tron_master.models import User, OAuthClient, OAuthToken, ApiKey
+        self.migrate = Migrate(self.app, self.db)
         self.register_routes()
 
     def add_resource(self, resource, route):
@@ -39,3 +42,7 @@ class API:
                 "user_id": token_data.user_id,
                 "exp": token_data.expires
             })
+    def create_db(self):
+        with self.app.app_context():
+            from .models import OAuthToken, ApiKey, User
+            self.database_handler.db.create_all()
