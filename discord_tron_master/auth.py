@@ -1,3 +1,4 @@
+import logging
 from flask import request, jsonify
 from functools import wraps
 from flask_oauthlib.provider import OAuth2Provider
@@ -10,8 +11,10 @@ class Auth:
     def __init__(self):
         self._clientgetter = None
         self._tokengetter = None
+        self.app = None
 
     def set_app(self, app):
+        self.app = app
         self.oauth = OAuth2Provider(app)
 
     def clientgetter(self, func):
@@ -37,18 +40,64 @@ class Auth:
             return decorated_function
         return wrapper
 
-    def validate_access_token(self, access_token):
-        return self.validate_api_key(access_token)
-
     def create_api_key(self, client_id, user_id):
         api_key = str(uuid.uuid4())
-        new_api_key = ApiKey(api_key=api_key, client_id=client_id, user_id=user_id, expires=datetime.datetime.utcnow() + datetime.timedelta(days=30))
-        db.session.add(new_api_key)
-        db.session.commit()
-        return api_key
+        with self.app.app_context():
+            new_api_key = ApiKey(api_key=api_key, client_id=client_id, user_id=user_id, expires=datetime.datetime.utcnow() + datetime.timedelta(days=30))
+            db.session.add(new_api_key)
+            db.session.commit()
+            return api_key
 
     def validate_api_key(self, api_key):
-        key_data = ApiKey.query.filter_by(api_key=api_key).first()
-        if key_data and key_data.expires > datetime.datetime.utcnow():
-            return True
+        with self.app.app_context():
+            key_data = ApiKey.query.filter_by(api_key=api_key).first()
+            if key_data and key_data.expires is None:
+                # We found a perpetual key. Continue.
+                logging.info("Key is perpetually active.")
+                return True
+            elif key_data and key_data.expires > datetime.datetime.utcnow():
+                logging.info("The api key has not expired yet.")
+                return True
+            logging.error("API Key was Invalid: %s" % api_key)
+            print(f"API Key was Invalid: {key_data}")
         return False
+
+    def validate_access_token(self, access_token):
+        with self.app.app_context():
+            token_data = OAuthToken.query.filter_by(access_token=access_token).first()
+            if token_data and token_data.expires_in is None:
+                # We found a perpetual token. This is probably bad.
+                raise Exception("Token is perpetually active.")
+            elif token_data and (datetime.datetime.timestamp(token_data.issued_at)*1000 + token_data.expires_in) > datetime.datetime.utcnow().timestamp():
+                logging.info("The token has not expired yet.")
+                return True
+        logging.error("Access token was Invalid: %s" % access_token)
+        print(f"Access token was Invalid: {token_data}")
+        return False
+
+    # As far as I can tell, this is the most important aspect.
+    def create_refresh_token(self, token_data, scopes=None, expires_in=None):
+        import secrets
+        # Don't do this method if you have a token already.
+        token = OAuthToken.query.filter_by(client_id=token_data.client_id, user_id=token_data.user_id).first()
+        if not token:
+            token = OAuthToken(token_data.client_id, token_data.user_id, scopes=scopes, expires_in=expires_in)
+            # Currently, we're only generating refresh_token once, at deploy.
+            # This is less secure, but simpler for now.
+            token.refresh_token = OAuthToken.make_token()
+            with self.app.app_context():
+                db.session.add(token)
+                db.session.commit()
+            return token
+
+    # An existing access_token can be updated.
+    def refresh_access_token(self, token_data, expires_in=None):
+        print("Refreshing access token!")
+        token_data.access_token = OAuthToken.make_token()
+        print("Updating token for client_id: %s, user_id: %s, previous issued_at was %s" % (token_data.client_id, token_data.user_id, token_data.issued_at))
+        token_data.set_issue_timestamp()
+        print("After update, access_token is now %s" % token_data.access_token)
+        print("After setting timestamp, issued_at is now %s" % token_data.issued_at)
+        db.session.add(token_data)
+        db.session.commit()
+        return token_data

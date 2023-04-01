@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "discord-tron-master"
+version = "0.1.0"
+description = "The master connection hub and Discord / Flask interface for the PyTorch bot."
+authors = ["bghira <bghira@users.github.com>"]
+license = "GPL3"
+readme = "README.md"
+packages = [{include = "discord_tron_master"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.12"
+pyopenssl = "^23.1.1"
+bcrypt = "^4.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

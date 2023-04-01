@@ -1,3 +1,6 @@
+import logging
+logging.basicConfig(level=logging.INFO)
+
 from discord_tron_master.classes.database_handler import DatabaseHandler
 from discord_tron_master.api import API
 from discord_tron_master.bot import DiscordBot
@@ -9,17 +12,36 @@ config = AppConfig()
 api = API()
 from discord_tron_master.auth import Auth
 auth = Auth()
+
+# Provide references to each instance.
+auth.set_app(api.app)
+api.set_auth(auth)
+
 from discord_tron_master.websocket_hub import WebSocketHub
 websocket_hub = WebSocketHub(auth_instance=auth)
 discord_bot = DiscordBot(config.get_discord_api_key())
-
+import threading, asyncio, concurrent
+from concurrent.futures import ThreadPoolExecutor
 
 def main():
-    api.run()
-    websocket_hub.run()
-    discord_bot.run()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        tasks = [
+            executor.submit(run_flask_api),
+            executor.submit(asyncio.run, websocket_hub.run()),
+            executor.submit(discord_bot.run),
+        ]
 
-from discord_tron_master.utils import generate_config_file
+        for future in concurrent.futures.as_completed(tasks):
+            try:
+                future.result()
+            except Exception as e:
+                logging.error("An error occurred: %s", e)
+
+# A simple wrapper to run Flask in a thread.
+def run_flask_api():
+    logging.info("Startup! Begin API.")
+    api.run()
+
 
 def create_worker_user(username: str, password: str, email = None):
     from discord_tron_master.models.base import db
@@ -42,7 +64,7 @@ def create_worker_user(username: str, password: str, email = None):
         new_user = User(username=username, password=hashed_password, email=email)
         db.session.add(new_user)
         db.session.commit()
-def delete_worker_user(username):
+def delete_worker_user(username: str):
     from discord_tron_master.models.base import db
     from discord_tron_master.models.user import User
     # Check if a user with the same username or email already exists
@@ -50,11 +72,47 @@ def delete_worker_user(username):
         existing_user = User.query.filter_by(username=username).first()
         db.session.delete(existing_user)
         db.session.commit()
-def create_client_config():
-    host = config.get_websocket_hub_url()
+
+from discord_tron_master.utils import generate_config_file
+def create_client_tokens(username: str):
+    from discord_tron_master.models.user import User
+    from discord_tron_master.models.oauth_token import OAuthToken
+    from discord_tron_master.models.api_key import ApiKey
+
+    with api.app.app_context():
+        import json
+        # Do we have a user at all?
+        existing_user = User.query.filter_by(username=username).first()
+        if existing_user is None:
+            print(f"User {username} does not exist")
+            return
+        # Does it have a client?
+        client = existing_user.has_client()
+        if not client:
+            print(f"Client does not exist for user {existing_user.username} - we will try to create one.")
+            client = existing_user.create_client()
+        else:
+            print(f"User already had an OAuth Client registered. Using that: {client}")
+        # Did we deploy them an API Key?
+        print("Checking for API Key...")
+        api_key = ApiKey.query.filter_by(client_id=client.client_id, user_id=client.user_id).first()
+        if api_key is None:
+            print("No API Key found, generating one...")
+            api_key = ApiKey.generate_by_user_id(existing_user.id)
+        print(f"API key for client/user:\n" + json.dumps(api_key.to_dict(), indent=4))
+        # Do we have tokens for this user?
+        print("Checking for existing tokens...")
+        existing_tokens = OAuthToken.query.filter_by(user_id=existing_user.id).first()
+        if existing_tokens is not None:
+            print(f"Tokens already exist for user {username}:\n" + json.dumps(existing_tokens.to_dict(), indent=4))
+            return existing_tokens
+    # It seems like we can proceed.
+    print(f"Creating tokens for user {username}")
+    host = config.get_websocket_hub_host()
     port = config.get_websocket_hub_port()
     tls = config.get_websocket_hub_tls()
-    refresh_token = auth.
+    with api.app.app_context():
+        refresh_token = auth.create_refresh_token(client.client_id, user_id=existing_user.id)
     protocol = "ws"
     if tls:
         protocol = "wss"
@@ -72,7 +130,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
 
-    create_client_config_parser = subparsers.add_parser("create_client_config")
+    run_parser = subparsers.add_parser("run")
+    create_client_tokens_parser = subparsers.add_parser("create_client_tokens")
+    create_client_tokens_parser.add_argument("--username", required=True)
     create_worker_user_parser = subparsers.add_parser("create_worker_user")
     create_worker_user_parser.add_argument("--username", required=True)
     create_worker_user_parser.add_argument("--password", required=True)
@@ -83,11 +143,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Call the appropriate function based on the command-line argument
-    if args.command == "create_client_config":
-        create_client_config()
+    if args.command == "create_client_tokens":
+        create_client_tokens(args.username)
     elif args.command == "create_worker_user":
         create_worker_user(args.username, args.password, args.email)
     elif args.command == "delete_worker_user":
         delete_worker_user(args.username)
-    else:
-        print("Unknown command:", args.command)
+    elif args.command == "run":
+        main()

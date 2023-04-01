@@ -30,15 +30,6 @@ class AppConfig:
     def get_command_prefix(self):
         return self.config.get("cmd_prefix", "+")
 
-    def get_max_resolution_width(self):
-        return self.config.get("maxres_width", 800)
-
-    def get_max_resolution_height(self):
-        return self.config.get("maxres_height", 456)
-
-    def get_attention_scaling_status(self):
-        return self.config.get("use_attn_scaling", False)
-
     def get_websocket_hub_host(self):
         return self.config.get("websocket_hub", {}).get("host", "localhost")
 
@@ -50,7 +41,8 @@ class AppConfig:
 
     def get_huggingface_api_key(self):
         return self.config["huggingface_api"].get("api_key", None)
-
+    def get_discord_api_key(self):
+        return self.config.get("discord", {}).get("api_key", None)
     def get_local_model_path(self):
         return self.config["huggingface"].get("local_model_path", None)
 

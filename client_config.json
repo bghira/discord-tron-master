@@ -1,0 +1,5 @@
+{
+    "hub_url": "wss://localhost:6789",
+    "refresh_token": "your_refresh_token_here",
+    "server_cert_path": "path/to/server_cert.pem"
+}
