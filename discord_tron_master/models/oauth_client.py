@@ -1,14 +1,36 @@
-# Inside models/oauth_client.py
-from discord_tron_master.classes.database_handler import DatabaseHandler
-from discord_tron_master.api import API
+from .base import db
 
-db = API.database_handler.db
 
-# Example OauthClient model.
 class OAuthClient(db.Model):
-    id = db.Column(db.String(40), primary_key=True)
-    client_secret = db.Column(db.String(55), nullable=False)
-    # ... other fields ...
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(40), unique=True, nullable=False)
+    client_secret = db.Column(db.String(128), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    _redirect_uris = db.Column(db.Text)
+    _default_scopes = db.Column(db.Text)
+
+    @property
+    def client_type(self):
+        return 'confidential'
+
+    @property
+    def redirect_uris(self):
+        if self._redirect_uris:
+            return self._redirect_uris.split()
+        return []
+
+    @property
+    def default_redirect_uri(self):
+        return self.redirect_uris[0]
+
+    @property
+    def default_scopes(self):
+        if self._default_scopes:
+            return self._default_scopes.split()
+        return []
 
     def __init__(self, **kwargs):
-        # Initialize the OAuthClient instance
+        super(OAuthClient, self).__init__(**kwargs)
+
+    def __repr__(self):
+        return f'<OAuthClient {self.client_id}>'
