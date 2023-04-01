@@ -1,7 +1,9 @@
+print("Inside OauthClient model")
 from .base import db
 
 
 class OAuthClient(db.Model):
+    __tablename__ = 'oauth_client'
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.String(40), unique=True, nullable=False)
     client_secret = db.Column(db.String(128), nullable=False)

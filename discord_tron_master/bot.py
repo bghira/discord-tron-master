@@ -26,6 +26,7 @@ class DiscordBot:
                 if file.endswith(".py"):
                     cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
                     try:
+                        import importlib
                         cog_module = importlib.import_module(cog_path)
                         cog_class_name = getattr(cog_module, file[:-3].capitalize())
                         self.bot.add_cog(cog_class_name(self.bot))

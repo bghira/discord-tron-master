@@ -7,12 +7,11 @@ from .classes.app_config import AppConfig
 
 class API:
     def __init__(self):
+        print("Loaded Flask API")
         config = AppConfig()
         self.app = Flask(__name__)
         database_handler = DatabaseHandler(self.app, config)
         self.db = database_handler.db
-
-        from discord_tron_master.models import User, OAuthClient, OAuthToken, ApiKey
         self.migrate = Migrate(self.app, self.db)
         self.register_routes()
 
@@ -44,5 +43,4 @@ class API:
             })
     def create_db(self):
         with self.app.app_context():
-            from .models import OAuthToken, ApiKey, User
             self.database_handler.db.create_all()

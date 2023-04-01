@@ -1,7 +1,9 @@
+print("Inside OauthToken model")
 from datetime import datetime
 from .base import db
 
 class OAuthToken(db.Model):
+    __tablename__ = 'oauth_token'
     id = db.Column(db.Integer, primary_key=True)
     access_token = db.Column(db.String(255), unique=True, nullable=False)
     refresh_token = db.Column(db.String(255), unique=True)

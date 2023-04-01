@@ -39,8 +39,14 @@ class AppConfig:
     def get_attention_scaling_status(self):
         return self.config.get("use_attn_scaling", False)
 
-    def get_discord_api_key(self):
-        return self.config.get("discord_api", {}).get("api_key", None)
+    def get_websocket_hub_host(self):
+        return self.config.get("websocket_hub", {}).get("host", "localhost")
+
+    def get_websocket_hub_port(self):
+        return self.config.get("websocket_hub", {}).get("port", 6789)
+
+    def get_websocket_hub_tls(self):
+        return self.config.get("websocket_hub", {}).get("tls", False)
 
     def get_huggingface_api_key(self):
         return self.config["huggingface_api"].get("api_key", None)

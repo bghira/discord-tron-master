@@ -1,11 +1,21 @@
 import asyncio
 import websockets
+from discord_tron_master.auth import Auth
+from discord_tron_master.models import User, OAuthToken
+
 
 class WebSocketHub:
-    def __init__(self):
+    def __init__(self, auth_instance: Auth):
         self.connected_clients = set()
+        self.auth = auth_instance
 
     async def handler(self, websocket, path):
+        access_token = websocket.request_headers.get("Authorization")
+
+        if not access_token or not self.auth.validate_access_token(access_token):
+            await websocket.close(code=4001, reason="Invalid access token")
+            return
+
         self.connected_clients.add(websocket)
         try:
             async for message in websocket:
@@ -17,7 +27,7 @@ class WebSocketHub:
         for client in self.connected_clients:
             await client.send(message)
 
-    def run(self, host='0.0.0.0', port=6789):
+    def run(self, host="0.0.0.0", port=6789):
         start_server = websockets.serve(self.handler, host, port)
         asyncio.get_event_loop().run_until_complete(start_server)
         asyncio.get_event_loop().run_forever()
