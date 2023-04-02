@@ -15,6 +15,7 @@ class WebSocketServer:
     async def handler(self, websocket, path):
         try:
             async for message in websocket:
+                import json
                 data = json.loads(message)
                 command = data["command"]
                 payload = data.get("payload", {})

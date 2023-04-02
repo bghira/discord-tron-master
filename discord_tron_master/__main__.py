@@ -3,7 +3,6 @@ logging.basicConfig(level=logging.INFO)
 
 from discord_tron_master.classes.database_handler import DatabaseHandler
 from discord_tron_master.api import API
-from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
 from flask_migrate import Migrate
 from flask import Flask
@@ -21,32 +20,40 @@ auth = Auth()
 # Provide references to each instance.
 auth.set_app(api.app)
 api.set_auth(auth)
-
+import discord
 from discord_tron_master.websocket_hub import WebSocketHub
+from discord_tron_master.bot import DiscordBot
+
 websocket_hub = WebSocketHub(auth_instance=auth)
-discord_bot = DiscordBot(config.get_discord_api_key())
-import threading, asyncio, concurrent
+
+intents = discord.Intents.default()
+intents.typing = False
+intents.presences = False
+intents.message_content = True
+PREFIX="!"
+discord_bot = DiscordBot(token=config.get_discord_api_key())
+
+import asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor
 
+asyncio.run(discord_bot.set_websocket_hub(websocket_hub))
+
 def main():
-    # Create instances of the worker manager and queue manager
-    worker_manager = WorkerManager()
-    queue_manager = QueueManager(worker_manager)
+    def run_websocket_hub():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(websocket_hub.run())
 
-    # Create a command processor instance
-    command_processor = CommandProcessor(queue_manager, worker_manager)
+    def run_discord_bot():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(discord_bot.run())
 
-    # Create the WebSocket server instance
-    websocket_host = config.get_websocket_hub_host()
-    websocket_port = config.get_websocket_hub_port()
-    websocket_server = WebSocketServer(websocket_host, websocket_port, None, command_processor)
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         tasks = [
             executor.submit(run_flask_api),
-            executor.submit(asyncio.run, websocket_hub.run()),
-            executor.submit(discord_bot.run),
-            executor.submit(websocket_server.start),
+            # executor.submit(run_websocket_hub),
+            executor.submit(run_discord_bot),
         ]
 
         for future in concurrent.futures.as_completed(tasks):
