@@ -1,4 +1,3 @@
-print("Inside Database Handler")
 from flask_sqlalchemy import SQLAlchemy
 from .app_config import AppConfig
 

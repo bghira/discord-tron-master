@@ -90,6 +90,18 @@ class Auth:
                 db.session.commit()
             return token
 
+    # Refresh the auth link using the refresh_token
+    def refresh_authorization(self, token_data, expires_in=None):
+        print("Refreshing access token!")
+        token_data.access_token = OAuthToken.make_token()
+        print("Updating token for client_id: %s, user_id: %s, previous issued_at was %s" % (token_data.client_id, token_data.user_id, token_data.issued_at))
+        token_data.set_issue_timestamp()
+        print("After update, access_token is now %s" % token_data.access_token)
+        print("After setting timestamp, issued_at is now %s" % token_data.issued_at)
+        db.session.add(token_data)
+        db.session.commit()
+        return token_data
+
     # An existing access_token can be updated.
     def refresh_access_token(self, token_data, expires_in=None):
         print("Refreshing access token!")

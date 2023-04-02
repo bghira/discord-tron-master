@@ -9,7 +9,6 @@ from flask import Flask
 
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.queue_manager import QueueManager
-from discord_tron_master.classes.websocket_server import WebSocketServer
 from discord_tron_master.classes.command_processor import CommandProcessor
 
 config = AppConfig()
@@ -23,9 +22,17 @@ api.set_auth(auth)
 import discord
 from discord_tron_master.websocket_hub import WebSocketHub
 from discord_tron_master.bot import DiscordBot
+# Initialize the worker manager and add a few workers
+worker_manager = WorkerManager()
+# Initialize the Queue manager
+queue_manager = QueueManager(worker_manager)
+worker_manager.set_queue_manager(queue_manager)
+# Initialize the command processor
+command_processor = CommandProcessor(queue_manager, worker_manager)
+# Now, the WebSocket Hub.
+websocket_hub = WebSocketHub(auth_instance=auth, command_processor=command_processor)
 
-websocket_hub = WebSocketHub(auth_instance=auth)
-
+# Begin to configure the Discord bot frontend.
 intents = discord.Intents.default()
 intents.typing = False
 intents.presences = False
@@ -36,7 +43,9 @@ discord_bot = DiscordBot(token=config.get_discord_api_key())
 import asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor
 
+asyncio.run(discord_bot.set_worker_manager(worker_manager))
 asyncio.run(discord_bot.set_websocket_hub(websocket_hub))
+
 
 def main():
     def run_websocket_hub():

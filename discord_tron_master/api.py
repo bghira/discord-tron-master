@@ -41,7 +41,7 @@ class API:
                 return jsonify({"error": "Invalid refresh token"}), 400
             print(f"Refreshed access token requested from {token_data.client_id}")
             # Logic to refresh the access token using the provided refresh_token
-            new_ticket = self.auth.create_refresh_token(token_data)
+            new_ticket = self.auth.refresh_access_token(token_data)
             response = new_ticket.to_dict()
 
             return jsonify(response)

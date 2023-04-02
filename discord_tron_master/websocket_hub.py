@@ -1,13 +1,14 @@
-import asyncio
+import logging, json
 import websockets
 from discord_tron_master.auth import Auth
 from discord_tron_master.models import User, OAuthToken
-
+from discord_tron_master.classes.command_processor import CommandProcessor
 
 class WebSocketHub:
-    def __init__(self, auth_instance: Auth):
+    def __init__(self, auth_instance: Auth, command_processor: CommandProcessor):
         self.connected_clients = set()
         self.auth = auth_instance
+        self.command_processor = command_processor
 
     async def handler(self, websocket, path):
         access_token = websocket.request_headers.get("Authorization")
@@ -24,10 +25,20 @@ class WebSocketHub:
         try:
             # Process incoming messages
             async for message in websocket:
-                # Handle messages here
-                pass
+                decoded = json.loads(message)
+                logging.info(f"Received message from {websocket.remote_address}: {decoded}")
+                print("Command processor instance:", self.command_processor)
+                raw_result = await self.command_processor.process_command(decoded)
+                result = json.dumps(raw_result)
+                # Did result error? If so, close the websocket connection:
+                if "error" in raw_result:
+                    await websocket.close(code=4002, reason=raw_result)
+                    return
+                logging.info(f"Sending message to {websocket.remote_address}: {result}")
+                await websocket.send(result)
         finally:
             # Remove the client from the set of clients
+            logging.info("Removing client from connected clients")
             self.connected_clients.remove(websocket)
 
 
@@ -37,6 +48,4 @@ class WebSocketHub:
 
     async def run(self, host="0.0.0.0", port=6789):
         server = websockets.serve(self.handler, host, port)
-        # # asyncio.get_event_loop().run_until_complete(server)
-        # server = asyncio.create_task(server)
         await server
