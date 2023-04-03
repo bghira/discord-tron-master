@@ -31,6 +31,9 @@ class DiscordBot:
     async def set_worker_manager(self, worker_manager: WorkerManager):
         self.worker_manager = worker_manager
 
+    async def set_queue_manager(self, queue_manager: QueueManager):
+        self.queue_manager = queue_manager
+
     async def on_ready(self):
         print("Bot is ready!")
         await self.websocket_hub.run()

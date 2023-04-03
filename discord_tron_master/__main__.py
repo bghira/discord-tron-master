@@ -42,7 +42,10 @@ discord_bot = DiscordBot(token=config.get_discord_api_key())
 
 import asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor
+asyncio.run(websocket_hub.set_queue_manager(queue_manager))
+asyncio.run(websocket_hub.set_worker_manager(worker_manager))
 
+asyncio.run(discord_bot.set_queue_manager(queue_manager))
 asyncio.run(discord_bot.set_worker_manager(worker_manager))
 asyncio.run(discord_bot.set_websocket_hub(websocket_hub))
 

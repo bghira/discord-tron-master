@@ -17,10 +17,13 @@ class Handler(commands.Cog):
         next_worker_compute = self.discord.worker_manager.find_first_worker(job_type="compute")
         next_worker_memory = self.discord.worker_manager.find_first_worker(job_type="memory")
         message = "Worker status:\n```"
-        message = message + f"Next GPU worker: {next_worker_gpu}\n"
-        message = message + f"Next Compute worker: {next_worker_compute}\n"
-        message = message + f"Next Memory worker: {next_worker_memory}\n"
-
+        message = message + f"First GPU worker:     {next_worker_gpu}\n"
+        message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_gpu)) + " jobs in queue\n"
+        message = message + f"First Compute worker: {next_worker_compute}\n"
+        message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_compute)) + " jobs in queue\n"
+        message = message + f"First Memory worker:  {next_worker_memory}\n"
+        message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_memory)) + " jobs in queue\n"
+        message = message + "```"
         await ctx.send(message)
 
 

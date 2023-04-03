@@ -9,6 +9,14 @@ class WebSocketHub:
         self.connected_clients = set()
         self.auth = auth_instance
         self.command_processor = command_processor
+        self.queue_manager = None
+        self.worker_manager = None
+
+    async def set_queue_manager(self, queue_manager):
+        self.queue_manager = queue_manager
+        
+    async def set_worker_manager(self, worker_manager):
+        self.worker_manager = worker_manager
 
     async def handler(self, websocket, path):
         access_token = websocket.request_headers.get("Authorization")
@@ -27,6 +35,9 @@ class WebSocketHub:
             async for message in websocket:
                 decoded = json.loads(message)
                 logging.info(f"Received message from {websocket.remote_address}: {decoded}")
+                if "worker_id" in decoded["arguments"]:
+                    worker_id = decoded["arguments"]["worker_id"]
+                    logging.info("Worker ID found in message. Updating worker ID to " + str(worker_id) + ".")
                 print("Command processor instance:", self.command_processor)
                 raw_result = await self.command_processor.process_command(decoded)
                 result = json.dumps(raw_result)
@@ -40,6 +51,8 @@ class WebSocketHub:
             # Remove the client from the set of clients
             logging.info("Removing client from connected clients")
             self.connected_clients.remove(websocket)
+            self.queue_manager.unregister_worker(worker_id)
+            self.worker_manager.unregister_worker(worker_id)
 
 
     async def broadcast(self, message):

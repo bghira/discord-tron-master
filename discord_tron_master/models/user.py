@@ -30,3 +30,10 @@ class User(db.Model):
         db.session.add(client)
         db.session.commit()
         return client
+
+    def get_by_api_key(self, api_key):
+        from discord_tron_master.models import ApiKey
+        api_key = ApiKey.query.filter_by(api_key=api_key).first()
+        if api_key is None:
+            return None
+        return User.query.filter_by(id=api_key.user_id).first()

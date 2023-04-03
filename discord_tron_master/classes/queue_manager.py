@@ -38,6 +38,13 @@ class QueueManager:
     def register_worker(self, worker_id, supported_job_types: List[str]):
         self.queues[worker_id] = {"queue": asyncio.Queue(), "supported_job_types": supported_job_types}
 
+    def worker_queue_length(self, worker_id: str):
+        try:
+            return self.queues[worker_id]["queue"].qsize()
+        except:
+            logging.error("Error retrieving the queue length for worker '" + worker_id + "'")
+            return -1
+
     def unregister_worker(self, worker_id):
         del self.queues[worker_id]
 
