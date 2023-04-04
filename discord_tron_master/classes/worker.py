@@ -1,6 +1,7 @@
 import threading, logging, time, json
 from typing import Callable, Dict, Any, List
-from queue import Queue
+from asyncio import Queue
+import asyncio
 from discord_tron_master.classes.job import Job
 
 class Worker:
@@ -10,7 +11,8 @@ class Worker:
         self.hardware_limits = hardware_limits
         self.hardware = hardware
         self.hostname = hostname
-        self.job_queue = Queue()
+
+        self.job_queue = None
 
         # For monitoring the Worker.
         self.running = True
@@ -19,6 +21,10 @@ class Worker:
         # Initialize as placeholders.
         self.worker_thread = None
         self.monitor_thread = None
+        self.worker_task = None
+
+    def set_job_queue(self, job_queue: Queue):
+        self.job_queue = job_queue
 
     def set_websocket(self, websocket: Callable):
         self.websocket = websocket
@@ -37,35 +43,39 @@ class Worker:
             raise e
 
     def add_job(self, job: Job):
+        if not self.job_queue:
+            raise ValueError("Job queue not initialised yet.")
         if job.job_type not in self.supported_job_types:
             raise ValueError(f"Unsupported job type: {job.job_type}")
+        logging.info("Adding " + job.job_type + " job to worker queue: " + job.id)
+        
         self.job_queue.put(job)
+        logging.info(f"Job queue size for worker {self.worker_id}: {self.job_queue.qsize()}")
 
-    def process_jobs(self):
+    def stop(self):
+        self.terminate = True
+
+    async def process_jobs(self):
         while not self.terminate:
             try:
-                job = self.job_queue.get()
+                job = await self.job_queue.get()  # Use 'await' instead of synchronous call
                 if job is None:
                     break
                 job.execute()
             except Exception as e:
                 logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}")
-                time.sleep(1)
-
-    def stop(self):
-        self.terminate = True
+                await asyncio.sleep(1)  # Use 'await' for asynchronous sleep
 
     def start(self):
-        self.worker_thread = threading.Thread(target=self.process_jobs)
-        self.worker_thread.start()
+        # Use 'asyncio.create_task' to run the 'process_jobs' coroutine
+        self.worker_task = asyncio.create_task(self.process_jobs())
 
     def monitor_worker(self):
         logging.debug(f"Beginning worker monitoring for worker {self.worker_id}")
         while True:
-            if not self.worker_thread.is_alive() and not self.terminate:
-                # Thread died, and worker is not set to terminate
-                    worker_thread = threading.Thread(target=self.process_jobs)
-                    worker_thread.start()
+            if self.worker_task is None or self.worker_task.done() and not self.terminate:
+                # Task completed, and worker is not set to terminate
+                self.worker_task = asyncio.create_task(self.process_jobs())
             elif self.terminate:
                 logging.info("Worker is set to exit, and the time has come.")
                 break

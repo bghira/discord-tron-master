@@ -1,4 +1,5 @@
 import asyncio, logging
+from asyncio import Queue
 logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, List
 from discord_tron_master.classes.worker_manager import WorkerManager
@@ -50,11 +51,16 @@ class QueueManager:
     def unregister_worker(self, worker_id):
         del self.queues[worker_id]
 
+    def queue_by_worker(self, worker: Worker) -> Queue:
+        return self.queues.get(worker.worker_id, None).get("queue", asyncio.Queue())
+
     def queue_contents_by_worker(self, worker_id):
         return self.queues.get(worker_id, None).get("queue", asyncio.Queue())
 
-    async def enqueue_job(self, worker_id, job):
+    async def enqueue_job(self, worker: Worker, job):
+        worker_id = worker.worker_id
         await self.queues[worker_id]["queue"].put(job)
 
-    async def dequeue_job(self, worker_id):
+    async def dequeue_job(self, worker: Worker):
+        worker_id = worker.worker_id
         return await self.queues[worker_id]["queue"].get()
