@@ -3,6 +3,7 @@ from asyncio import Lock
 from discord_tron_master.classes.app_config import AppConfig
 import logging
 from discord_tron_master.bot import DiscordBot
+from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
@@ -17,23 +18,18 @@ class Generate(commands.Cog):
     async def generate(self, ctx, *, prompt):
         try:
             logging.info("Begin generate command coroutine.")
+
+            # Send a message so that they know we received theirs.
             discord_first_message = await ctx.send(f"Adding prompt to queue for processing: " + prompt)
 
-            # Put the context and prompt in a tuple before adding it to the queue
-            await discord.queue_manager.put((ctx, prompt, discord_first_message))
+            # Generate a "Job" object that will be put into the queue.
+            job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
 
-            # Check if there are any running tasks
-            if not hasattr(bot, "image_generation_tasks"):
-                bot.image_generation_tasks = []
+            # Get the worker that will process the job.
+            worker = discord.queue_manager.get_worker_for_job(job)
 
-            # Remove any completed tasks
-            bot.image_generation_tasks = [t for t in bot.image_generation_tasks if not t.done()]
-
-            # If there are fewer tasks than allowed slots, create new tasks
-            while len(bot.image_generation_tasks) < concurrent_slots:
-                task = bot.loop.create_task(generate_image_from_queue())
-                bot.image_generation_tasks.append(task)
-
+            # Add it to the queue
+            await worker.add_job(job)
         except Exception as e:
             await ctx.send(
                 f"Error generating image: {e}\n\nStack trace:\n{traceback.format_exc()}"

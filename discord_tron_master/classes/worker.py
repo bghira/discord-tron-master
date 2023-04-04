@@ -1,9 +1,7 @@
-import threading, logging, time
+import threading, logging, time, json
 from typing import Callable, Dict, Any, List
 from queue import Queue
 from discord_tron_master.classes.job import Job
-from discord_tron_master.classes.worker import Worker
-
 
 class Worker:
     def __init__(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any], hostname: str = "Amnesiac"):
@@ -16,8 +14,27 @@ class Worker:
 
         # For monitoring the Worker.
         self.running = True
+        # For stopping the Worker.
         self.terminate = False
+        # Initialize as placeholders.
         self.worker_thread = None
+        self.monitor_thread = None
+
+    def set_websocket(self, websocket: Callable):
+        self.websocket = websocket
+
+    def send_websocket_message(self, message: str):
+        # If it's an array, we'll have to JSON dump it first:
+        if isinstance(message, list):
+            message = json.dumps(message)
+        elif not isinstance(message, str):
+            raise ValueError("Message must be a string or array.")
+        logging.debug("Worker object yeeting a websocket message to oblivion: " + message)
+        try:
+            self.websocket.send(message)
+        except Exception as e:
+            logging.error("Error sending websocket message: " + str(e))
+            raise e
 
     def add_job(self, job: Job):
         if job.job_type not in self.supported_job_types:
@@ -34,6 +51,7 @@ class Worker:
             except Exception as e:
                 logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}")
                 time.sleep(1)
+
     def stop(self):
         self.terminate = True
 
@@ -41,22 +59,19 @@ class Worker:
         self.worker_thread = threading.Thread(target=self.process_jobs)
         self.worker_thread.start()
 
-    def monitor_worker(worker: Worker, worker_thread: threading.Thread, restart_condition: Callable[[], bool]):
+    def monitor_worker(self):
+        logging.debug(f"Beginning worker monitoring for worker {self.worker_id}")
         while True:
-            # Check if the thread is alive and the worker is running
-            if not worker_thread.is_alive() or not worker.running:
-                if restart_condition():
-                    # Stop the worker if it's still running
-                    if worker.running:
-                        worker.stop()
-
-                    # Wait for the thread to finish
-                    worker_thread.join()
-
-                    # Create a new worker instance and start a new thread
-                    worker = Worker(...)
-                    worker_thread = threading.Thread(target=worker.process_jobs)
+            if not self.worker_thread.is_alive() and not self.terminate:
+                # Thread died, and worker is not set to terminate
+                    worker_thread = threading.Thread(target=self.process_jobs)
                     worker_thread.start()
-
+            elif self.terminate:
+                logging.info("Worker is set to exit, and the time has come.")
+                break
             # Sleep for a while before checking again
-            time.sleep(MONITOR_INTERVAL)
+            time.sleep(10)
+
+    def start_monitoring_thread(self):
+        self.monitor_thread = threading.Thread(target=self.monitor_worker)
+        self.monitor_thread.start()

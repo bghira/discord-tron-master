@@ -1,7 +1,6 @@
 import uuid
 from typing import Dict, Any
 
-
 class Job:
     def __init__(self, job_type: str, payload: Dict[str, Any]):
         self.id = str(uuid.uuid4())

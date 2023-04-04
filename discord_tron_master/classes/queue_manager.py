@@ -2,6 +2,7 @@ import asyncio, logging
 logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, List
 from discord_tron_master.classes.worker_manager import WorkerManager
+from discord_tron_master.classes.worker import Worker
 
 class QueueManager:
     def __init__(self, worker_manager: WorkerManager):
@@ -38,11 +39,12 @@ class QueueManager:
     def register_worker(self, worker_id, supported_job_types: List[str]):
         self.queues[worker_id] = {"queue": asyncio.Queue(), "supported_job_types": supported_job_types}
 
-    def worker_queue_length(self, worker_id: str):
+    def worker_queue_length(self, worker: Worker):
         try:
+            worker_id = worker.worker_id
             return self.queues[worker_id]["queue"].qsize()
         except:
-            logging.error("Error retrieving the queue length for worker '" + worker_id + "'")
+            logging.error("Error retrieving the queue length for worker '" + str(worker_id) + "'")
             return -1
 
     def unregister_worker(self, worker_id):
@@ -50,8 +52,6 @@ class QueueManager:
 
     def queue_contents_by_worker(self, worker_id):
         return self.queues.get(worker_id, None).get("queue", asyncio.Queue())
-
-
 
     async def enqueue_job(self, worker_id, job):
         await self.queues[worker_id]["queue"].put(job)
