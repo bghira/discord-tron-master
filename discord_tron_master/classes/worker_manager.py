@@ -105,7 +105,7 @@ class WorkerManager:
         worker = self.register_worker(worker_id, supported_job_types, hardware_limits, hardware)
         self.queue_manager.register_worker(worker_id, supported_job_types)
         worker.set_job_queue(self.queue_manager.queue_by_worker(worker))
-        worker.start_monitoring_thread()
+        await worker.start_monitoring()  # Use 'await' to call the async 'start_monitoring' method
         return {"success": True, "result": "Worker " + str(worker_id) + " registered successfully"}
 
     async def unregister(self, payload: Dict[str, Any]) -> Dict:

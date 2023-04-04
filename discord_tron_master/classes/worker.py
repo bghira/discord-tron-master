@@ -66,11 +66,7 @@ class Worker:
                 logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}")
                 await asyncio.sleep(1)  # Use 'await' for asynchronous sleep
 
-    def start(self):
-        # Use 'asyncio.create_task' to run the 'process_jobs' coroutine
-        self.worker_task = asyncio.create_task(self.process_jobs())
-
-    def monitor_worker(self):
+    async def monitor_worker(self):
         logging.debug(f"Beginning worker monitoring for worker {self.worker_id}")
         while True:
             if self.worker_task is None or self.worker_task.done() and not self.terminate:
@@ -80,8 +76,9 @@ class Worker:
                 logging.info("Worker is set to exit, and the time has come.")
                 break
             # Sleep for a while before checking again
-            time.sleep(10)
+            await asyncio.sleep(10)
 
-    def start_monitoring_thread(self):
-        self.monitor_thread = threading.Thread(target=self.monitor_worker)
-        self.monitor_thread.start()
+    async def start_monitoring(self):
+        # Use 'asyncio.create_task' to run the 'process_jobs' and 'monitor_worker' coroutines
+        self.worker_task = asyncio.create_task(self.process_jobs())
+        self.monitor_task = asyncio.create_task(self.monitor_worker())
