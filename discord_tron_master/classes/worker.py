@@ -1,4 +1,5 @@
 import threading, logging, time, json
+logging.basicConfig(level=logging.INFO)
 from typing import Callable, Dict, Any, List
 from asyncio import Queue
 import asyncio
@@ -11,9 +12,6 @@ class Worker:
         self.hardware_limits = hardware_limits
         self.hardware = hardware
         self.hostname = hostname
-
-        self.job_queue = None
-
         # For monitoring the Worker.
         self.running = True
         # For stopping the Worker.
@@ -22,22 +20,25 @@ class Worker:
         self.worker_thread = None
         self.monitor_thread = None
         self.worker_task = None
+        self.job_queue = None
+        self.websocket = None
 
     def set_job_queue(self, job_queue: Queue):
+        logging.info("Setting job queue for worker " + self.worker_id)
         self.job_queue = job_queue
 
     def set_websocket(self, websocket: Callable):
         self.websocket = websocket
 
-    def send_websocket_message(self, message: str):
+    async def send_websocket_message(self, message: str):
         # If it's an array, we'll have to JSON dump it first:
         if isinstance(message, list):
             message = json.dumps(message)
         elif not isinstance(message, str):
             raise ValueError("Message must be a string or array.")
-        logging.debug("Worker object yeeting a websocket message to oblivion: " + message)
+        logging.info("Worker object yeeting a websocket message to oblivion: " + message)
         try:
-            self.websocket.send(message)
+            await self.websocket.send(message)
         except Exception as e:
             logging.error("Error sending websocket message: " + str(e))
             raise e
@@ -60,8 +61,10 @@ class Worker:
             try:
                 job = await self.job_queue.get()  # Use 'await' instead of synchronous call
                 if job is None:
+                    logging.info("Empty job submitted to worker!?")
                     break
-                job.execute()
+                logging.info(f"Processing job {job.id} for worker {self.worker_id}")
+                await job.execute()
             except Exception as e:
                 logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}")
                 await asyncio.sleep(1)  # Use 'await' for asynchronous sleep

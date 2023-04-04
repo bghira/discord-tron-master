@@ -23,7 +23,7 @@ class Generate(commands.Cog):
             # Get the worker that will process the job.
             worker = discord.worker_manager.find_best_fit_worker(job)
             if worker is None:
-                await discord_first_message.edit("No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
+                await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
                 # Wait a few seconds before deleting:
                 await discord_first_message.delete(delay=10)
                 return

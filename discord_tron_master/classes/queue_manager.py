@@ -4,6 +4,7 @@ logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, List
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.worker import Worker
+from discord_tron_master.classes.job import Job
 
 class QueueManager:
     def __init__(self, worker_manager: WorkerManager):
@@ -57,8 +58,9 @@ class QueueManager:
     def queue_contents_by_worker(self, worker_id):
         return self.queues.get(worker_id, None).get("queue", asyncio.Queue())
 
-    async def enqueue_job(self, worker: Worker, job):
+    async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id
+        job.set_worker(worker)
         await self.queues[worker_id]["queue"].put(job)
 
     async def dequeue_job(self, worker: Worker):

@@ -39,7 +39,7 @@ class WebSocketHub:
                     worker_id = decoded["arguments"]["worker_id"]
                     logging.info("Worker ID found in message. Updating worker ID to " + str(worker_id) + ".")
                 print("Command processor instance:", self.command_processor)
-                raw_result = await self.command_processor.process_command(decoded)
+                raw_result = await self.command_processor.process_command(decoded, websocket)
                 result = json.dumps(raw_result)
                 # Did result error? If so, close the websocket connection:
                 if "error" in raw_result:

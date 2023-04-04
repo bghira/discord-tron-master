@@ -3,7 +3,7 @@ from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.message import WebsocketMessage
 from typing import Dict, Any
 from discord_tron_master.classes.command_processors import hardware
-import logging, json
+import logging, json, websocket
 
 class CommandProcessor:
     def __init__(self, queue_manager: QueueManager, worker_manager: WorkerManager):
@@ -21,7 +21,7 @@ class CommandProcessor:
             # Add more command handlers as needed
         }
 
-    async def process_command(self, message: WebsocketMessage) -> None:
+    async def process_command(self, message: WebsocketMessage, websocket: websocket) -> None:
         try:
             logging.info("Entered process_command via WebSocket")
             command = message["module_command"]
@@ -31,7 +31,7 @@ class CommandProcessor:
                 logging.error(f"No handler found in module " + str(message["module_name"]) + " for command " + command + ", payload: " + str(message["arguments"]))
                 return
             logging.info("Executing incoming " + str(handler) + " for module " + str(message["module_name"]) + ", command " + command + ", payload: " + str(message["arguments"]))
-            return await handler(message["arguments"])
+            return await handler(message["arguments"], websocket)
         except Exception as e:
             logging.error("Error processing command: " + str(e))
             

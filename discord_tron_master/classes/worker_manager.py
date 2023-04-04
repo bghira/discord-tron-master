@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-import logging
+import logging, websocket
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.classes.job import Job
 
@@ -51,7 +51,7 @@ class WorkerManager:
     def unregister_worker(self, worker_id):
         worker_data = self.workers.pop(worker_id, None)
         if worker_data:
-            supported_job_types = worker_data["supported_job_types"]
+            supported_job_types = worker_data.supported_job_types
             for job_type in supported_job_types:
                 self.workers_by_capability[job_type].remove(worker_id)
                 self.workers.remove(worker_id)
@@ -92,7 +92,7 @@ class WorkerManager:
     def set_queue_manager(self, queue_manager):
         self.queue_manager = queue_manager
 
-    async def register(self, payload: Dict[str, Any]) -> Dict:
+    async def register(self, payload: Dict[str, Any], websocket: websocket) -> Dict:
         logging.info("Registering worker for queued jobs")
         try:
             worker_id = payload["worker_id"]
@@ -105,10 +105,11 @@ class WorkerManager:
         worker = self.register_worker(worker_id, supported_job_types, hardware_limits, hardware)
         self.queue_manager.register_worker(worker_id, supported_job_types)
         worker.set_job_queue(self.queue_manager.queue_by_worker(worker))
+        worker.set_websocket(websocket)
         await worker.start_monitoring()  # Use 'await' to call the async 'start_monitoring' method
         return {"success": True, "result": "Worker " + str(worker_id) + " registered successfully"}
 
-    async def unregister(self, payload: Dict[str, Any]) -> Dict:
+    async def unregister(self, payload: Dict[str, Any], websocket: websocket) -> Dict:
         logging.info("Unregistering worker for queued jobs")
         try:
             worker_id = payload["worker_id"]
