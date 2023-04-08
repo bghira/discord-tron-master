@@ -2,10 +2,12 @@ import uuid, logging, json
 from typing import Dict, Any
 
 class Job:
-    def __init__(self, job_type: str, payload: Dict[str, Any]):
+    def __init__(self, job_type: str, module_name: str, command_name: str, payload: Dict[str, Any]):
         self.id = str(uuid.uuid4())
         self.job_type = job_type
         self.payload = payload
+        self.module_name = module_name
+        self.module_command = command_name
         self.worker = None
 
     def set_worker(self, worker):
@@ -18,6 +20,8 @@ class Job:
         message = {
             "job_type": self.job_type,
             "job_id": self.id,
+            "module_name": self.module_name,
+            "module_command": self.module_command,
             "discord_context": self.context_to_dict(ctx),
             "image_prompt": prompt,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
@@ -41,7 +45,8 @@ class Job:
                 "guild": {
                     "id": ctx.guild.id,
                     "name": ctx.guild.name
-                }
+                },
+                "message_id": ctx.message.id,
             }
         except Exception as e:
             logging.error("Error formatting context to dict: " + str(e))
@@ -62,7 +67,8 @@ class Job:
                 "guild": {
                     "id": discordmsg.guild.id,
                     "name": discordmsg.guild.name
-                }
+                },
+                "message_id": discordmsg.id
             }
         except Exception as e:
             logging.error("Error formatting discord message to dict: " + str(e))
@@ -74,5 +80,5 @@ class Job:
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            await message["discord_first_message"].edit(content="Sorry, hossicle. We had an error sending job to worker: " + str(e))
+            await message["discord_first_message"].edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
             return False

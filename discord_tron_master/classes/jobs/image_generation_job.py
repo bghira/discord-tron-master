@@ -3,4 +3,4 @@ import logging
 
 class ImageGenerationJob(Job):
     def __init__(self, payload):
-        super().__init__("gpu", payload)
+        super().__init__("gpu", "image_generation", "generate_image", payload)

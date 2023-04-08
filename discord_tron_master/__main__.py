@@ -27,10 +27,6 @@ worker_manager = WorkerManager()
 # Initialize the Queue manager
 queue_manager = QueueManager(worker_manager)
 worker_manager.set_queue_manager(queue_manager)
-# Initialize the command processor
-command_processor = CommandProcessor(queue_manager, worker_manager)
-# Now, the WebSocket Hub.
-websocket_hub = WebSocketHub(auth_instance=auth, command_processor=command_processor)
 
 # Begin to configure the Discord bot frontend.
 intents = discord.Intents.default()
@@ -39,6 +35,12 @@ intents.presences = False
 intents.message_content = True
 PREFIX="!"
 discord_bot = DiscordBot(token=config.get_discord_api_key())
+
+# Initialize the command processor
+command_processor = CommandProcessor(queue_manager, worker_manager, discord_bot)
+# Now, the WebSocket Hub.
+websocket_hub = WebSocketHub(auth_instance=auth, command_processor=command_processor, discord_bot=discord_bot)
+
 
 import asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor

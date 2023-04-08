@@ -1,15 +1,46 @@
-# classes/app_config.py
-
 import json
 import os
-import sys
-from io import BytesIO
+from pathlib import Path
 
+DEFAULT_CONFIG = {
+    "concurrent_slots": 1,
+    "cmd_prefix": "+",
+    "websocket_hub": {
+        "host": "localhost",
+        "port": 6789,
+        "tls": False,
+    },
+    "huggingface_api": {
+        "api_key": None,
+    },
+    "discord": {
+        "api_key": None,
+    },
+    "huggingface": {
+        "local_model_path": None,
+    },
+    "users": {},
+    "mysql": {
+        "user": "diffusion",
+        "password": "diffusion_pwd",
+        "hostname": "localhost",
+        "dbname": "diffusion_master",
+    },
+}
+
+DEFAULT_USER_CONFIG = {
+    "model": "theintuitiveye/HARDblend",
+    "negative_prompt": "(child, teen) (malformed, malignant)",
+    "steps": 100,
+    "positive_prompt": "(beautiful, unreal engine 5, highly detailed, hyperrealistic)",
+    "resolution": {
+        "width": 512,
+        "height": 768
+    },
+}
 
 class AppConfig:
     def __init__(self):
-        from pathlib import Path
-
         parent = os.path.dirname(Path(__file__).resolve().parent)
         config_path = os.path.join(parent, "config")
         self.config_path = os.path.join(config_path, "config.json")
@@ -24,6 +55,33 @@ class AppConfig:
 
         with open(self.config_path, "r") as config_file:
             self.config = json.load(config_file)
+
+        self.config = self.merge_dicts(DEFAULT_CONFIG, self.config)
+
+    @staticmethod
+    def merge_dicts(dict1, dict2):
+        result = dict1.copy()
+        for key, value in dict2.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = AppConfig.merge_dicts(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    def get_user_config(self, user_id):
+        user_config = self.config.get("users", {}).get(str(user_id), {})
+        return self.merge_dicts(DEFAULT_USER_CONFIG, user_config)
+
+    @staticmethod
+    def merge_dicts(dict1, dict2):
+        result = dict1.copy()
+        for key, value in dict2.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = AppConfig.merge_dicts(result[key], value)
+            else:
+                result[key] = value
+        return result
+
     def get_concurrent_slots(self):
         return self.config.get("concurrent_slots", 1)
 
@@ -45,9 +103,6 @@ class AppConfig:
         return self.config.get("discord", {}).get("api_key", None)
     def get_local_model_path(self):
         return self.config["huggingface"].get("local_model_path", None)
-
-    def get_user_config(self, user_id):
-        return self.config.get("users", {}).get(str(user_id), {})
 
     def set_user_config(self, user_id, user_config):
         self.config.get("users", {})[str(user_id)] = user_config

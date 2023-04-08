@@ -4,7 +4,7 @@ from discord_tron_master.classes.app_config import AppConfig
 import logging, traceback
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
-
+from discord_tron_master.bot import clean_traceback
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
 
@@ -32,5 +32,5 @@ class Generate(commands.Cog):
             await discord.queue_manager.enqueue_job(worker, job)
         except Exception as e:
             await ctx.send(
-                f"Error generating image: {e}\n\nStack trace:\n{traceback.format_exc()}"
+                f"Error generating image: {e}\n\nStack trace:\n{clean_traceback(traceback.format_exc())}"
             )

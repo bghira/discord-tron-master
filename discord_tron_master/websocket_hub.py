@@ -5,12 +5,13 @@ from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
 
 class WebSocketHub:
-    def __init__(self, auth_instance: Auth, command_processor: CommandProcessor):
+    def __init__(self, auth_instance: Auth, command_processor: CommandProcessor, discord_bot):
         self.connected_clients = set()
         self.auth = auth_instance
         self.command_processor = command_processor
         self.queue_manager = None
         self.worker_manager = None
+        self.discord = discord_bot
 
     async def set_queue_manager(self, queue_manager):
         self.queue_manager = queue_manager
@@ -42,7 +43,9 @@ class WebSocketHub:
                 raw_result = await self.command_processor.process_command(decoded, websocket)
                 result = json.dumps(raw_result)
                 # Did result error? If so, close the websocket connection:
-                if "error" in raw_result:
+                if raw_result is None or "error" in raw_result:
+                    if raw_result is None:
+                        raw_result = "No result was received. No execution occurred. Fuck right off!"
                     await websocket.close(code=4002, reason=raw_result)
                     return
                 logging.info(f"Sending message to {websocket.remote_address}: {result}")
@@ -51,8 +54,10 @@ class WebSocketHub:
             # Remove the client from the set of clients
             logging.info("Removing client from connected clients")
             self.connected_clients.remove(websocket)
-            self.queue_manager.unregister_worker(worker_id)
-            self.worker_manager.unregister_worker(worker_id)
+            # Check if the worker is registered, and if so, unregister it
+            if worker_id:
+                self.queue_manager.unregister_worker(worker_id)
+                self.worker_manager.unregister_worker(worker_id)
 
 
     async def broadcast(self, message):

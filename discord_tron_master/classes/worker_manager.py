@@ -53,8 +53,10 @@ class WorkerManager:
         if worker_data:
             supported_job_types = worker_data.supported_job_types
             for job_type in supported_job_types:
-                self.workers_by_capability[job_type].remove(worker_id)
-                self.workers.remove(worker_id)
+                if worker_id in self.workers_by_capability[job_type]:
+                    self.workers_by_capability[job_type].remove(worker_id)
+                if worker_id in self.workers:
+                    self.workers.remove(worker_id)
 
     def get_worker_supported_job_types(self, worker_id: str) -> List[str]:
         return self.workers[worker_id].supported_job_types
@@ -92,7 +94,7 @@ class WorkerManager:
     def set_queue_manager(self, queue_manager):
         self.queue_manager = queue_manager
 
-    async def register(self, payload: Dict[str, Any], websocket: websocket) -> Dict:
+    async def register(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
         logging.info("Registering worker for queued jobs")
         try:
             worker_id = payload["worker_id"]
@@ -109,7 +111,7 @@ class WorkerManager:
         await worker.start_monitoring()  # Use 'await' to call the async 'start_monitoring' method
         return {"success": True, "result": "Worker " + str(worker_id) + " registered successfully"}
 
-    async def unregister(self, payload: Dict[str, Any], websocket: websocket) -> Dict:
+    async def unregister(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
         logging.info("Unregistering worker for queued jobs")
         try:
             worker_id = payload["worker_id"]
