@@ -1,5 +1,6 @@
 import logging, json
 import websockets
+from websockets.client import WebSocketClientProtocol
 from discord_tron_master.auth import Auth
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
@@ -34,8 +35,8 @@ class WebSocketHub:
         try:
             # Process incoming messages
             async for message in websocket:
+                logging.info(f"Received message from {websocket.remote_address}: {message}")
                 decoded = json.loads(message)
-                logging.info(f"Received message from {websocket.remote_address}: {decoded}")
                 if "worker_id" in decoded["arguments"]:
                     worker_id = decoded["arguments"]["worker_id"]
                     logging.info("Worker ID found in message. Updating worker ID to " + str(worker_id) + ".")

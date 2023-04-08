@@ -1,7 +1,8 @@
-import time
+import time, logging
 
 class WebsocketMessage:
     def __init__(self, message_type: str, module_name: str, module_command, data=None, arguments=None):
+        logging.info("Creating a new WebSocketMessage")
         self._message_type = message_type
         self._module_name = module_name
         self._module_command = module_command
