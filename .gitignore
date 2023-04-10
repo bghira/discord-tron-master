@@ -1,4 +1,8 @@
 # Python and virtual environment files
+discord_tron_master/migrations/version
+.venv
+venv
+work
 *.pem
 */config/config.json
 __pycache__/
