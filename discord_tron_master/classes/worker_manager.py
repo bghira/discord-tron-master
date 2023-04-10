@@ -18,18 +18,18 @@ class WorkerManager:
         min_queued_tasks = float("inf")
         selected_worker = self.find_first_worker(job_type)
         for worker_id, worker in self.workers.items():
-            print(f"worker_id: {worker_id}, worker: {worker}")
+            logging.debug(f"worker_id: {worker_id}, worker: {worker}")
             if job_type in worker.supported_job_types:
-                print(f"Found valid worker for type {job_type}")
+                logging.info(f"Found valid worker for {job_type} job")
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks < min_queued_tasks:
-                    print(f"Found worker with fewer queued tasks: {queued_tasks} < {min_queued_tasks}")
+                    logging.debug(f"Found worker with fewer queued tasks: {queued_tasks} < {min_queued_tasks}")
                     min_queued_tasks = queued_tasks
                     selected_worker = worker
                 else:
-                    print(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
+                    logging.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
             else:
-                print(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
+                logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
         return selected_worker
 
     def find_first_worker(self, job_type: str) -> Worker:
@@ -40,7 +40,7 @@ class WorkerManager:
         return capable_workers[0]
 
     def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
-        logging.info("Run register_worker")
+        logging.info("Registering a new worker!")
         worker = Worker(worker_id, supported_job_types, hardware_limits, hardware, hardware["hostname"])
         self.workers[worker_id] = worker
         for job_type in supported_job_types:
@@ -95,7 +95,7 @@ class WorkerManager:
         self.queue_manager = queue_manager
 
     async def register(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
-        logging.info("Registering worker for queued jobs")
+        logging.debug("Registering worker via WebSocket")
         try:
             worker_id = payload["worker_id"]
         except KeyError:

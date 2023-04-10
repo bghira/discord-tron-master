@@ -36,7 +36,8 @@ class Worker:
             message = json.dumps(message)
         elif not isinstance(message, str):
             raise ValueError("Message must be a string or array.")
-        logging.info("Worker object yeeting a websocket message to oblivion: " + message)
+        logging.info("Sending job to worker")
+        logging.debug(message)
         try:
             await self.websocket.send(message)
         except Exception as e:
@@ -66,7 +67,9 @@ class Worker:
                 logging.info(f"Processing job {job.id} for worker {self.worker_id}")
                 await job.execute()
             except Exception as e:
-                logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}")
+                import traceback
+                from discord_tron_master.bot import clean_traceback
+                logging.error(f"An error occurred while processing jobs for worker {self.worker_id}: {e}, traceback: {await clean_traceback(traceback.format_exc())}")
                 await asyncio.sleep(1)  # Use 'await' for asynchronous sleep
 
     async def monitor_worker(self):

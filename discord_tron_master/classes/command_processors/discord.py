@@ -1,5 +1,5 @@
 from typing import Dict
-import websocket, discord, base64
+import websocket, discord, base64, logging
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 
@@ -16,7 +16,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     file=discord.File(buffer, "image.png")
             await channel.send(content=arguments["message"], file=file)
         except Exception as e:
-            print(f"Error sending message to {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
 async def delete_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -26,7 +26,7 @@ async def delete_message(command_processor, arguments: Dict, data: Dict, websock
             message = await channel.fetch_message(data["message_id"])
             await message.delete()
         except Exception as e:
-            print(f"Error deleting message in {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error deleting message in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message deleted."}
 
 async def delete_previous_errors(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -37,8 +37,8 @@ async def delete_previous_errors(command_processor, arguments: Dict, data: Dict,
     return {"success": True, "result": "Message deleted."}
 
 async def edit_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
-    print(f"Received command data: {data}")
-    print(f"Received command arguments: {arguments}")
+    logging.debug(f"Received command data: {data}")
+    logging.debug(f"Received command arguments: {arguments}")
     if "message" not in arguments:
         raise Exception("Missing message argument.")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
@@ -47,7 +47,7 @@ async def edit_message(command_processor, arguments: Dict, data: Dict, websocket
             message = await channel.fetch_message(data["message_id"])
             await message.edit(content=arguments["message"])
         except Exception as e:
-            print(f"Error editing message in {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error editing message in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message edited."}
 
 async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -56,7 +56,7 @@ async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: 
         try:
             await channel.send(embed=arguments["embed"])
         except Exception as e:
-            print(f"Error sending embed to {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error sending embed to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Embed sent."}
 
 async def send_file(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -65,7 +65,7 @@ async def send_file(command_processor, arguments: Dict, data: Dict, websocket: W
         try:
             await channel.send(file=arguments["file"])
         except Exception as e:
-            print(f"Error sending file to {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error sending file to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "File sent."}
 
 async def send_files(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -74,5 +74,32 @@ async def send_files(command_processor, arguments: Dict, data: Dict, websocket: 
         try:
             await channel.send(files=arguments["files"])
         except Exception as e:
-            print(f"Error sending files to {channel.name} ({channel.id}): {e}")
+            logging.error(f"Error sending files to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Files sent."}
+
+async def create_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    if channel is not None:
+        try:
+            await channel.create_thread(name=arguments["name"])
+        except Exception as e:
+            logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
+    return {"success": True, "result": "Thread created."}
+
+async def delete_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    if channel is not None:
+        try:
+            await channel.delete()
+        except Exception as e:
+            logging.error(f"Error deleting thread in {channel.name} ({channel.id}): {e}")
+    return {"success": True, "result": "Thread deleted."}
+
+async def send_message_to_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    if channel is not None:
+        try:
+            await channel.send(content=arguments["message"])
+        except Exception as e:
+            logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
+    return {"success": True, "result": "Message sent."}

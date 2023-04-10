@@ -1,11 +1,10 @@
-import json
-import os
-import shutil
+import json, os, shutil, logging
+from discord_tron_master.classes import log_format
 from OpenSSL import crypto
 
 def generate_config_file(filename, data):
     output = json.dumps(data, indent=4)
-    print(f"Generated client TLS details:\n" + str(output))
+    logging.info(f"Generated client TLS details:\n" + str(output))
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
 

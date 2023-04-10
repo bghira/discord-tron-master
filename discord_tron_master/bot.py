@@ -6,6 +6,9 @@ from discord.ext import commands
 from discord_tron_master.websocket_hub import WebSocketHub
 from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.worker_manager import WorkerManager
+from discord_tron_master.classes.custom_help import CustomHelp
+from discord_tron_master.classes.app_config import AppConfig
+config = AppConfig()
 
 class DiscordBot:
     discord_instance = None
@@ -18,7 +21,7 @@ class DiscordBot:
         intents.members = True
         intents.message_content = True
         intents.presences = True
-        self.bot = commands.Bot(command_prefix="!", intents=intents)
+        self.bot = commands.Bot(command_prefix=config.get_command_prefix(), intents=intents, help_command=CustomHelp())
         DiscordBot.discord_instance = self
 
     @classmethod
@@ -46,9 +49,9 @@ class DiscordBot:
 
     async def load_cogs(self, cogs_path="discord_tron_master/cogs"):
         import logging
-        logging.info("Loading cogs! Path: " + cogs_path)
+        logging.debug("Loading cogs! Path: " + cogs_path)
         for root, _, files in os.walk(cogs_path):
-            logging.info("Found cogs: " + str(files))
+            logging.debug("Found cogs: " + str(files))
             for file in files:
                 if file.endswith(".py"):
                     cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
@@ -57,10 +60,10 @@ class DiscordBot:
                         cog_module = importlib.import_module(cog_path)
                         cog_class_name = getattr(cog_module, file[:-3].capitalize())
                         await self.bot.add_cog(cog_class_name(self.bot))
-                        logging.info(f"Loaded cog: {cog_path}")
+                        logging.debug(f"Loaded cog: {cog_path}")
                     except Exception as e:
-                        logging.info(f"Failed to load cog: {cog_path}")
-                        logging.info(e)
+                        logging.error(f"Failed to load cog: {cog_path}")
+                        logging.error(e)
 
     async def find_channel(self, channel_id):
         for guild in self.bot.guilds:

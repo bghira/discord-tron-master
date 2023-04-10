@@ -32,6 +32,10 @@ class Job:
     def context_to_dict(self, ctx):
         # Format context into a dict for WebSocket handling.
         try:
+            logging.debug(f"Trying to format context to dict: {ctx}")
+            message_id = None
+            if hasattr(ctx, "message"):
+                message_id = ctx.message.id
             return {
                 "author": {
                     "id": ctx.author.id,
@@ -46,7 +50,7 @@ class Job:
                     "id": ctx.guild.id,
                     "name": ctx.guild.name
                 },
-                "message_id": ctx.message.id,
+                "message_id": message_id,
             }
         except Exception as e:
             logging.error("Error formatting context to dict: " + str(e))
@@ -80,5 +84,6 @@ class Job:
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            await message["discord_first_message"].edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
+            #await message["discord_first_message"].edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
+            logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
             return False

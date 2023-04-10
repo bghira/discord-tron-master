@@ -1,5 +1,4 @@
 from .base import db
-print("Inside User model")
 
 class User(db.Model):
     __tablename__ = 'user'

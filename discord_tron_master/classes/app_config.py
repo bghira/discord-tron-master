@@ -1,5 +1,4 @@
-import json
-import os
+import json, logging, os
 from pathlib import Path
 
 DEFAULT_CONFIG = {
@@ -29,9 +28,12 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_USER_CONFIG = {
-    "model": "theintuitiveye/HARDblend",
-    "negative_prompt": "(child, teen) (malformed, malignant)",
     "steps": 100,
+    "temperature": 0.9,
+    "strength": 0.5,
+    "model": "theintuitiveye/HARDblend",
+    "variation_model": "HARDblend",
+    "negative_prompt": "(child, teen) (malformed, malignant)",
     "positive_prompt": "(beautiful, unreal engine 5, highly detailed, hyperrealistic)",
     "resolution": {
         "width": 512,
@@ -40,23 +42,18 @@ DEFAULT_USER_CONFIG = {
 }
 
 class AppConfig:
+    flask = None
     def __init__(self):
         parent = os.path.dirname(Path(__file__).resolve().parent)
+        self.project_root = parent
         config_path = os.path.join(parent, "config")
         self.config_path = os.path.join(config_path, "config.json")
         self.example_config_path = os.path.join(config_path, "example.json")
+        self.reload_config()
 
-        if not os.path.exists(self.config_path):
-            with open(self.example_config_path, "r") as example_file:
-                example_config = json.load(example_file)
-
-            with open(self.config_path, "w") as config_file:
-                json.dump(example_config, config_file)
-
-        with open(self.config_path, "r") as config_file:
-            self.config = json.load(config_file)
-
-        self.config = self.merge_dicts(DEFAULT_CONFIG, self.config)
+    @classmethod
+    def set_flask(cls, flask):
+        cls.flask = flask
 
     @staticmethod
     def merge_dicts(dict1, dict2):
@@ -68,7 +65,24 @@ class AppConfig:
                 result[key] = value
         return result
 
+    def reload_config(self):
+        if not os.path.exists(self.config_path):
+            with open(self.example_config_path, "r") as example_file:
+                example_config = json.load(example_file)
+            with open(self.config_path, "w") as config_file:
+                json.dump(example_config, config_file, indent=4)
+        with open(self.config_path, "r") as config_file:
+            self.config = json.load(config_file)
+        self.config = self.merge_dicts(DEFAULT_CONFIG, self.config)
+
+    def get_log_level(self):
+        self.reload_config()
+        level = self.config.get("log_level", "INFO")
+        result = getattr(logging, level.upper(), "ERROR")
+        return result
+
     def get_user_config(self, user_id):
+        self.reload_config()
         user_config = self.config.get("users", {}).get(str(user_id), {})
         return self.merge_dicts(DEFAULT_USER_CONFIG, user_config)
 
@@ -83,47 +97,64 @@ class AppConfig:
         return result
 
     def get_concurrent_slots(self):
+        self.reload_config()
         return self.config.get("concurrent_slots", 1)
 
     def get_command_prefix(self):
-        return self.config.get("cmd_prefix", "+")
+        self.reload_config()
+        return self.config.get("cmd_prefix")
 
     def get_websocket_hub_host(self):
+        self.reload_config()
         return self.config.get("websocket_hub", {}).get("host", "localhost")
 
     def get_websocket_hub_port(self):
+        self.reload_config()
         return self.config.get("websocket_hub", {}).get("port", 6789)
 
     def get_websocket_hub_tls(self):
+        self.reload_config()
         return self.config.get("websocket_hub", {}).get("tls", False)
 
     def get_huggingface_api_key(self):
+        self.reload_config()
         return self.config["huggingface_api"].get("api_key", None)
+
     def get_discord_api_key(self):
+        self.reload_config()
         return self.config.get("discord", {}).get("api_key", None)
+
     def get_local_model_path(self):
-        return self.config["huggingface"].get("local_model_path", None)
+        self.reload_config()
+        return self.config.get("huggingface", {}).get("local_model_path", "/root/.cache/huggingface/hub")
 
     def set_user_config(self, user_id, user_config):
         self.config.get("users", {})[str(user_id)] = user_config
         with open(self.config_path, "w") as config_file:
-            json.dump(self.config, config_file)
+            logging.info(f"Saving config: {self.config}")
+            json.dump(self.config, config_file, indent=4)
 
     def set_user_setting(self, user_id, setting_key, value):
         user_id = str(user_id)
-        self.config.get("users", {}).get(user_id, {})[setting_key] = value
-        with open(self.config_path, "w") as config_file:
-            json.dump(self.config, config_file)
+        user_config = self.get_user_config(user_id)
+        user_config[setting_key] = value
+        self.set_user_config(user_id, user_config)
 
     def get_user_setting(self, user_id, setting_key, default_value=None):
+        self.reload_config()
         user_id = str(user_id)
-        return self.config.get("users", {}).get(user_id, {}).get(setting_key, default_value)
+        user_config = self.get_user_config(user_id)
+        return user_config.get(setting_key, default_value)
 
     def get_mysql_user(self):
+        self.reload_config()
         return self.config.get("mysql", {}).get("user", "diffusion")
     def get_mysql_password(self):
+        self.reload_config()
         return self.config.get("mysql", {}).get("password", "diffusion_pwd")
     def get_mysql_hostname(self):
+        self.reload_config()
         return self.config.get("mysql", {}).get("hostname", "localhost")
     def get_mysql_dbname(self):
+        self.reload_config()
         return self.config.get("mysql", {}).get("dbname", "diffusion_master")

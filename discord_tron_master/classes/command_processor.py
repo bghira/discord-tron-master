@@ -31,14 +31,13 @@ class CommandProcessor:
 
     async def process_command(self, message: WebsocketMessage, websocket) -> None:
         try:
-            logging.info("Entered process_command via WebSocket for message: " + str(message))
             command = message["module_command"]
             handler = self.command_handlers.get(message["module_name"], {}).get(command)
             if handler is None:
                 # No handler found for the command
                 logging.error(f"No handler found in module " + str(message["module_name"]) + " for command " + command + ", arguments: " + str(message["arguments"]))
                 return
-            logging.info("Executing incoming " + str(handler) + " for module " + str(message["module_name"]) + ", command " + command + ", arguments: " + str(message["arguments"]) + ", data: " + str(message["data"]))
+            logging.debug("Executing incoming " + str(handler) + " for module " + str(message["module_name"]) + ", command " + command + ", arguments: " + str(message["arguments"]) + ", data: " + str(message["data"]))
             # We pass "self" in so that it has access to our command processor.
             return await handler(self, message["arguments"], message["data"], websocket)
         except Exception as e:

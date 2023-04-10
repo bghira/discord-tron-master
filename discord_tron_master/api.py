@@ -9,11 +9,13 @@ from discord_tron_master.classes.app_config import AppConfig
 
 class API:
     def __init__(self):
-        print("Loaded Flask API")
-        config = AppConfig()
+        logging.debug("Loaded Flask API")
+        self.config = AppConfig()
         self.app = Flask(__name__)
-        database_handler = DatabaseHandler(self.app, config)
+        AppConfig.set_flask(self.app)
+        database_handler = DatabaseHandler(self.app, self.config)
         self.db = database_handler.db
+        from discord_tron_master.models.transformers import Transformers
         self.migrate = Migrate(self.app, self.db)
         self.register_routes()
         self.auth = None
@@ -22,7 +24,12 @@ class API:
         self.api.add_resource(resource, route)
 
     def run(self, host='0.0.0.0', port=5000):
-        self.app.run(host=host, port=port)
+        import ssl
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(self.config.project_root + '/config/server_cert.pem', self.config.project_root + '/config/server_key.pem')
+        # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
+        ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+        self.app.run(host=host, port=port, ssl_context=ssl_context)
 
     def set_auth(self, auth):
         self.auth = auth
@@ -31,7 +38,7 @@ class API:
         # assuming you have 'app' defined as your Flask instance
         @self.app.route("/refresh_token", methods=["POST"])
         def refresh_token():
-            print("refresh_token endpoint hit")
+            logging.debug("refresh_token endpoint hit")
             refresh_token = request.json.get("refresh_token")
             if not refresh_token:
                 return jsonify({"error": "refresh_token is required"}), 400
@@ -39,7 +46,7 @@ class API:
             token_data = OAuthToken.query.filter_by(refresh_token=refresh_token).first()
             if not token_data:
                 return jsonify({"error": "Invalid refresh token"}), 400
-            print(f"Refreshed access token requested from {token_data.client_id}")
+            logging.debug(f"Refreshed access token requested from {token_data.client_id}")
             # Logic to refresh the access token using the provided refresh_token
             new_ticket = self.auth.refresh_access_token(token_data)
             response = new_ticket.to_dict()
@@ -47,7 +54,7 @@ class API:
             return jsonify(response)
         @self.app.route("/authorize", methods=["POST"])
         def authorize():
-            print("authorize endpoint hit")
+            logging.debug("authorize endpoint hit")
             client_id = request.json.get("client_id")
             api_key = request.json.get("api_key")
             
