@@ -2,9 +2,12 @@ from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.models.transformers import Transformers
-from discord_tron_master.classes import resolution
+from discord_tron_master.classes.resolution import ResolutionHelper
 import logging
+
 config = AppConfig()
+
+resolution = ResolutionHelper()
 available_resolutions = resolution.list_available_resolutions()
 
 class Settings(commands.Cog):

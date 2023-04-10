@@ -24,91 +24,91 @@ resolutions = [
         {"width": 512, "height": 768, "scaling_factor": 49},
         {"width": 1024, "height": 1536, "scaling_factor": 30}
     ]
+class ResolutionHelper:
+    def is_valid_resolution(self, width, height):
+        for res in resolutions:
+            if res["width"] == width and res["height"] == height:
+                return True
 
-def is_valid_resolution(width, height):
-    for res in resolutions:
-        if res["width"] == width and res["height"] == height:
-            return True
-
-async def list_available_resolutions(user_id=None, resolution=None):
-    if resolution is not None:
-        width, height = map(int, resolution.split("x"))
-        if any(
-            r["width"] == width and r["height"] == height for r in resolutions
-        ):
-            return True
-        else:
-            return False
-
-    indicator = "**"  # Indicator variable
-    indicator_length = len(indicator)
-
-    # Group resolutions by aspect ratio
-    grouped_resolutions = {}
-    for r in resolutions:
-        ar = aspect_ratio(r)
-        if ar not in grouped_resolutions:
-            grouped_resolutions[ar] = []
-        grouped_resolutions[ar].append(r)
-
-    # Sort resolution groups by width and height
-    for ar, resolutions in grouped_resolutions.items():
-        grouped_resolutions[ar] = sorted(resolutions, key=lambda r: (r["width"], r["height"]))
-
-    # Calculate the maximum number of rows for the table
-    max_rows = max(len(resolutions) for resolutions in grouped_resolutions.values())
-
-    # Calculate the maximum field text width for each column, including the indicator
-    max_field_widths = {}
-    for ar, resolutions in grouped_resolutions.items():
-        max_field_widths[ar] = max(len(f"{r['width']}x{r['height']}") + 2 * indicator_length for r in resolutions)
-
-    # Generate resolution list in Markdown columns with padding
-    header_row = "| " + " | ".join(ar.ljust(max_field_widths[ar]) for ar in grouped_resolutions.keys()) + " |\n"
-    
-    # Update the separator_row generation
-    separator_row = "+-" + "-+-".join("-" * (max_field_widths[ar]) for ar in grouped_resolutions.keys()) + "-+\n"
-    
-    resolution_list = header_row + separator_row
-
-    for i in range(max_rows):
-        row_text = "| "
-        for ar, resolutions in grouped_resolutions.items():
-            if i < len(resolutions):
-                r = resolutions[i]
-                current_resolution_indicator = ""
-                if user_id is not None:
-                    user_resolution = config.get_user_setting(user_id, "resolution")
-                    if user_resolution is not None:
-                        if (
-                            user_resolution["width"] == r["width"]
-                            and user_resolution["height"] == r["height"]
-                        ):
-                            current_resolution_indicator = indicator
-                res_str = (
-                    current_resolution_indicator
-                    + f"{r['width']}x{r['height']}"
-                    + current_resolution_indicator
-                )
-                row_text += res_str.ljust(max_field_widths[ar]) + " | "
+    async def list_available_resolutions(self, user_id=None, resolution=None):
+        if resolution is not None:
+            width, height = map(int, resolution.split("x"))
+            if any(
+                r["width"] == width and r["height"] == height for r in resolutions
+            ):
+                return True
             else:
-                row_text += " ".ljust(max_field_widths[ar]) + " | "
-        resolution_list += row_text + "\n"
+                return False
 
-    # Wrap the output in triple backticks for fixed-width formatting in Discord
-    return f"```\n{resolution_list}\n```"
+        indicator = "**"  # Indicator variable
+        indicator_length = len(indicator)
 
-def aspect_ratio(self, resolution_item: dict):
-    from math import gcd
-    width = resolution_item["width"]
-    height = resolution_item["height"]
-    # Calculate the greatest common divisor of width and height
-    divisor = gcd(width, height)
+        # Group resolutions by aspect ratio
+        grouped_resolutions = {}
+        for r in resolutions:
+            ar = self.aspect_ratio(r)
+            if ar not in grouped_resolutions:
+                grouped_resolutions[ar] = []
+            grouped_resolutions[ar].append(r)
 
-    # Calculate the aspect ratio
-    ratio_width = width // divisor
-    ratio_height = height // divisor
+        # Sort resolution groups by width and height
+        for ar, resolutions in grouped_resolutions.items():
+            grouped_resolutions[ar] = sorted(resolutions, key=lambda r: (r["width"], r["height"]))
 
-    # Return the aspect ratio as a string in the format "width:height"
-    return f"{ratio_width}:{ratio_height}"
+        # Calculate the maximum number of rows for the table
+        max_rows = max(len(resolutions) for resolutions in grouped_resolutions.values())
+
+        # Calculate the maximum field text width for each column, including the indicator
+        max_field_widths = {}
+        for ar, resolutions in grouped_resolutions.items():
+            max_field_widths[ar] = max(len(f"{r['width']}x{r['height']}") + 2 * indicator_length for r in resolutions)
+
+        # Generate resolution list in Markdown columns with padding
+        header_row = "| " + " | ".join(ar.ljust(max_field_widths[ar]) for ar in grouped_resolutions.keys()) + " |\n"
+        
+        # Update the separator_row generation
+        separator_row = "+-" + "-+-".join("-" * (max_field_widths[ar]) for ar in grouped_resolutions.keys()) + "-+\n"
+        
+        resolution_list = header_row + separator_row
+
+        for i in range(max_rows):
+            row_text = "| "
+            for ar, resolutions in grouped_resolutions.items():
+                if i < len(resolutions):
+                    r = resolutions[i]
+                    current_resolution_indicator = ""
+                    if user_id is not None:
+                        user_resolution = config.get_user_setting(user_id, "resolution")
+                        if user_resolution is not None:
+                            if (
+                                user_resolution["width"] == r["width"]
+                                and user_resolution["height"] == r["height"]
+                            ):
+                                current_resolution_indicator = indicator
+                    res_str = (
+                        current_resolution_indicator
+                        + f"{r['width']}x{r['height']}"
+                        + current_resolution_indicator
+                    )
+                    row_text += res_str.ljust(max_field_widths[ar]) + " | "
+                else:
+                    row_text += " ".ljust(max_field_widths[ar]) + " | "
+            resolution_list += row_text + "\n"
+
+        # Wrap the output in triple backticks for fixed-width formatting in Discord
+        return f"```\n{resolution_list}\n```"
+
+    def aspect_ratio(self, resolution_item: dict):
+        from math import gcd
+        width = resolution_item["width"]
+        height = resolution_item["height"]
+        # Calculate the greatest common divisor of width and height
+        divisor = gcd(width, height)
+
+        # Calculate the aspect ratio
+        ratio_width = width // divisor
+        ratio_height = height // divisor
+
+        # Return the aspect ratio as a string in the format "width:height"
+        return f"{ratio_width}:{ratio_height}"
 
