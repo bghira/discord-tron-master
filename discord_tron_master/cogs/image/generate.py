@@ -33,5 +33,5 @@ class Generate(commands.Cog):
             await discord.queue_manager.enqueue_job(worker, job)
         except Exception as e:
             await ctx.send(
-                f"Error generating image: {e}\n\nStack trace:\n{clean_traceback(traceback.format_exc())}"
+                f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
             )

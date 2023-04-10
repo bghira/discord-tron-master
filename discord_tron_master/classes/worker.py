@@ -54,8 +54,9 @@ class Worker:
         self.job_queue.put(job)
         logging.info(f"Job queue size for worker {self.worker_id}: {self.job_queue.qsize()}")
 
-    def stop(self):
+    async def stop(self):
         self.terminate = True
+        await self.job_queue.stop()
 
     async def process_jobs(self):
         while not self.terminate:

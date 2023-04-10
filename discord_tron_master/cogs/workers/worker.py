@@ -14,9 +14,9 @@ class Worker(commands.Cog):
         user_id = ctx.author.id
         user_config = self.config.get_user_config(user_id=user_id)
 
-        next_worker_gpu = self.discord.worker_manager.find_first_worker(job_type="gpu")
-        next_worker_compute = self.discord.worker_manager.find_first_worker(job_type="compute")
-        next_worker_memory = self.discord.worker_manager.find_first_worker(job_type="memory")
+        next_worker_gpu = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="gpu")
+        next_worker_compute = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="compute")
+        next_worker_memory = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="memory")
         message = "Worker status:\n```"
         if next_worker_memory is not None:
             message = message + f"First GPU worker:     {next_worker_gpu.worker_id}\n"

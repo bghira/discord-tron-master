@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-import logging, websocket
+import logging, websocket, traceback
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.classes.job import Job
 
@@ -13,8 +13,33 @@ class WorkerManager:
         }
         self.queue_manager = None
 
+    def get_worker(self, worker_id: str):
+        if not worker_id or worker_id not in self.workers or not isinstance(self.workers[worker_id], Worker):
+            logging.error(f"Tried accessing invalid worker {self.workers[worker_id]}, traceback: {traceback.format_exc()}")
+            raise ValueError(f"Worker '{worker_id}' is not registered. Cannot retrieve details.")
+        return self.workers[worker_id]
+
+    def finish_job_for_worker(self, worker_id: str, job: Job):
+        worker = self.get_worker(worker_id)
+        worker.job_queue.done(job_id)
+
+    async def finish_payload(self, command_processor, arguments: Dict, data: Dict, websocket):
+        worker_id = arguments["worker_id"]
+        job_id = arguments["job_id"]
+        if worker_id and job_id:
+            worker = self.get_worker(worker_id)
+            worker.job_queue.done(job_id)
+            logging.info("Finished job for worker " + worker_id)
+            return {"status": "successfully finished job"}
+        else:
+            logging.error(f"Invalid data received: {data}")
+            raise ValueError("Invalid payload received by finish_payload handler. We expect job_id and worker_id.")
+
     def find_worker_with_fewest_queued_tasks(self, job: Job):
-        job_type = job.job_type
+        return self.find_worker_with_fewest_queued_tasks_by_job_type(job.job_type)
+
+    def find_worker_with_fewest_queued_tasks_by_job_type(self, job_type: str):
+        job_type = job_type
         min_queued_tasks = float("inf")
         selected_worker = self.find_first_worker(job_type)
         for worker_id, worker in self.workers.items():
@@ -47,16 +72,17 @@ class WorkerManager:
             self.workers_by_capability[job_type].append(worker)
         return worker
 
-
-    def unregister_worker(self, worker_id):
-        worker_data = self.workers.pop(worker_id, None)
-        if worker_data:
-            supported_job_types = worker_data.supported_job_types
+    async def unregister_worker(self, worker_id):
+        worker = self.workers.pop(worker_id, None)
+        if worker:
+            supported_job_types = worker.supported_job_types
             for job_type in supported_job_types:
-                if worker_id in self.workers_by_capability[job_type]:
-                    self.workers_by_capability[job_type].remove(worker_id)
-                if worker_id in self.workers:
-                    self.workers.remove(worker_id)
+                # Remove worker from the list of workers_by_capability
+                self.workers_by_capability[job_type] = [w for w in self.workers_by_capability[job_type] if w.worker_id != worker_id]
+                
+            await worker.stop()
+        logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+
 
     def get_worker_supported_job_types(self, worker_id: str) -> List[str]:
         return self.workers[worker_id].supported_job_types
@@ -118,6 +144,8 @@ class WorkerManager:
         except KeyError:
             logging.error("Worker ID not provided in payload")
             return {"error": "Worker ID not provided in payload"}
+        worker = self.workers.get(worker_id)
+        worker.stop()
         self.unregister_worker(worker_id)
         self.queue_manager.unregister_worker(worker_id)
         logging.info("Successfully unregistered worker from queue manager.")

@@ -25,6 +25,9 @@ class CommandProcessor:
                 "edit": discord_module.edit_message,
                 "delete": discord_module.delete_message,
                 "delete_errors": discord_module.delete_previous_errors,
+            },
+            "job_queue": {
+                "finish": self.worker_manager.finish_payload,
             }
             # Add more command handlers as needed
         }
@@ -39,7 +42,9 @@ class CommandProcessor:
                 return
             logging.debug("Executing incoming " + str(handler) + " for module " + str(message["module_name"]) + ", command " + command + ", arguments: " + str(message["arguments"]) + ", data: " + str(message["data"]))
             # We pass "self" in so that it has access to our command processor.
-            return await handler(self, message["arguments"], message["data"], websocket)
+            command_result = await handler(self, message["arguments"], message["data"], websocket)
+            logging.debug(f"Command returned result, {command_result}")
+            return command_result
         except Exception as e:
             logging.error("Error processing command: " + str(e), exc_info=True)
             

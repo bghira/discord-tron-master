@@ -21,6 +21,8 @@ class DiscordBot:
         intents.members = True
         intents.message_content = True
         intents.presences = True
+        websocket_logger = logging.getLogger('discord')
+        websocket_logger.setLevel(logging.WARNING) 
         self.bot = commands.Bot(command_prefix=config.get_command_prefix(), intents=intents, help_command=CustomHelp())
         DiscordBot.discord_instance = self
 

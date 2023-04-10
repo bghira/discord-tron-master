@@ -22,8 +22,8 @@ class Img2img(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message):
         self.config.reload_config()
-        if message.author == self.bot.user:
-            logging.debug("Ignoring message from self.")
+        if message.author == self.bot.user or message.author.bot:
+            logging.debug("Ignoring message from this or another bot.")
             return
         if self.bot.user in message.mentions:
             logging.debug("Message contains mention of self.")

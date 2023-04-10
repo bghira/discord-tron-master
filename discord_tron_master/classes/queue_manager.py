@@ -40,7 +40,7 @@ class QueueManager:
                 worker_info["queue"].queue.clear()
 
     def register_worker(self, worker_id, supported_job_types: List[str]):
-        self.queues[worker_id] = {"queue": JobQueue(), "supported_job_types": supported_job_types}
+        self.queues[worker_id] = {"queue": JobQueue(worker_id), "supported_job_types": supported_job_types}
 
     def worker_queue_length(self, worker: Worker):
         try:
@@ -55,10 +55,10 @@ class QueueManager:
         del self.queues[worker_id]
 
     def queue_by_worker(self, worker: Worker) -> Queue:
-        return self.queues.get(worker.worker_id, None).get("queue", JobQueue())
+        return self.queues.get(worker.worker_id, None).get("queue", JobQueue(worker.worker_id))
 
     def queue_contents_by_worker(self, worker_id):
-        return self.queues.get(worker_id, None).get("queue", JobQueue())
+        return self.queues.get(worker_id, None).get("queue", JobQueue(worker_id))
 
     async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id

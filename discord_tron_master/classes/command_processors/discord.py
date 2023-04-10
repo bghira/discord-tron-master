@@ -26,8 +26,10 @@ async def delete_message(command_processor, arguments: Dict, data: Dict, websock
             message = await channel.fetch_message(data["message_id"])
             await message.delete()
         except Exception as e:
-            logging.error(f"Error deleting message in {channel.name} ({channel.id}): {e}")
-    return {"success": True, "result": "Message deleted."}
+            logging.warn(f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!")
+            return {"success": True, "result": "Message deleted, but not by us."}
+        return {"success": True, "result": "Message deleted."}
+    return {"error": "Channel could not be found."}
 
 async def delete_previous_errors(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
     try:

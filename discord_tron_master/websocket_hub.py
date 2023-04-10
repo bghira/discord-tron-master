@@ -1,11 +1,10 @@
-import logging, json
+import logging, json, asyncio
 import websockets
 from websockets.client import WebSocketClientProtocol
 from discord_tron_master.auth import Auth
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
 from discord_tron_master.classes.app_config import AppConfig
-
 
 class WebSocketHub:
     def __init__(self, auth_instance: Auth, command_processor: CommandProcessor, discord_bot):
@@ -55,14 +54,24 @@ class WebSocketHub:
                     return
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
+        except asyncio.exceptions.IncompleteReadError as e:
+            logging.warning(f"IncompleteReadError: {e}")
+            # ... handle the situation as needed
+        except websockets.exceptions.ConnectionClosedError as e:
+            logging.warning(f"ConnectionClosedError: {e}")
+            # ... handle the situation as needed
+        except Exception as e:
+            logging.error(f"Unhandled exception in handler: {e}")
         finally:
             # Remove the client from the set of clients
-            logging.info("Removing client from connected clients")
+            logging.info(f"Removing worker {worker_id} from connected clients")
             self.connected_clients.remove(websocket)
             # Check if the worker is registered, and if so, unregister it
             if worker_id:
+                logging.warn("Removing worker from the QueueManager")
                 self.queue_manager.unregister_worker(worker_id)
-                self.worker_manager.unregister_worker(worker_id)
+                logging.warn("Removing worker from the WorkerManager")
+                await self.worker_manager.unregister_worker(worker_id)
 
 
     async def broadcast(self, message):
@@ -75,5 +84,7 @@ class WebSocketHub:
         ssl_context.load_cert_chain(self.config.project_root + '/config/server_cert.pem', self.config.project_root + '/config/server_key.pem')
         # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
         ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+        websocket_logger = logging.getLogger('websockets')
+        websocket_logger.setLevel(logging.WARNING) 
         server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context)
         await server
