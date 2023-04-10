@@ -109,7 +109,7 @@ class Settings(commands.Cog):
         else:
             width, height = map(int, resolution.split())
 
-        if not resolution.is_valid_resolution(width, height):
+        if not resolution_helper.is_valid_resolution(width, height):
             await ctx.send(
                 f"Invalid resolution. Available resolutions:\n" + available_resolutions
             )
