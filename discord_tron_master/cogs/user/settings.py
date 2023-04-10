@@ -89,7 +89,7 @@ class Settings(commands.Cog):
         await ctx.send(message)
 
     @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
-    async def set_resolution(ctx, resolution=None):
+    async def set_resolution(self, ctx, resolution=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         available_resolutions = await resolution.list_available_resolutions(user_id=user_id)
