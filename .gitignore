@@ -1,5 +1,5 @@
 # Python and virtual environment files
-discord_tron_master/migrations/version
+discord_tron_master/migrations/versions
 .venv
 venv
 work
