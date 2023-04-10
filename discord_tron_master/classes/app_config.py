@@ -31,8 +31,8 @@ DEFAULT_USER_CONFIG = {
     "steps": 100,
     "temperature": 0.9,
     "strength": 0.5,
+    "resize": 1,
     "model": "theintuitiveye/HARDblend",
-    "variation_model": "HARDblend",
     "negative_prompt": "(child, teen) (malformed, malignant)",
     "positive_prompt": "(beautiful, unreal engine 5, highly detailed, hyperrealistic)",
     "resolution": {
