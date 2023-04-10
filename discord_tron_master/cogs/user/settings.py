@@ -7,8 +7,8 @@ import logging
 
 config = AppConfig()
 
-resolution = ResolutionHelper()
-available_resolutions = resolution.list_available_resolutions()
+resolution_helper = ResolutionHelper()
+available_resolutions = resolution_helper.list_available_resolutions()
 
 class Settings(commands.Cog):
     def __init__(self, bot):
@@ -95,7 +95,7 @@ class Settings(commands.Cog):
     async def set_resolution(self, ctx, resolution=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
-        available_resolutions = await resolution.list_available_resolutions(user_id=user_id)
+        available_resolutions = await resolution_helper.list_available_resolutions(user_id=user_id)
         if resolution is None:
             resolution = user_config.get("resolution")
             await ctx.send(
