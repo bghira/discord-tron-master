@@ -1,36 +1,38 @@
 from discord_tron_master.classes.app_config import AppConfig
 config = AppConfig()
 
-resolutions = [
-        {"width": 512, "height": 512, "scaling_factor": 30},
-        {"width": 768, "height": 768, "scaling_factor": 30},
-        {"width": 128, "height": 96, "scaling_factor": 100},
-        {"width": 192, "height": 128, "scaling_factor": 94},
-        {"width": 256, "height": 192, "scaling_factor": 88},
-        {"width": 384, "height": 256, "scaling_factor": 76},
-        {"width": 512, "height": 384, "scaling_factor": 64},
-        {"width": 768, "height": 512, "scaling_factor": 52},
-        {"width": 800, "height": 456, "scaling_factor": 50},
-        {"width": 1024, "height": 576, "scaling_factor": 40},
-        {"width": 1152, "height": 648, "scaling_factor": 34},
-        {"width": 1280, "height": 720, "scaling_factor": 30},
-        {"width": 1920, "height": 1080, "scaling_factor": 30},
-        {"width": 1920, "height": 1200, "scaling_factor": 30},
-        {"width": 3840, "height": 2160, "scaling_factor": 30},
-        {"width": 7680, "height": 4320, "scaling_factor": 30},
-        {"width": 64, "height": 96, "scaling_factor": 100},
-        {"width": 128, "height": 192, "scaling_factor": 80},
-        {"width": 256, "height": 384, "scaling_factor": 60},
-        {"width": 512, "height": 768, "scaling_factor": 49},
-        {"width": 1024, "height": 1536, "scaling_factor": 30}
-    ]
+
 class ResolutionHelper:
+    resolutions = [
+            {"width": 512, "height": 512, "scaling_factor": 30},
+            {"width": 768, "height": 768, "scaling_factor": 30},
+            {"width": 128, "height": 96, "scaling_factor": 100},
+            {"width": 192, "height": 128, "scaling_factor": 94},
+            {"width": 256, "height": 192, "scaling_factor": 88},
+            {"width": 384, "height": 256, "scaling_factor": 76},
+            {"width": 512, "height": 384, "scaling_factor": 64},
+            {"width": 768, "height": 512, "scaling_factor": 52},
+            {"width": 800, "height": 456, "scaling_factor": 50},
+            {"width": 1024, "height": 576, "scaling_factor": 40},
+            {"width": 1152, "height": 648, "scaling_factor": 34},
+            {"width": 1280, "height": 720, "scaling_factor": 30},
+            {"width": 1920, "height": 1080, "scaling_factor": 30},
+            {"width": 1920, "height": 1200, "scaling_factor": 30},
+            {"width": 3840, "height": 2160, "scaling_factor": 30},
+            {"width": 7680, "height": 4320, "scaling_factor": 30},
+            {"width": 64, "height": 96, "scaling_factor": 100},
+            {"width": 128, "height": 192, "scaling_factor": 80},
+            {"width": 256, "height": 384, "scaling_factor": 60},
+            {"width": 512, "height": 768, "scaling_factor": 49},
+            {"width": 1024, "height": 1536, "scaling_factor": 30}
+        ]
     def is_valid_resolution(self, width, height):
-        for res in resolutions:
+        for res in ResolutionHelper.resolutions:
             if res["width"] == width and res["height"] == height:
                 return True
 
     async def list_available_resolutions(self, user_id=None, resolution=None):
+        resolutions = ResolutionHelper.resolutions
         if resolution is not None:
             width, height = map(int, resolution.split("x"))
             if any(
