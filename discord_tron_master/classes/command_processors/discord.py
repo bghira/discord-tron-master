@@ -1,10 +1,10 @@
 from typing import Dict
-import websocket, discord, base64, logging, time
-from hashlib import md5
+import websocket, discord, base64, logging, time, hashlib
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
-
+from PIL import Image
+from websockets import WebSocketClientProtocol
 config = AppConfig()
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -23,25 +23,36 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
-async def send_image(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+async def send_image(command_processor, arguments: Dict[str, str], data: Dict[str, str], websocket: WebSocketClientProtocol):
+    # Error 1: the argument data is a dictionary containing another dictionary "channel".
+    # Use data["channel"] to access its members, such as "id".
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
-            file=None
-            if "image" in arguments:
-                if arguments["image"] is not None:
-                    base64_decoded_image = base64.b64decode(arguments["image"])
-                    buffer = BytesIO(base64_decoded_image)
-                    web_root = config.get_web_root()
-                    url_base = config.get_url_base()
-                    filename = str(time.time()) + md5(buffer.getvalue().encode()).hexdigest() + ".png"
-                    buffer.save(web_root + '/' + filename)
-                    arguments['message'] = arguments['message'] + '\n' + url_base + '/' + filename
+            image_data = arguments.get("image")
+            if image_data is not None:
+                base64_decoded_image = base64.b64decode(image_data)
+                buffer = BytesIO(base64_decoded_image)
+                web_root = config.get_web_root()
+                url_base = config.get_url_base()
+                # Error 2: buffer is already a BytesIO object, so we don't need to call buffer.getvalue() before hashing it.
+                filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
+                # Error 3: buffer.save() is not a valid method. We should use Image.save() instead.
+                buffer.seek(0)
+                image = Image.open(buffer)
+                image.save(f"{web_root}/{filename}")
+                arguments["message"] += f"\n{url_base}/{filename}"
             await channel.send(content=arguments["message"])
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
-    return {"success": True, "result": "Message sent."}
+            # Error 4: return a failure result if an exception is raised.
+            return {"success": False, "result": str(e)}
+        # Error 5: return a success result if the try block completes without raising any exceptions.
+        return {"success": True, "result": "Message sent."}
+    # Error 6: return a failure result if channel is None.
+    return {"success": False, "result": "Channel not found."}
+
 
 async def delete_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
