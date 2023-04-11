@@ -14,6 +14,11 @@ class Generate(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
+    @commands.command(name="generate-x", help="Generates an image based on the given prompt, x number of times at once.")
+    async def generate_range(self, ctx, count, *, prompt):
+        for i in range(0, int(count)):
+            await self.generate(ctx, prompt=prompt)
+
     @commands.command(name="generate", help="Generates an image based on the given prompt.")
     async def generate(self, ctx, *, prompt):
         try:
