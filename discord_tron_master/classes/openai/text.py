@@ -26,7 +26,7 @@ class GPT:
         return await self.turbo_completion(self.discord_bot_role, prompt, max_tokens=15, temperature=1.05)
 
     async def insult_user_selection(self, author):
-        prompt = f"Return just an insult for the user '{author}', in the style of Sam Kinison, on their image generation selection."
+        prompt = f"Return just a playful tease for the user '{author}', in the style of Sam Kinison, on their image generation selection."
         return await self.turbo_completion(self.discord_bot_role, prompt, temperature=1.05, max_tokens=15)
 
     async def insult_or_compliment_random(self, author):
