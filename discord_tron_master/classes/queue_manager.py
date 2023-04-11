@@ -72,11 +72,13 @@ class QueueManager:
         logging.info(f"After unregistering worker, we are left with: {self.queues}")
         del self.queues[worker_id]
 
-    def queue_by_worker(self, worker: Worker) -> Queue:
-        return self.queue_contents_by_worker(worker.worker_id)
+    def create_queue(self, worker: Worker) -> Queue:
+        if worker.worker_id not in self.queues:
+            self.register_worker(worker.worker_id, worker.supported_job_types)
+        return self.queues[worker.worker_id]["queue"]
 
     def queue_contents_by_worker(self, worker_id):
-        return self.queues[worker_id]["queue"].queue
+        return self.queues[worker_id]["queue"].view()
 
     async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id

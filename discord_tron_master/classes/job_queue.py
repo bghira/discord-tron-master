@@ -41,7 +41,7 @@ class JobQueue:
 
     # A function to view the current jobs in the queue, without removing them from the queue:
     def view(self) -> List[Job]:
-        return list(self.queue)
+        return list(self.queue) + list(self.in_progress.values())
 
     def done(self, job_id: int):
         if job_id in self.in_progress:

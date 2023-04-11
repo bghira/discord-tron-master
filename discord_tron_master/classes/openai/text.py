@@ -22,11 +22,11 @@ class GPT:
         return await self.turbo_completion(self.discord_bot_role, prompt)
 
     async def compliment_user_selection(self, author):
-        prompt = f"Return just a compliment on the user's style and taste, in the style of Joe Rogan. Example: 'Wild stuff, man! Jamie, pull that clip up!'"
+        prompt = f"Return just a compliment on the user's style and taste, in the style of Joe Rogan. Example: 'Wild stuff, man! Jamie, pull that clip up!' - Short and sweet."
         return await self.turbo_completion(self.discord_bot_role, prompt, max_tokens=50, temperature=1.05)
 
     async def insult_user_selection(self, author, engine="text-davinci-003"):
-        rolt = "You are a funny friend. We tease each other in non-offensive ways. We are friends."
+        rolt = "You are a funny friend. We tease each other in non-offensive ways. We are friends. Keep it short and sweet."
         prompt = f"Return just a playful tease for a friend, '{author}', in the style of Bob Ross, on their image generation selection."
         return await self.turbo_completion(self.discord_bot_role, prompt, temperature=1.05, max_tokens=50)
 
