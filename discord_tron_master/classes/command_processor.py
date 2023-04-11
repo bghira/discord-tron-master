@@ -22,6 +22,7 @@ class CommandProcessor:
             },
             "message": {
                 "send": discord_module.send_message,
+                "send_image": discord_module.send_image,
                 "edit": discord_module.edit_message,
                 "delete": discord_module.delete_message,
                 "delete_errors": discord_module.delete_previous_errors,

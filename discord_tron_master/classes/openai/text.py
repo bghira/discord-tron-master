@@ -14,23 +14,28 @@ class GPT:
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def updated_setting_response(self, name, value):
+    async def updated_setting_response(self, name, value):
         prompt = f"Please provide a message to the user. They have updated setting '{name}' to be set to '{value}'"
-        return self.turbo_completion(self.discord_bot_role, prompt)
+        return await self.turbo_completion(self.discord_bot_role, prompt)
 
-    def compliment_user_selection(self, author):
+    async def compliment_user_selection(self, author):
         prompt = f"Please compliment the user '{author}', in a random style, on their image generation selection."
-        return self.turbo_completion(self.discord_bot_role, prompt)
+        return await self.turbo_completion(self.discord_bot_role, prompt)
 
-    def insult_user_selection(self, author):
+    async def insult_user_selection(self, author):
         prompt = f"Please insult the user '{author}', in a random style, on their image generation selection."
-        return self.turbo_completion(self.discord_bot_role, prompt)
+        return await self.turbo_completion(self.discord_bot_role, prompt)
 
-    def random_image_prompt(self):
+    async def random_image_prompt(self):
         prompt = f"Print ONLY a random image prompt for Stable Diffusion using condensed keywords and (grouped words) where concepts might be ambiguous without grouping."
-        return self.turbo_completion(self.discord_bot_role, prompt)
+        return await self.turbo_completion(self.discord_bot_role, prompt)
 
-    def turbo_completion(self, role, prompt, **kwargs):
+    async def discord_bot_response(self, prompt):
+        return await self.turbo_completion(self.discord_bot_role, prompt)
+
+
+
+    async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
             self.set_values(**kwargs)
         message_log = [

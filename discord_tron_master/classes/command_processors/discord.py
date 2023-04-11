@@ -1,5 +1,6 @@
 from typing import Dict
-import websocket, discord, base64, logging
+import websocket, discord, base64, logging, time
+from hashlib import md5
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 
@@ -14,6 +15,26 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     base64_decoded_image = base64.b64decode(arguments["image"])
                     buffer = BytesIO(base64_decoded_image)
                     file=discord.File(buffer, "image.png")
+            await channel.send(content=arguments["message"], file=file)
+        except Exception as e:
+            logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
+    return {"success": True, "result": "Message sent."}
+
+async def send_image(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    if channel is not None:
+        try:
+            # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
+            file=None
+            if "image" in arguments:
+                if arguments["image"] is not None:
+                    base64_decoded_image = base64.b64decode(arguments["image"])
+                    buffer = BytesIO(base64_decoded_image)
+                    web_root = command_processor.config.get_web_root()
+                    url_base = command_processor.config.get_url_base()
+                    filename = str(time.time()) + md5(buffer.getvalue()) + ".png"
+                    buffer.save(web_root + '/' + filename)
+                    arguments['message'] = arguments['message'] + '\n' + url_base + '/' + filename
             await channel.send(content=arguments["message"], file=file)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")

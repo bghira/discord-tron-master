@@ -58,5 +58,5 @@ class Img2img(commands.Cog):
                 # We were mentioned, but no attachments. They must want to converse.
                 logging.debug("Message contains no attachments. Initiating conversation.")
                 gpt = GPT()
-                response = gpt.turbo_completion(role=gpt.discord_bot_role, prompt=message.content, max_tokens=2048, temperature=0.9)
-                await message.channel.send(message.author.mention + ', ' + response)
+                response = await gpt.turbo_completion(role=gpt.discord_bot_role, prompt=message.content, max_tokens=2048, temperature=0.9)
+                await discord.send_large_message(message, message.author.mention + ' ' + response)

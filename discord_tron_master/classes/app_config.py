@@ -152,7 +152,12 @@ class AppConfig:
         user_id = str(user_id)
         user_config = self.get_user_config(user_id)
         return user_config.get(setting_key, default_value)
-
+    def get_web_root(self):
+        self.reload_config()
+        return self.config.get("web_root", "/")
+    def get_url_base(self):
+        self.reload_config()
+        return self.config.get("url_base", "http://localhost")
     def get_mysql_user(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("user", "diffusion")
