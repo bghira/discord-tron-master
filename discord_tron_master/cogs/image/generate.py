@@ -16,6 +16,15 @@ class Generate(commands.Cog):
 
     @commands.command(name="generate-x", help="Generates an image based on the given prompt, x number of times at once.")
     async def generate_range(self, ctx, count, *, prompt):
+        if not count.isdigit():
+            user_config = self.config.get_user_config(user_id=ctx.author.id)
+            has_been_warned_about_count_being_digit = user_config.get("has_been_warned_about_count_being_digit", False)
+            if not has_been_warned_about_count_being_digit:
+                await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of 'fuck you'.")
+                self.config.set_user_setting("has_been_warned_about_count_being_digit", True);
+            prompt = count + " " + prompt
+            count = 3
+
         for i in range(0, int(count)):
             await self.generate(ctx, prompt=prompt)
 
