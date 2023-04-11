@@ -1,7 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from discord_tron_master.classes.app_config import AppConfig
-config = AppConfig()
-concurrent_requests = config.get_concurrent_openai_requests()
+
 import openai
 openai.api_key = config.get_openai_api_key()
 
@@ -11,6 +10,8 @@ class GPT:
         self.temperature = 0.9
         self.max_tokens = 100
         self.discord_bot_role = "You are a Discord bot."
+        config = AppConfig()
+        concurrent_requests = config.get_concurrent_openai_requests()
     
     def set_values(self, **kwargs):
         for key, value in kwargs.items():
