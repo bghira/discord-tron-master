@@ -31,6 +31,7 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             image_data = arguments.get("image")
+            embed = None
             if image_data is not None:
                 base64_decoded_image = base64.b64decode(image_data)
                 buffer = BytesIO(base64_decoded_image)
@@ -42,8 +43,10 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
                 buffer.seek(0)
                 image = Image.open(buffer)
                 image.save(f"{web_root}/{filename}")
-                arguments["message"] += f"\n{url_base}/{filename}"
-            await channel.send(content=arguments["message"])
+                image_url = f"\n{url_base}/{filename}"
+                embed = discord.Embed()
+                embed.set_image(url=image_url)
+            await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
             # Error 4: return a failure result if an exception is raised.
