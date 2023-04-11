@@ -54,11 +54,14 @@ class QueueManager:
     async def unregister_worker(self, worker_id):
         worker_data = self.queues[worker_id]
         if worker_data:
+            logging.debug(f"Found {worker_data} worker data.")
             # Get the jobs from the worker's queue.
             queued_jobs = self.queue_contents_by_worker(worker_id)
+            logging.debug(f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}")
             # Re-queue the jobs to another worker.
             for job in queued_jobs:
                 job_type = job.job_type
+                logging.warn(f"Departing worker has active {job_type} job: {job}")
                 new_worker = self.find_worker_with_fewest_queued_tasks_by_job_type(job_type)
                 if new_worker:
                     await self.queue_manager.enqueue_job(new_worker, job)
@@ -85,20 +88,11 @@ class QueueManager:
         return await self.queues[worker_id]["queue"].get()
 
 
-# 2023-04-11 23:07:35,421 [DEBUG] x closing TCP connection
-# 2023-04-11 23:07:35,421 [WARNING] ConnectionClosedError: no close frame received or sent
-# 2023-04-11 23:07:35,421 [INFO] Removing worker lorax from connected clients
-# 2023-04-11 23:07:35,421 [WARNING] Removing worker from the QueueManager
-# 2023-04-11 23:07:35,421 [ERROR] connection handler failed
-# Traceback (most recent call last):
-#   File "/home/kash/src/discord-tron-master/.venv/lib/python3.10/site-packages/websockets/legacy/server.py", line 240, in handler
-#     await self.ws_handler(self)
-#   File "/home/kash/src/discord-tron-master/.venv/lib/python3.10/site-packages/websockets/legacy/server.py", line 1186, in _ws_handler
-#     return await cast(
-#   File "/home/kash/src/discord-tron-master/discord_tron_master/websocket_hub.py", line 72, in handler
-#     await self.queue_manager.unregister_worker(worker_id)
-#   File "/home/kash/src/discord-tron-master/discord_tron_master/classes/queue_manager.py", line 69, in unregister_worker
-#     logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
-# AttributeError: 'QueueManager' object has no attribute 'workers'
-# 2023-04-11 23:07:35,421 [INFO] connection closed
-# 2023-04-11 23:07:36,686 [DEBUG] % sending keepalive ping
+2023-04-11 23:10:54,512 [WARNING] ConnectionClosedError: no close frame received or sent
+2023-04-11 23:10:54,512 [INFO] Removing worker lorax from connected clients
+2023-04-11 23:10:54,512 [WARNING] Removing worker from the QueueManager
+2023-04-11 23:10:54,512 [INFO] After unregistering worker, we are left with: {'sage': {'queue': <discord_tron_master.classes.job_queue.JobQueue object at 0x7fbcece92f50>, 'supported_job_types': {'gpu': True, 'memory': True, 'compute': True}}, 'lorax': {'queue': <discord_tron_master.classes.job_queue.JobQueue object at 0x7fbcece0ca30>, 'supported_job_types': {'gpu': True, 'memory': True, 'compute': True}}}
+2023-04-11 23:10:54,512 [WARNING] Removing worker from the WorkerManager
+2023-04-11 23:10:54,512 [INFO] After unregistering worker, we are left with: {'sage': <discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>} and {'gpu': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>], 'compute': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>], 'memory': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>]}
+2023-04-11 23:10:54,512 [INFO] connection closed
+2023-04-11 23:10:55,438 [INFO] Empty job submitted to worker!?
