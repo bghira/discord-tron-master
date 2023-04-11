@@ -8,6 +8,7 @@ class Job:
         self.payload = payload
         self.module_name = module_name
         self.module_command = command_name
+        self.discord_first_message = payload[4]  # Store the discord_first_message object
         self.worker = None
 
     def set_worker(self, worker):
@@ -84,6 +85,14 @@ class Job:
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            #await message["discord_first_message"].edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
+            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
             logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
             return False
+
+    async def job_lost(self):
+        try:
+            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error reassigning your " + self.module_command + f" job to another worker. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
+            await self.discord_first_message.delete(delay=15)
+        except Exception as e:
+            logging.error("Error updating the discord message on job lost: " + str(e))
+            raise e

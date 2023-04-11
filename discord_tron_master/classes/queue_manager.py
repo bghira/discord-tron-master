@@ -51,8 +51,33 @@ class QueueManager:
             logging.error(f"Error retrieving the queue length for worker '" + str(worker_id) + f"': {e} traceback: {traceback.format_exc()}")
             return -1
 
-    def unregister_worker(self, worker_id):
-        del self.queues[worker_id]
+    async def unregister_worker(self, worker_id):
+        worker = self.workers.pop(worker_id, None)
+        if worker:
+            # Get the jobs from the worker's queue.
+            queued_jobs = self.queue_manager.queue_contents_by_worker(worker_id).get_all_jobs()
+
+            # Re-queue the jobs to another worker.
+            for job in queued_jobs:
+                job_type = job.job_type
+                new_worker = self.find_worker_with_fewest_queued_tasks_by_job_type(job_type)
+                if new_worker:
+                    await self.queue_manager.enqueue_job(new_worker, job)
+                    logging.info(f"Re-queued job {job.job_id} from departing worker {worker_id} to worker {new_worker.worker_id}")
+                else:
+                    logging.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
+                    job.job_lost()
+
+            supported_job_types = worker.supported_job_types
+            for job_type in supported_job_types:
+                for worker in self.workers_by_capability[job_type]:
+                    self.workers_by_capability[job_type].remove(worker.worker_id)
+                if worker_id in self.workers:
+                    self.workers.remove(worker_id)
+            await worker.stop()
+            self.queue_manager.unregister_worker(worker_id)
+        logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+
 
     def queue_by_worker(self, worker: Worker) -> Queue:
         return self.queues.get(worker.worker_id, None).get("queue", JobQueue(worker.worker_id))
