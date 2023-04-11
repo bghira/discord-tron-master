@@ -107,6 +107,10 @@ class AppConfig:
         self.reload_config()
         return self.config.get("cmd_prefix")
 
+    def get_concurrent_openai_requests(self):
+        self.reload_config()
+        return self.config.get("concurrent_openai_requests", 15)
+
     def get_openai_api_key(self):
         self.reload_config()
         return self.config["openai_api"].get("api_key", None)

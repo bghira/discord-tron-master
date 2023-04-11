@@ -62,7 +62,7 @@ class Generate(commands.Cog):
         try:
             # Generate a "Job" object that will be put into the queue.
             gpt = GPT()
-            compliment = await gpt.compliment_user_selection(ctx.author.mention)
+            compliment = await gpt.insult_or_compliment_random(ctx.author.mention)
             discord_first_message = await ctx.send(f"{compliment} - added this to queue! `" + prompt + "`")
             self.config.reload_config()
             job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
