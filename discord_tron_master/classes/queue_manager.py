@@ -73,7 +73,7 @@ class QueueManager:
         return self.queues.get(worker.worker_id, {}).get("queue", None)
 
     def queue_contents_by_worker(self, worker_id):
-        return self.queues.get(worker_id, {}).get("queue", None)
+        return self.queues.get(worker_id, {}).get("queue", None).view()
 
     async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id
@@ -84,3 +84,14 @@ class QueueManager:
         worker_id = worker.worker_id
         return await self.queues[worker_id]["queue"].get()
 
+# 2023-04-11 23:02:47,318 [ERROR] connection handler failed
+# Traceback (most recent call last):
+#   File "/home/kash/src/discord-tron-master/.venv/lib/python3.10/site-packages/websockets/legacy/server.py", line 240, in handler
+#     await self.ws_handler(self)
+#   File "/home/kash/src/discord-tron-master/.venv/lib/python3.10/site-packages/websockets/legacy/server.py", line 1186, in _ws_handler
+#     return await cast(
+#   File "/home/kash/src/discord-tron-master/discord_tron_master/websocket_hub.py", line 72, in handler
+#     await self.queue_manager.unregister_worker(worker_id)
+#   File "/home/kash/src/discord-tron-master/discord_tron_master/classes/queue_manager.py", line 60, in unregister_worker
+#     for job in queued_jobs:
+# TypeError: 'JobQueue' object is not iterable

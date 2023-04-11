@@ -1,6 +1,7 @@
 import asyncio
 from collections import deque
 from discord_tron_master.classes.job import Job
+from typing import List
 import logging
 class JobQueue:
     def __init__(self, worker_id: str):
@@ -31,6 +32,10 @@ class JobQueue:
         self.in_progress[job.id] = job
         logging.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
         return job
+
+    # A function to view the current jobs in the queue, without removing them from the queue:
+    def view(self) -> List[Job]:
+        return list(self.queue)
 
     def done(self, job_id: int):
         if job_id in self.in_progress:
