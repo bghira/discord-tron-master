@@ -27,7 +27,7 @@ class GPT:
         return self.turbo_completion(self.discord_bot_role, prompt)
 
     def random_image_prompt(self):
-        prompt = f"Print ONLY a random image generation prompt for Stable Diffusion."
+        prompt = f"Print ONLY a random image prompt for Stable Diffusion."
         return self.turbo_completion(self.discord_bot_role, prompt)
 
     def turbo_completion(self, role, prompt, **kwargs):
