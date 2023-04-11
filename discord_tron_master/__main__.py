@@ -163,29 +163,37 @@ def create_client_tokens(username: str):
 
 
 if __name__ == "__main__":
-    import argparse
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command")
+    try:
+        import argparse
+        # Parse command-line arguments
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run")
-    create_client_tokens_parser = subparsers.add_parser("create_client_tokens")
-    create_client_tokens_parser.add_argument("--username", required=True)
-    create_worker_user_parser = subparsers.add_parser("create_worker_user")
-    create_worker_user_parser.add_argument("--username", required=True)
-    create_worker_user_parser.add_argument("--password", required=True)
-    create_worker_user_parser.add_argument("--email")
-    delete_worker_user_parser = subparsers.add_parser("delete_worker_user")
-    delete_worker_user_parser.add_argument("--username", required=True)
+        run_parser = subparsers.add_parser("run")
+        create_client_tokens_parser = subparsers.add_parser("create_client_tokens")
+        create_client_tokens_parser.add_argument("--username", required=True)
+        create_worker_user_parser = subparsers.add_parser("create_worker_user")
+        create_worker_user_parser.add_argument("--username", required=True)
+        create_worker_user_parser.add_argument("--password", required=True)
+        create_worker_user_parser.add_argument("--email")
+        delete_worker_user_parser = subparsers.add_parser("delete_worker_user")
+        delete_worker_user_parser.add_argument("--username", required=True)
 
-    args = parser.parse_args()
+        args = parser.parse_args()
 
-    # Call the appropriate function based on the command-line argument
-    if args.command == "create_client_tokens":
-        create_client_tokens(args.username)
-    elif args.command == "create_worker_user":
-        create_worker_user(args.username, args.password, args.email)
-    elif args.command == "delete_worker_user":
-        delete_worker_user(args.username)
-    elif args.command == "run":
-        main()
+        # Call the appropriate function based on the command-line argument
+        if args.command == "create_client_tokens":
+            create_client_tokens(args.username)
+        elif args.command == "create_worker_user":
+            create_worker_user(args.username, args.password, args.email)
+        elif args.command == "delete_worker_user":
+            delete_worker_user(args.username)
+        elif args.command == "run":
+            main()
+    except KeyboardInterrupt:
+        logging.info("Shutting down...")
+        exit(0)
+    except Exception as e:
+        import traceback
+        logging.error(f"Stack trace: {traceback.format_exc()}")
+        exit(1)
