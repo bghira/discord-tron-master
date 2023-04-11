@@ -19,7 +19,7 @@ class GPT:
         return await self.turbo_completion(self.discord_bot_role, prompt)
 
     async def compliment_user_selection(self, author):
-        prompt = f"Please compliment the user '{author}', in a random style, on their image generation selection."
+        prompt = f"Return just a compliment in a random style, on an image generation selection. Example: 'Hey! That will be great!'"
         return await self.turbo_completion(self.discord_bot_role, prompt, max_tokens=15)
 
     async def insult_user_selection(self, author):
