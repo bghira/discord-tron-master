@@ -21,7 +21,7 @@ class Generate(commands.Cog):
             has_been_warned_about_count_being_digit = user_config.get("has_been_warned_about_count_being_digit", False)
             if not has_been_warned_about_count_being_digit:
                 await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of 'fuck you'.")
-                self.config.set_user_setting("has_been_warned_about_count_being_digit", True);
+                self.config.set_user_setting(ctx.author.id, "has_been_warned_about_count_being_digit", True);
             prompt = count + " " + prompt
             count = 3
 
