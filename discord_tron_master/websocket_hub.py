@@ -86,5 +86,5 @@ class WebSocketHub:
         ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         websocket_logger = logging.getLogger('websockets')
         websocket_logger.setLevel(logging.DEBUG) 
-        server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=10)
+        server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=30, ping_interval=2)
         await server
