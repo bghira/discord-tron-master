@@ -35,7 +35,7 @@ async def send_image(command_processor, arguments: Dict, data: Dict, websocket: 
                     buffer = BytesIO(base64_decoded_image)
                     web_root = config.get_web_root()
                     url_base = config.get_url_base()
-                    filename = str(time.time()) + md5(buffer.getvalue()) + ".png"
+                    filename = str(time.time()) + md5(buffer.getvalue().encode()).hexdigest() + ".png"
                     buffer.save(web_root + '/' + filename)
                     arguments['message'] = arguments['message'] + '\n' + url_base + '/' + filename
             await channel.send(content=arguments["message"])
