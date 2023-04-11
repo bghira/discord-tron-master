@@ -35,7 +35,7 @@ async def send_image(command_processor, arguments: Dict, data: Dict, websocket: 
                     filename = str(time.time()) + md5(buffer.getvalue()) + ".png"
                     buffer.save(web_root + '/' + filename)
                     arguments['message'] = arguments['message'] + '\n' + url_base + '/' + filename
-            await channel.send(content=arguments["message"], file=file)
+            await channel.send(content=arguments["message"])
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
