@@ -3,30 +3,36 @@ from collections import deque
 from discord_tron_master.classes.job import Job
 from typing import List
 import logging
+
 class JobQueue:
     def __init__(self, worker_id: str):
         self.queue = deque()
         self.in_progress = {}
         self.worker_id = worker_id
         self.terminate = False
+        self.item_added_event = asyncio.Event()  # Added an asyncio.Event
         logging.debug("JobQueue initialized")
 
     async def put(self, job: Job):
         self.queue.append(job)
+        self.item_added_event.set()  # Set the event when an item is added
         logging.debug(f"Job {job.id} added to queue, queue size: {len(self.queue)}")
 
     async def stop(self):
         self.terminate = True
 
     async def get(self) -> Job:
-        if self.terminate == True:
+        if self.terminate:
             logging.debug(f"Job Queue Terminating: {self.worker_id}")
-            pass
-        while len(self.queue) == 0:
-            await asyncio.sleep(1)
-            if self.terminate == True:
-                logging.debug(f"Job Queue Terminating: {self.worker_id}")
-                return
+            return None
+
+        await self.item_added_event.wait()  # Wait for the event to be set
+        self.item_added_event.clear()  # Clear the event after it's set
+
+        if self.terminate:
+            logging.debug(f"Job Queue Terminating: {self.worker_id}")
+            return None
+
         logging.debug(f"Got job! Queue size: {len(self.queue)}")
         job = self.queue.popleft()
         self.in_progress[job.id] = job
