@@ -75,7 +75,7 @@ class QueueManager:
                 if worker_id in self.workers:
                     self.workers.remove(worker_id)
             await worker.stop()
-            self.queue_manager.unregister_worker(worker_id)
+            await self.queue_manager.unregister_worker(worker_id)
         logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
 
 

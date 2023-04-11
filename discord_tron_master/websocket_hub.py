@@ -69,7 +69,7 @@ class WebSocketHub:
             # Check if the worker is registered, and if so, unregister it
             if worker_id:
                 logging.warn("Removing worker from the QueueManager")
-                self.queue_manager.unregister_worker(worker_id)
+                await self.queue_manager.unregister_worker(worker_id)
                 logging.warn("Removing worker from the WorkerManager")
                 await self.worker_manager.unregister_worker(worker_id)
 

@@ -146,7 +146,7 @@ class WorkerManager:
             return {"error": "Worker ID not provided in payload"}
         worker = self.workers.get(worker_id)
         worker.stop()
-        self.unregister_worker(worker_id)
-        self.queue_manager.unregister_worker(worker_id)
+        await self.unregister_worker(worker_id)
+        await self.queue_manager.unregister_worker(worker_id)
         logging.info("Successfully unregistered worker from queue manager.")
         return {"success": True, "result": "Worker " + str(worker_id) + " unregistered successfully"}
