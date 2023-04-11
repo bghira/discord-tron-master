@@ -52,7 +52,7 @@ class QueueManager:
             return -1
 
     async def unregister_worker(self, worker_id):
-        worker_data = self.queues.pop(worker_id, None)
+        worker_data = self.queues[worker_id]
         if worker_data:
             # Get the jobs from the worker's queue.
             queued_jobs = self.queue_contents_by_worker(worker_id)
@@ -67,12 +67,13 @@ class QueueManager:
                     logging.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
                     job.job_lost()
         logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+        del self.queues[worker_id]
 
     def queue_by_worker(self, worker: Worker) -> Queue:
-        return self.queues.get(worker.worker_id, None).get("queue", JobQueue(worker.worker_id))
+        return self.queues.get(worker.worker_id, {}).get("queue", None)
 
     def queue_contents_by_worker(self, worker_id):
-        return self.queues.get(worker_id, None).get("queue", JobQueue(worker_id))
+        return self.queues.get(worker_id, {}).get("queue", None)
 
     async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id
@@ -82,3 +83,4 @@ class QueueManager:
     async def dequeue_job(self, worker: Worker):
         worker_id = worker.worker_id
         return await self.queues[worker_id]["queue"].get()
+
