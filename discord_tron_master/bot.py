@@ -23,7 +23,7 @@ class DiscordBot:
         intents.presences = True
         websocket_logger = logging.getLogger('discord')
         websocket_logger.setLevel(logging.WARNING) 
-        self.bot = commands.Bot(command_prefix=config.get_command_prefix(), intents=intents, help_command=CustomHelp())
+        self.bot = commands.Bot(command_prefix=config.get_command_prefix(), intents=intents)
         DiscordBot.discord_instance = self
 
     @classmethod
