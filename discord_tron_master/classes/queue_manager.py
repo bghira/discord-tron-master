@@ -73,10 +73,10 @@ class QueueManager:
         del self.queues[worker_id]
 
     def queue_by_worker(self, worker: Worker) -> Queue:
-        return self.queues.get(worker.worker_id, {}).get("queue", None)
+        return self.queue_contents_by_worker(worker.worker_id)
 
     def queue_contents_by_worker(self, worker_id):
-        return self.queues.get(worker_id, {}).get("queue", None).view()
+        return self.queues[worker_id]["queue"].queue
 
     async def enqueue_job(self, worker: Worker, job: Job):
         worker_id = worker.worker_id
