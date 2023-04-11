@@ -86,13 +86,3 @@ class QueueManager:
     async def dequeue_job(self, worker: Worker):
         worker_id = worker.worker_id
         return await self.queues[worker_id]["queue"].get()
-
-
-2023-04-11 23:10:54,512 [WARNING] ConnectionClosedError: no close frame received or sent
-2023-04-11 23:10:54,512 [INFO] Removing worker lorax from connected clients
-2023-04-11 23:10:54,512 [WARNING] Removing worker from the QueueManager
-2023-04-11 23:10:54,512 [INFO] After unregistering worker, we are left with: {'sage': {'queue': <discord_tron_master.classes.job_queue.JobQueue object at 0x7fbcece92f50>, 'supported_job_types': {'gpu': True, 'memory': True, 'compute': True}}, 'lorax': {'queue': <discord_tron_master.classes.job_queue.JobQueue object at 0x7fbcece0ca30>, 'supported_job_types': {'gpu': True, 'memory': True, 'compute': True}}}
-2023-04-11 23:10:54,512 [WARNING] Removing worker from the WorkerManager
-2023-04-11 23:10:54,512 [INFO] After unregistering worker, we are left with: {'sage': <discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>} and {'gpu': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>], 'compute': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>], 'memory': [<discord_tron_master.classes.worker.Worker object at 0x7fbcece931f0>]}
-2023-04-11 23:10:54,512 [INFO] connection closed
-2023-04-11 23:10:55,438 [INFO] Empty job submitted to worker!?
