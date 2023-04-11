@@ -12,6 +12,7 @@ from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJ
 from discord_tron_master.bot import clean_traceback
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
+from discord_tron_master.classes.openai.text import GPT
 
 # Commands used for Stable Diffusion image gen.
 class Img2img(commands.Cog):
@@ -53,4 +54,9 @@ class Img2img(commands.Cog):
                         await message.channel.send(
                             f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                         )
-
+            else:
+                # We were mentioned, but no attachments. They must want to converse.
+                logging.debug("Message contains no attachments. Initiating conversation.")
+                gpt = GPT()
+                response = gpt.turbo_completion(message.content, max_tokens=2048, temperature=0.9)
+                await message.channel.send(message.author.mention + ', ' + response)
