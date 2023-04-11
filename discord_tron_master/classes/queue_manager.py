@@ -53,8 +53,8 @@ class QueueManager:
 
     async def unregister_worker(self, worker_id):
         worker_data = self.queues[worker_id]
+        logging.debug(f"Found {worker_data} worker data.?")
         if worker_data:
-            logging.debug(f"Found {worker_data} worker data.")
             # Get the jobs from the worker's queue.
             queued_jobs = self.queue_contents_by_worker(worker_id)
             logging.debug(f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}")
