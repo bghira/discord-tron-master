@@ -25,7 +25,7 @@ class GPT:
         prompt = f"Return just a compliment on the user's style and taste, in the style of Joe Rogan. Example: 'Wild stuff, man! Jamie, pull that clip up!'"
         return await self.turbo_completion(self.discord_bot_role, prompt, max_tokens=15, temperature=1.05)
 
-    async def insult_user_selection(self, author):
+    async def insult_user_selection(self, author, engine="text-davinci-003"):
         prompt = f"Return just a playful tease for the user '{author}', in the style of Sam Kinison, on their image generation selection."
         return await self.turbo_completion(self.discord_bot_role, prompt, temperature=1.05, max_tokens=15)
 
