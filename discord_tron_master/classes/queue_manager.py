@@ -66,7 +66,7 @@ class QueueManager:
                 else:
                     logging.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
                     job.job_lost()
-        logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+        logging.info(f"After unregistering worker, we are left with: {self.queues}")
         del self.queues[worker_id]
 
     def queue_by_worker(self, worker: Worker) -> Queue:
@@ -84,7 +84,12 @@ class QueueManager:
         worker_id = worker.worker_id
         return await self.queues[worker_id]["queue"].get()
 
-# 2023-04-11 23:02:47,318 [ERROR] connection handler failed
+
+# 2023-04-11 23:07:35,421 [DEBUG] x closing TCP connection
+# 2023-04-11 23:07:35,421 [WARNING] ConnectionClosedError: no close frame received or sent
+# 2023-04-11 23:07:35,421 [INFO] Removing worker lorax from connected clients
+# 2023-04-11 23:07:35,421 [WARNING] Removing worker from the QueueManager
+# 2023-04-11 23:07:35,421 [ERROR] connection handler failed
 # Traceback (most recent call last):
 #   File "/home/kash/src/discord-tron-master/.venv/lib/python3.10/site-packages/websockets/legacy/server.py", line 240, in handler
 #     await self.ws_handler(self)
@@ -92,6 +97,8 @@ class QueueManager:
 #     return await cast(
 #   File "/home/kash/src/discord-tron-master/discord_tron_master/websocket_hub.py", line 72, in handler
 #     await self.queue_manager.unregister_worker(worker_id)
-#   File "/home/kash/src/discord-tron-master/discord_tron_master/classes/queue_manager.py", line 60, in unregister_worker
-#     for job in queued_jobs:
-# TypeError: 'JobQueue' object is not iterable
+#   File "/home/kash/src/discord-tron-master/discord_tron_master/classes/queue_manager.py", line 69, in unregister_worker
+#     logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+# AttributeError: 'QueueManager' object has no attribute 'workers'
+# 2023-04-11 23:07:35,421 [INFO] connection closed
+# 2023-04-11 23:07:36,686 [DEBUG] % sending keepalive ping
