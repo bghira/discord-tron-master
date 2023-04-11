@@ -9,6 +9,9 @@ DEFAULT_CONFIG = {
         "port": 6789,
         "tls": False,
     },
+    "openai_api": {
+        "api_key": None
+    },
     "huggingface_api": {
         "api_key": None,
     },
@@ -103,6 +106,10 @@ class AppConfig:
     def get_command_prefix(self):
         self.reload_config()
         return self.config.get("cmd_prefix")
+
+    def get_openai_api_key(self):
+        self.reload_config()
+        return self.config["openai_api"].get("api_key", None)
 
     def get_websocket_hub_host(self):
         self.reload_config()

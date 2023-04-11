@@ -1,5 +1,6 @@
 from discord.ext import commands
 from asyncio import Lock
+from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
 import logging, traceback
 from discord_tron_master.bot import DiscordBot
@@ -13,6 +14,22 @@ class Generate(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.config = AppConfig()
+
+    @commands.command(name="generate-random-x", help="Generates images based on a random prompt, x number of times at once.")
+    async def generate_range_random(self, ctx, count):
+        if not count.isdigit():
+            user_config = self.config.get_user_config(user_id=ctx.author.id)
+            has_been_warned_about_count_being_digit = user_config.get("has_been_warned_about_count_being_digit", False)
+            if not has_been_warned_about_count_being_digit:
+                await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of 'fuck you'.")
+                self.config.set_user_setting(ctx.author.id, "has_been_warned_about_count_being_digit", True);
+            prompt = count + " " + prompt
+            count = 3
+        gpt = GPT()
+        for i in range(0, int(count)):
+            prompt = gpt.random_image_prompt()
+            await self.generate(ctx, prompt=prompt)
+
 
     @commands.command(name="generate-x", help="Generates an image based on the given prompt, x number of times at once.")
     async def generate_range(self, ctx, count, *, prompt):
