@@ -56,7 +56,9 @@ class Generate(commands.Cog):
     async def generate(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await ctx.send(f"Adding prompt to queue for processing: " + prompt)
+            gpt = GPT()
+            compliment = gpt.compliment_user_selection(ctx.author.mention)
+            discord_first_message = await ctx.send(f"{compliment} - added this to queue! `" + prompt + "`")
             self.config.reload_config()
             job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
             # Get the worker that will process the job.

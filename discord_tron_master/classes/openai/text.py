@@ -28,7 +28,7 @@ class GPT:
 
     async def random_image_prompt(self):
         prompt = f"Print ONLY a random image prompt for Stable Diffusion using condensed keywords and (grouped words) where concepts might be ambiguous without grouping."
-        return await self.turbo_completion(self.discord_bot_role, prompt)
+        return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt)
 
     async def discord_bot_response(self, prompt):
         return await self.turbo_completion(self.discord_bot_role, prompt)
