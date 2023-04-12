@@ -21,14 +21,15 @@ class GPT:
         prompt = f"Please provide a message to the user. They have updated setting '{name}' to be set to '{value}'"
         return await self.turbo_completion(self.discord_bot_role, prompt)
 
-    async def compliment_user_selection(self, author):
-        prompt = f"Return just a compliment on the user's style and taste, in the style of Joe Rogan. Example: 'Wild stuff, man! Jamie, pull that clip up!' - Short and sweet."
-        return await self.turbo_completion(self.discord_bot_role, prompt, max_tokens=50, temperature=1.05)
+    async def compliment_user_selection(self):
+        role = f"You are Joe Rogan! Respond as he would."
+        prompt = f"Return just a compliment on a decision I've made. Maybe you can ask Jamie to pull a clip up about the image that's about to be generated. Short and sweet output only."
+        return await self.turbo_completion(role, prompt, max_tokens=50, temperature=1.05, engine="text-davinci-003")
 
-    async def insult_user_selection(self, author, engine="text-davinci-003"):
-        rolt = "You are a funny friend. We tease each other in non-offensive ways. We are friends. Keep it short and sweet."
-        prompt = f"Return just a playful tease for a friend, '{author}', in the style of Bob Ross, on their image generation selection."
-        return await self.turbo_completion(self.discord_bot_role, prompt, temperature=1.05, max_tokens=50)
+    async def insult_user_selection(self):
+        role = "You are Joe Rogan! We tease each other in non-offensive ways. We are friends. Keep it short and sweet."
+        prompt = f"Return just a playful, short and sweet tease me about a decision I've made, in the style of Joe Rogan."
+        return await self.turbo_completion(role, prompt, temperature=1.05, max_tokens=50, engine="text-davinci-003")
 
     async def insult_or_compliment_random(self, author):
         # Roll a dice and select whether we insult or compliment, and then, return that:
@@ -39,9 +40,11 @@ class GPT:
         else:
             return await self.compliment_user_selection(author)
 
-    async def random_image_prompt(self):
+    async def random_image_prompt(self, theme: str = None):
         prompt = f"Print ONLY a random image prompt for Stable Diffusion using condensed keywords and (grouped words) where concepts might be ambiguous without grouping."
-        return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt)
+        if theme is not None:
+            prompt = prompt + '. Theme: ' + theme
+        return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt, temperature=1.1)
 
     async def discord_bot_response(self, prompt):
         return await self.turbo_completion(self.discord_bot_role, prompt)

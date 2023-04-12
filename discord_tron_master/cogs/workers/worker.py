@@ -48,8 +48,7 @@ class Worker(commands.Cog):
             for worker_id in all_workers:
                 worker = all_workers[worker_id]
                 message = message + f"Worker {worker_id}:\n"
-                message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(all_workers[worker_id])) + " jobs in queue:\n"
-                message = message + f"{await worker.job_queue.view_payload_prompts()}\n"
+                message = message + f"- {await worker.job_queue.view_payload_prompts()}\n"
             message = message + "```"
         await self.discord.send_large_message(ctx, message)
 
