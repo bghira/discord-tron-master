@@ -5,13 +5,16 @@ from discord_tron_master.classes.job import Job
 
 class WorkerManager:
     def __init__(self):
-        self.workers = {}  # {"worker_id": {"supported_job_types": [...], "hardware_limits": {...}}, ...}
+        self.workers = {}  # {"worker_id": <Worker>, ...}
         self.workers_by_capability = {
             "gpu": [],
             "compute": [],
             "memory": [],
         }
         self.queue_manager = None
+
+    def get_all_workers(self):
+        return self.workers
 
     def get_worker(self, worker_id: str):
         if not worker_id or worker_id not in self.workers or not isinstance(self.workers[worker_id], Worker):
@@ -21,7 +24,7 @@ class WorkerManager:
 
     def finish_job_for_worker(self, worker_id: str, job: Job):
         worker = self.get_worker(worker_id)
-        worker.job_queue.done(job_id)
+        worker.job_queue.done(job.job_id)
 
     async def finish_payload(self, command_processor, arguments: Dict, data: Dict, websocket):
         worker_id = arguments["worker_id"]
