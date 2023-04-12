@@ -1,6 +1,5 @@
 import logging, json, asyncio
 import websockets
-from websockets.client import WebSocketClientProtocol
 from discord_tron_master.auth import Auth
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
@@ -50,8 +49,8 @@ class WebSocketHub:
                     if raw_result is None:
                         raw_result = "No result was received. No execution occurred. Fuck right off!"
                         logging.error(f"Client requested some impossible task: {decoded}\nThe result was: {result}")
-                    await websocket.close(code=4002, reason=raw_result)
-                    return
+                    # await websocket.close(code=4002, reason=raw_result)
+                    # return
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
         except asyncio.exceptions.IncompleteReadError as e:
@@ -85,6 +84,6 @@ class WebSocketHub:
         # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
         ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         websocket_logger = logging.getLogger('websockets')
-        websocket_logger.setLevel(logging.WARNING)
-        server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=30, ping_interval=2)
+        websocket_logger.setLevel(logging.DEBUG)
+        server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=60, ping_interval=2)
         await server
