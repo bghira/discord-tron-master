@@ -47,7 +47,14 @@ class JobQueue:
         return [await job.format_payload() for job in self.view()]
     
     async def view_payload_prompts(self, truncate_length = 40):
-        return ['`' + job['image_prompt'][:truncate_length] + '`' for job in await self.view_payloads()].join("\n")
+        payload_prompts = ['`' + job['image_prompt'][:truncate_length] + '`' for job in await self.view_payloads()]
+        # Return a string form of the payload_prompts list, with each item on a new line:
+        if len(payload_prompts) == 0:
+            return 'No jobs in queue.'
+        output = ''
+        for prompt in payload_prompts:
+            output += prompt + '\n';
+        return output
 
     def done(self, job_id: int):
         if job_id in self.in_progress:
