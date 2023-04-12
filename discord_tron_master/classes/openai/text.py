@@ -31,14 +31,14 @@ class GPT:
         prompt = f"Return just a playful, short and sweet tease me about a decision I've made, in the style of Joe Rogan."
         return await self.turbo_completion(role, prompt, temperature=1.05, max_tokens=50, engine="text-davinci-003")
 
-    async def insult_or_compliment_random(self, author):
+    async def insult_or_compliment_random(self):
         # Roll a dice and select whether we insult or compliment, and then, return that:
         import random
         random_number = random.randint(1, 2)
         if random_number == 1:
-            return await self.insult_user_selection(author)
+            return await self.insult_user_selection()
         else:
-            return await self.compliment_user_selection(author)
+            return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
         prompt = f"Print ONLY a random image prompt for Stable Diffusion using condensed keywords and (grouped words) where concepts might be ambiguous without grouping."
