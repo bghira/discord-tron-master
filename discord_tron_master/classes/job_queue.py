@@ -43,6 +43,9 @@ class JobQueue:
     def view(self) -> List[Job]:
         return list(self.queue) + list(self.in_progress.values())
 
+    def view_payloads(self) -> List[dict]:
+        return [job.format_payload() for job in self.view()]
+
     def done(self, job_id: int):
         if job_id in self.in_progress:
             del self.in_progress[job_id]

@@ -4,6 +4,7 @@ from typing import Dict, Any
 class Job:
     def __init__(self, job_type: str, module_name: str, command_name: str, payload: Dict[str, Any]):
         self.id = str(uuid.uuid4())
+        self.job_id = self.id
         self.job_type = job_type
         self.payload = payload
         self.module_name = module_name
@@ -93,6 +94,7 @@ class Job:
         try:
             await self.discord_first_message.edit(content="Sorry, hossicle. We had an error reassigning your " + self.module_command + f" job to another worker. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
             await self.discord_first_message.delete(delay=15)
+            return True
         except Exception as e:
             logging.error("Error updating the discord message on job lost: " + str(e))
             raise e

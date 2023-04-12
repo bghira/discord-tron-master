@@ -38,11 +38,15 @@ class WorkerManager:
     def find_worker_with_fewest_queued_tasks(self, job: Job):
         return self.find_worker_with_fewest_queued_tasks_by_job_type(job.job_type)
 
-    def find_worker_with_fewest_queued_tasks_by_job_type(self, job_type: str):
+    def find_worker_with_fewest_queued_tasks_by_job_type(self, job_type: str, exclude_worker_id: str = None):
         job_type = job_type
         min_queued_tasks = float("inf")
         selected_worker = self.find_first_worker(job_type)
         for worker_id, worker in self.workers.items():
+            if exclude_worker_id and worker_id == exclude_worker_id:
+                logging.debug(f"Skipping worker {worker_id} because it is the excluded worker.")
+                selected_worker = None
+                continue
             logging.debug(f"worker_id: {worker_id}, worker: {worker}")
             if job_type in worker.supported_job_types:
                 logging.info(f"Found valid worker for {job_type} job")
@@ -55,6 +59,7 @@ class WorkerManager:
                     logging.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
             else:
                 logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
+        
         return selected_worker
 
     def find_first_worker(self, job_type: str) -> Worker:

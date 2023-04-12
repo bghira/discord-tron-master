@@ -62,13 +62,14 @@ class QueueManager:
             for job in queued_jobs:
                 job_type = job.job_type
                 logging.warn(f"Departing worker has active {job_type} job: {job}")
-                new_worker = self.find_worker_with_fewest_queued_tasks_by_job_type(job_type)
+                new_worker = self.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type, exclude_worker_id=worker_id)
                 if new_worker:
-                    await self.queue_manager.enqueue_job(new_worker, job)
+                    await self.enqueue_job(new_worker, job)
                     logging.info(f"Re-queued job {job.job_id} from departing worker {worker_id} to worker {new_worker.worker_id}")
                 else:
                     logging.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
-                    job.job_lost()
+                    job_lost_report = await job.job_lost()
+                    logging.error(f"Job lost report: {job_lost_report}")
         logging.info(f"After unregistering worker, we are left with: {self.queues}")
         del self.queues[worker_id]
 

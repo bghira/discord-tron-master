@@ -21,7 +21,7 @@ class Worker(commands.Cog):
         if next_worker_memory is not None:
             message = message + f"First GPU worker:     {next_worker_gpu.worker_id}\n"
             message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_gpu)) + " jobs in queue\n"
-            message = message + f"Jobs: {next_worker_gpu.job_queue.view()}\n"
+            message = message + f"Jobs: {next_worker_gpu.job_queue.view_payloads()}\n"
         else:
             message = message + "No GPU workers available.\n"
         if next_worker_compute is not None:
