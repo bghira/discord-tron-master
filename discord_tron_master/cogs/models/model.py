@@ -19,9 +19,10 @@ class Model(commands.Cog):
             all_transformers = Transformers.get_all_approved()
         wrapper = "```"
         def build_transformer_output(transformer):
-            return f"{transformer.model_owner}/{transformer.model_id}: {transformer.description}\n" \
-                f"!model {transformer.model_owner}/{transformer.model_id}\n" \
-                f"SAG capable: {transformer.sag_capable}\n"
+            cluster = f"{transformer.model_owner}/{transformer.model_id}: {transformer.description}\n" \
+                f"!model {transformer.model_owner}/{transformer.model_id}\n"
+            if transformer.sag_capable: \
+                cluster = cluster + f"SAG capable: {transformer.sag_capable}\n"
 
         def split_into_chunks(text_lines: List[str], max_length: int = 2000) -> List[str]:
             chunks = []
