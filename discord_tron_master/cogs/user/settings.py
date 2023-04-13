@@ -145,7 +145,7 @@ class Settings(commands.Cog):
                 logging.error("Failed to delete messages.")
             return
         # Allow specifying "None", "none", "NoNe" etc on the cmdline to reset to default.
-        if "none" in guidance_scaling.lower():
+        if guidance_scaling is not None and "none" in guidance_scaling.lower():
             guidance_scaling = 7.5
         user_config["guidance_scaling"] = guidance_scaling
         config.set_user_config(user_id, user_config)
