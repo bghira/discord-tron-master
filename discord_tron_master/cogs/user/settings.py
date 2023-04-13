@@ -131,6 +131,27 @@ class Settings(commands.Cog):
         await ctx.send(
             f"{ctx.author.mention} Your steps have been updated. Thank you for flying Air Bizarre."
         )
+    @commands.command(name="guidance", help="Set your guidance scaling parameter. It defaults to 7.5.")
+    async def set_guidance(self, ctx, guidance_scaling = None):
+        user_id = ctx.author.id
+        user_config = config.get_user_config(user_id)
+        original_guidance_scaling = config.get_user_setting(user_id, "guidance_scaling")
+        if not guidance_scaling.isdigit() and not "none" in guidance_scaling.lower() and guidance_scaling is not None:
+            our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again.")
+            try:
+                await ctx.delete(delay=5)
+                await our_reply.delete(delay=5)
+            except:
+                logging.error("Failed to delete messages.")
+            return
+        # Allow specifying "None", "none", "NoNe" etc on the cmdline to reset to default.
+        if "none" in guidance_scaling.lower():
+            guidance_scaling = 7.5
+        user_config["guidance_scaling"] = guidance_scaling
+        config.set_user_config(user_id, user_config)
+        await ctx.send(
+            f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_scaling}', from '{original_guidance_scaling}'. Did you know if you stop bathing for two days, you can germinate a watermelon seed in your buttcrack? Fight the power with knowledge, man."
+        )
 
     @commands.command(name="seed", help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.")
     async def set_seed(self, ctx, seed = None):
