@@ -35,7 +35,7 @@ DEFAULT_USER_CONFIG = {
     "temperature": 0.9,
     "strength": 0.5,
     "resize": 1,
-    "guidance_scale": 7.5,
+    "guidance_scaling": 7.5,
     "sag_scale": 0.75,
     "seed": None,
     "enable_sag": True,
