@@ -93,7 +93,7 @@ class Model(commands.Cog):
     async def model_delete(self, ctx, full_model_name: str):
         # Is the user in the Image Admin role?
         app = AppConfig.flask
-        is_admin = self.is_admin(ctx)
+        is_admin = await self.is_admin(ctx)
         if not is_admin:
             await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
             return
