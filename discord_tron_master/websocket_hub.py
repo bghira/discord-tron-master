@@ -84,6 +84,6 @@ class WebSocketHub:
         # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
         ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         websocket_logger = logging.getLogger('websockets')
-        websocket_logger.setLevel(logging.DEBUG)
+        websocket_logger.setLevel(logging.WARNING)
         server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=60, ping_interval=2)
         await server
