@@ -38,7 +38,7 @@ DEFAULT_USER_CONFIG = {
     "guidance_scaling": 7.5,
     "sag_scale": 0.75,
     "seed": None,
-    "enable_sag": True,
+    "enable_sag": False,
     "model": "theintuitiveye/HARDblend",
     "negative_prompt": "(child, teen) (malformed, malignant)",
     "positive_prompt": "(beautiful, unreal engine 5, highly detailed, hyperrealistic)",

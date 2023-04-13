@@ -3,6 +3,7 @@ from asyncio import Lock
 from typing import List
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.models.transformers import Transformers
+import logging
 
 class Model(commands.Cog):
     def __init__(self, bot):
@@ -88,7 +89,22 @@ class Model(commands.Cog):
         await ctx.send("Your model is now set to: " + str(full_model_name))
         self.config.set_user_setting(ctx.author.id, "model", full_model_name)
 
-
+    @commands.command(name="model-delete", help="Delete a model. Not available to non-admins.")
+    async def model_delete(self, ctx, full_model_name: str):
+        # Is the user in the Image Admin role?
+        is_admin = self.is_admin(ctx)
+        if not is_admin:
+            ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            return
+        logging.info("Deleting model!")
+        try:
+            transformers = Transformers()
+            transformer = transformers.get_by_full_model_id(full_model_name)
+            transformer.delete()
+            Transformers.commit(transformer)
+        except Exception as e:
+            logging.error(f"Could not delete model: {e}")
+            ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
 
     @commands.command(name="model-add", help="Add a model to the list for approval.")
     async def model_add(self, ctx, full_model_name: str, model_type: str, *, description):
@@ -123,14 +139,8 @@ class Model(commands.Cog):
             logging.error(f"Error while attempting to list model details: {e}, traceback: {traceback.format_exc()}")
             await ctx.send(f"I am very sorry. That model was not found. I searched for it at, https://huggingface.co/api/models/{full_model_name}.")
             return
-        # Was the user in the "Image Admin" group?
         user_id = ctx.author.id
         addition_status = False
-        user_roles = ctx.author.roles
-        for role in user_roles:
-            if role.name == "Image Admin":
-                # The model will be immiediately approved.
-                addition_status = True
 
         user_config = self.config.get_user_config(user_id=user_id)
         try:
@@ -152,21 +162,12 @@ class Model(commands.Cog):
             logging.error(f"Error while attempting to create new record: {e}, traceback: {traceback.format_exc()}")
             await ctx.send(f"I am very sorry. I was unable to create a new record for that model. You might be touching yourself at night too frequently. Have you tried touching yourself less?")
             return
-
         await ctx.send("That model exists? Cool. I'll add it to the list for approval. Please be patient. I'm a bot, and I'm slow. I'll let you know when it's approved.")
 
-
-
-        # wrapper = "```"
-        # inside = ""
-        # for transformer in all_transformers:
-        #     inside = inside + f"{transformer['model_id']}\n"
-        # if inside != "":
-        #     inside = wrapper + inside + wrapper
-        # else:
-        #     message = "There are, apparently, **zero** registered models available."
-        # await ctx.send(message)
-
-
-def setup(bot):
-    bot.add_cog(Handler(bot))
+    async def is_admin(self, ctx):
+        # Was the user in the "Image Admin" group?
+        user_roles = ctx.author.roles
+        for role in user_roles:
+            if role.name == "Image Admin":
+                return True
+        return False

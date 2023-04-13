@@ -90,7 +90,7 @@ class Settings(commands.Cog):
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
             f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`, **SAG**: {sag_scale} **Default**: `0.75`\n❓ How closely the image follows the prompt. Below 1 = no prompts.\n"
             f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ The higher the strength, the more random the img2img becomes. Lower values become more deterministic.\n"
-            f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `True`\n❓ Use SAG scaling to make higher quality images.\n"
+            f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `False`\n❓ Use SAG scaling to make higher quality images. Requires a square aspect ratio on non-SAG models.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of every prompt, which has a limit of 77 tokens. This can become truncated. Set via `{self.config.get_command_prefix()}positive`.\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."

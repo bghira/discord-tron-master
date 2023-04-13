@@ -7,6 +7,7 @@ class Transformers(db.Model):
     model_id = db.Column(db.String(255), unique=True, nullable=False)
     model_type = db.Column(db.String(16), nullable=False)
     preferred_ar = db.Column(db.String(4))
+    enforced_ar = db.Column(db.String(4), nullable=False)
     description = db.Column(db.String(255), nullable=True)
     recommended_positive = db.Column(db.String(255), nullable=True)
     recommended_negative = db.Column(db.String(255), nullable=True)
@@ -14,6 +15,7 @@ class Transformers(db.Model):
     added_by = db.Column(db.String(255), nullable=False)
     tags = db.Column(db.String(255), nullable=True)
     config_blob = db.Column(db.Text(), nullable=True)
+    sag_capable = db.Column(db.Boolean, default=False)
 
     @staticmethod
     def get_all():
