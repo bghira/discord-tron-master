@@ -119,7 +119,7 @@ class Model(commands.Cog):
             with app.app_context():
                 transformers = Transformers()
                 new_transformer = transformers.toggle_sag_mode_requirement(full_model_name)
-                await ctx.send(f"The model '{full_model_name}' is now {'compatible' if new_transformer.sag_mode else 'incompatible'} with SAG pipeline.")
+                await ctx.send(f"The model '{full_model_name}' is now {'compatible' if new_transformer.sag_capable else 'incompatible'} with SAG pipeline.")
         except Exception as e:
             logging.error(f"Could not toggle model SAG configuration status: {e}")
             await ctx.send(f"Could not toggle model SAG configuration status? {e}")
