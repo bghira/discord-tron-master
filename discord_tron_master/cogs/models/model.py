@@ -107,6 +107,39 @@ class Model(commands.Cog):
             logging.error(f"Could not delete model: {e}")
             await ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
 
+    @commands.command(name="model-sag", help="Toggle whether a model is fully compatible with SAG pipeline. Not available to non-admins.")
+    async def model_delete(self, ctx, full_model_name: str):
+        # Is the user in the Image Admin role?
+        app = AppConfig.flask
+        is_admin = await self.is_admin(ctx)
+        if not is_admin:
+            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            return
+        try:
+            with app.app_context():
+                transformers = Transformers()
+                new_transformer = transformers.toggle_sag_mode_requirement(full_model_name)
+                await ctx.send(f"The model '{full_model_name}' is now {'compatible' if new_transformer.sag_mode else 'incompatible'} with SAG pipeline.")
+        except Exception as e:
+            logging.error(f"Could not toggle model SAG configuration status: {e}")
+            await ctx.send(f"Could not toggle model SAG configuration status? {e}")
+    @commands.command(name="model-sag-aspect", help="Set the aspect ratio for a SAG pipeline on a given model. Not available to non-admins.")
+    async def model_delete(self, ctx, full_model_name: str, aspect_ratio: str):
+        # Is the user in the Image Admin role?
+        app = AppConfig.flask
+        is_admin = await self.is_admin(ctx)
+        if not is_admin:
+            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            return
+        try:
+            with app.app_context():
+                transformers = Transformers()
+                new_transformer = transformers.set_model_aspect(full_model_name, 'sag', aspect_ratio)
+                await ctx.send(f"The model '{full_model_name}' is now using aspect ratio '{aspect_ratio}' for SAG pipeline.")
+        except Exception as e:
+            logging.error(f"Could not set model aspect ratio for SAG pipeline: {e}")
+            await ctx.send(f"Could not set model aspect ratio for SAG pipeline? {e}")
+
     @commands.command(name="model-add", help="Add a model to the list for approval.")
     async def model_add(self, ctx, full_model_name: str, model_type: str, *, description):
         app = AppConfig.flask

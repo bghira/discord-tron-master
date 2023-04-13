@@ -37,6 +37,29 @@ class Transformers(db.Model):
         db.session.commit()
 
     @staticmethod
+    def toggle_sag_mode_requirement(model_id):
+        model_id = model_id.split('/')[1]
+        existing_definition = Transformers.query.filter_by(model_id=model_id).first()
+        if existing_definition is not None:
+            if existing_definition.sag_capable:
+                existing_definition.sag_capable = False
+            else:
+                existing_definition.sag_capable = True
+            db.session.commit()
+        return existing_definition
+    @staticmethod
+    def set_model_aspect(model_id, type: str = 'enforced', aspect: str = '16:9'):
+        model_id = model_id.split('/')[1]
+        existing_definition = Transformers.query.filter_by(model_id=model_id).first()
+        if existing_definition is not None:
+            if type == 'enforced':
+                existing_definition.enforced_ar = aspect
+            elif type == 'preferred':
+                existing_definition.preferred_ar = aspect
+            db.session.commit()
+        return existing_definition
+
+    @staticmethod
     def get_all_by_model_type(model_type):
         return Transformers.query.filter_by(model_type=model_type).all()
     @staticmethod
