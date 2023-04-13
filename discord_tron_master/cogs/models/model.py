@@ -92,16 +92,18 @@ class Model(commands.Cog):
     @commands.command(name="model-delete", help="Delete a model. Not available to non-admins.")
     async def model_delete(self, ctx, full_model_name: str):
         # Is the user in the Image Admin role?
+        app = AppConfig.flask
         is_admin = self.is_admin(ctx)
         if not is_admin:
             ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
             return
         logging.info("Deleting model!")
         try:
-            transformers = Transformers()
-            transformer = transformers.get_by_full_model_id(full_model_name)
-            transformer.delete()
-            Transformers.commit(transformer)
+            with app.app_context():
+                transformers = Transformers()
+                transformer = transformers.get_by_full_model_id(full_model_name)
+                transformer.delete()
+                Transformers.commit(transformer)
         except Exception as e:
             logging.error(f"Could not delete model: {e}")
             ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
