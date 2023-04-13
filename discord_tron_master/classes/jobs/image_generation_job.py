@@ -1,5 +1,5 @@
 from discord_tron_master.classes.job import Job
-import logging
+import logging, json
 from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.app_config import AppConfig
 
