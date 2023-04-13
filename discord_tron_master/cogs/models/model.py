@@ -101,7 +101,7 @@ class Model(commands.Cog):
         try:
             with app.app_context():
                 transformers = Transformers()
-                transformers.delete_by_model_id(full_model_name)
+                transformers.delete_by_full_model_id(full_model_name)
                 await ctx.send(f"Sigh. Well, it is done. That model is now obliviated from existence.")
         except Exception as e:
             logging.error(f"Could not delete model: {e}")
