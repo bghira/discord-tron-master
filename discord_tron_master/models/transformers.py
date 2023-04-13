@@ -41,12 +41,13 @@ class Transformers(db.Model):
         model_id = model_id.split('/')[1]
         existing_definition = Transformers.query.filter_by(model_id=model_id).first()
         if existing_definition is not None:
-            if existing_definition.sag_capable:
+            if existing_definition.sag_capable and existing_definition.sag_cable is not None:
                 existing_definition.sag_capable = False
             else:
                 existing_definition.sag_capable = True
             db.session.commit()
         return existing_definition
+
     @staticmethod
     def set_model_aspect(model_id, type: str = 'enforced', aspect: str = '16:9'):
         model_id = model_id.split('/')[1]
@@ -111,7 +112,12 @@ class Transformers(db.Model):
             'description': self.description,
             'recommended_positive': self.recommended_positive,
             'recommended_negative': self.recommended_negative,
-            'config_blob': self.config_blob
+            'config_blob': self.config_blob,
+            'sag_capable': self.sag_capable,
+            'tags': self.tags,
+            'approved': self.approved,
+            'added_by': self.added_by,
+            'enforced_ar': self.enforced_ar
         }
     
     def to_json(self):

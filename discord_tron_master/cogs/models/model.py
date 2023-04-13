@@ -20,7 +20,8 @@ class Model(commands.Cog):
         wrapper = "```"
         def build_transformer_output(transformer):
             return f"{transformer.model_owner}/{transformer.model_id}: {transformer.description}\n" \
-                f"!model {transformer.model_owner}/{transformer.model_id}\n"
+                f"!model {transformer.model_owner}/{transformer.model_id}\n" \
+                f"SAG capable: {transformer.sag_capable}\n"
 
         def split_into_chunks(text_lines: List[str], max_length: int = 2000) -> List[str]:
             chunks = []
@@ -123,6 +124,7 @@ class Model(commands.Cog):
         except Exception as e:
             logging.error(f"Could not toggle model SAG configuration status: {e}")
             await ctx.send(f"Could not toggle model SAG configuration status? {e}")
+
     @commands.command(name="model-sag-aspect", help="Set the aspect ratio for a SAG pipeline on a given model. Not available to non-admins.")
     async def model_sag_aspect(self, ctx, full_model_name: str, aspect_ratio: str):
         # Is the user in the Image Admin role?
