@@ -1,6 +1,5 @@
 import uuid, logging, json
 from typing import Dict, Any
-
 class Job:
     def __init__(self, job_type: str, module_name: str, command_name: str, payload: Dict[str, Any]):
         self.id = str(uuid.uuid4())
@@ -19,6 +18,7 @@ class Job:
         # Format payload into a message format for WebSocket handling.
         bot, config, ctx, prompt, discord_first_message = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
+        user_config = config.get_user_config(user_id=ctx.author.id)
         message = {
             "job_type": self.job_type,
             "job_id": self.id,
@@ -27,9 +27,9 @@ class Job:
             "discord_context": self.context_to_dict(ctx),
             "image_prompt": prompt,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": config.get_user_config(user_id=ctx.author.id)
+            "config": user_config
         }
-        return message
+        return message      
 
     def context_to_dict(self, ctx):
         # Format context into a dict for WebSocket handling.
