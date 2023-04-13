@@ -136,7 +136,7 @@ class Settings(commands.Cog):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_guidance_scaling = config.get_user_setting(user_id, "guidance_scaling")
-        if not guidance_scaling.isdigit() and not "none" in guidance_scaling.lower() and guidance_scaling is not None:
+        if guidance_scaling is not None and not guidance_scaling.isdigit() and not "none" in guidance_scaling.lower():
             our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again.")
             try:
                 await ctx.delete(delay=5)
