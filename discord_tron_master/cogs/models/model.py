@@ -108,7 +108,7 @@ class Model(commands.Cog):
             await ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
 
     @commands.command(name="model-sag", help="Toggle whether a model is fully compatible with SAG pipeline. Not available to non-admins.")
-    async def model_delete(self, ctx, full_model_name: str):
+    async def model_sag(self, ctx, full_model_name: str):
         # Is the user in the Image Admin role?
         app = AppConfig.flask
         is_admin = await self.is_admin(ctx)
@@ -124,7 +124,7 @@ class Model(commands.Cog):
             logging.error(f"Could not toggle model SAG configuration status: {e}")
             await ctx.send(f"Could not toggle model SAG configuration status? {e}")
     @commands.command(name="model-sag-aspect", help="Set the aspect ratio for a SAG pipeline on a given model. Not available to non-admins.")
-    async def model_delete(self, ctx, full_model_name: str, aspect_ratio: str):
+    async def model_sag_aspect(self, ctx, full_model_name: str, aspect_ratio: str):
         # Is the user in the Image Admin role?
         app = AppConfig.flask
         is_admin = await self.is_admin(ctx)
