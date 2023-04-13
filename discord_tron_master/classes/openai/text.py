@@ -12,6 +12,7 @@ class GPT:
         self.max_tokens = 100
         self.discord_bot_role = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
+        self.config = AppConfig()
     
     def set_values(self, **kwargs):
         for key, value in kwargs.items():

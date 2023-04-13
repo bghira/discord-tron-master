@@ -29,7 +29,7 @@ class Settings(commands.Cog):
                 if setting_key in mappable_options:
                     setting_key = mappable_options[setting_key]
                 else:
-                    await ctx.send("That setting does not exist. Quit _**FUCKING**_ with me.")
+                    await ctx.send("That setting does not exist. Quit _**FUCKING**_ with me 😭😭😭")
                     return
             # Does args[1] exist?
             try:
@@ -51,7 +51,7 @@ class Settings(commands.Cog):
             # Same type comes back as the cast value.
             setting_value = same_type
             # We are given valid option, value checks out. Is it a forbidden fruit?
-            unforgivable_curses = [ 'model', 'resolution' ]
+            unforgivable_curses = [ 'model', 'resolution', 'seed' ]
             if setting_key in unforgivable_curses:
                 await ctx.send(f"Well, well, well. If it isn't that user that thought they could go around whatever roadblocks I've put in the way of their fun. You cannot set {unforgivable_curses} on your settings profile through this option. Use `{self.config.get_command_prefix()}help` to discover your own asshole and finger your way out of this mess.")
                 return
@@ -64,6 +64,10 @@ class Settings(commands.Cog):
         model_id = user_config.get("model")
         steps = self.config.get_user_setting(user_id, "steps")
         strength = self.config.get_user_setting(user_id, "strength")
+        sag_scale = self.config.get_user_setting(user_id, "sag_scale")
+        guidance_scale = self.config.get_user_setting(user_id, "guidance_scale")
+        enable_sag = self.config.get_user_setting(user_id, "enable_sag")
+        seed = self.config.get_user_setting(user_id, "seed", None)
         negative_prompt = self.config.get_user_setting(
             user_id,
             "negative_prompt",
@@ -82,14 +86,73 @@ class Settings(commands.Cog):
         message = (
             f"**Hello,** {ctx.author.mention}! Here are your current settings:\n"
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
+            f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ When None, it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.\n"
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
+            f"🟠 **Scaling**: guidance: `{guidance_scale}` **Default**: `7.5`, **SAG**: {sag_scale} **Default**: `0.75`\n❓ How closely the image follows the prompt. Below 1 = no prompts.\n"
             f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ The higher the strength, the more random the img2img becomes. Lower values become more deterministic.\n"
+            f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `True`\n❓ Use SAG scaling to make higher quality images.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of every prompt, which has a limit of 77 tokens. This can become truncated. Set via `{self.config.get_command_prefix()}positive`.\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
 
         await ctx.send(message)
+
+    @commands.command(name="sag", help="Enable or disable self-assisted guidance pipeline that uses a self-reference routine to improve image quality. Default is True.")
+    async def toggle_sag(self, ctx):
+        user_id = ctx.author.id
+        enable_sag = config.get_user_setting(user_id, "enable_sag")
+        try:
+            if enable_sag:
+                config.set_user_setting(user_id, "enable_sag", False)
+                await ctx.send(
+                    f"{ctx.author.mention} Self-assisted guidance has been disabled. You're on your own now, bucko."
+                )
+            else:
+                config.set_user_setting(user_id, "enable_sag", True)
+                await ctx.send(
+                    f"{ctx.author.mention} Self-assisted guidance has been enabled. You're welcome."
+                )
+        except Exception as e:
+            logging.error("Caught error when toggling user SAG property: " + str(e))
+
+    @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
+    async def set_steps(self, ctx, steps):
+        user_id = ctx.author.id
+        if not steps.isdigit():
+            our_reply = await ctx.send(f"Steps must be a number. You gave me `{steps}`. Try again.")
+            try:
+                await ctx.delete(delay=15)
+                await our_reply.delete(delay=15)
+            except:
+                logging.error("Failed to delete messages.")
+            return
+        config.set_user_setting(user_id, "steps", int(steps))
+        await ctx.send(
+            f"{ctx.author.mention} Your steps have been updated. Thank you for flying Air Bizarre."
+        )
+
+    @commands.command(name="seed", help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.")
+    async def set_seed(self, ctx, seed = None):
+        user_id = ctx.author.id
+        user_config = config.get_user_config(user_id)
+        original_seed = config.get_user_setting(user_id, "seed")
+        if not seed.isdigit() and not "none" in seed.lower() and seed is not None and seed != "random":
+            our_reply = await ctx.send(f"Seed must be a number. You gave me `{seed}`. Try again.")
+            try:
+                await ctx.delete(delay=5)
+                await our_reply.delete(delay=5)
+            except:
+                logging.error("Failed to delete messages.")
+            return
+        # Allow specifying "None", "none", "NoNe" etc on the cmdline and map to None to enable random seeds.
+        if "none" in seed.lower() or seed is "random":
+            seed = None
+        user_config["seed"] = seed
+        config.set_user_config(user_id, user_config)
+        await ctx.send(
+            f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'. Thank you for flying Air Bizarre."
+        )
 
     @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
     async def set_resolution(self, ctx, resolution=None):
