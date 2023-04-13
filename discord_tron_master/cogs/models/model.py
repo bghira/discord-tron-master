@@ -23,6 +23,7 @@ class Model(commands.Cog):
                 f"!model {transformer.model_owner}/{transformer.model_id}\n"
             if transformer.sag_capable: \
                 cluster = cluster + f"SAG capable: {transformer.sag_capable}\n"
+            return cluster
 
         def split_into_chunks(text_lines: List[str], max_length: int = 2000) -> List[str]:
             chunks = []
