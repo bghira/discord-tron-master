@@ -39,7 +39,11 @@ class Transformers(db.Model):
     @staticmethod
     def get_all_by_model_type(model_type):
         return Transformers.query.filter_by(model_type=model_type).all()
-
+    @staticmethod
+    def delete_by_full_model_id(full_model_id):
+        model_id = full_model_id.split('/')[1]
+        model_owner = full_model_id.split('/')[0]
+        return Transformers.delete_by_model_id(model_id)
     @staticmethod
     def delete_by_model_id(model_id):
         existing_definition = Transformers.query.filter_by(model_id=model_id).first()
