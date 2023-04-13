@@ -95,17 +95,17 @@ class Model(commands.Cog):
         app = AppConfig.flask
         is_admin = self.is_admin(ctx)
         if not is_admin:
-            ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
             return
         logging.info("Deleting model!")
         try:
             with app.app_context():
                 transformers = Transformers()
                 transformers.delete_by_model_id(full_model_name)
-                ctx.send(f"Sigh. Well, it is done. That model is now obliviated from existence.")
+                await ctx.send(f"Sigh. Well, it is done. That model is now obliviated from existence.")
         except Exception as e:
             logging.error(f"Could not delete model: {e}")
-            ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
+            await ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
 
     @commands.command(name="model-add", help="Add a model to the list for approval.")
     async def model_add(self, ctx, full_model_name: str, model_type: str, *, description):
