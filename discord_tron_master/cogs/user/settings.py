@@ -136,14 +136,17 @@ class Settings(commands.Cog):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_guidance_scaling = config.get_user_setting(user_id, "guidance_scaling")
-        if guidance_scaling is not None and not guidance_scaling.isdigit() and not "none" in guidance_scaling.lower():
-            our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again.")
+        if guidance_scaling is not None and not "none" in guidance_scaling.lower():
             try:
-                await ctx.delete(delay=5)
-                await our_reply.delete(delay=5)
+                scaling_value = float(guidance_scaling)
             except:
-                logging.error("Failed to delete messages.")
-            return
+                our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again.")
+                try:
+                    await ctx.delete(delay=5)
+                    await our_reply.delete(delay=5)
+                except:
+                    logging.error("Failed to delete messages.")
+                return
         # Allow specifying "None", "none", "NoNe" etc on the cmdline to reset to default.
         if guidance_scaling is not None and "none" in guidance_scaling.lower():
             guidance_scaling = 7.5
