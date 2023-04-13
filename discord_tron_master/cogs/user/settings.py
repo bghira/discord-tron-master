@@ -65,7 +65,7 @@ class Settings(commands.Cog):
         steps = self.config.get_user_setting(user_id, "steps")
         strength = self.config.get_user_setting(user_id, "strength")
         sag_scale = self.config.get_user_setting(user_id, "sag_scale")
-        guidance_scale = self.config.get_user_setting(user_id, "guidance_scale")
+        guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
         enable_sag = self.config.get_user_setting(user_id, "enable_sag")
         seed = self.config.get_user_setting(user_id, "seed", None)
         negative_prompt = self.config.get_user_setting(
@@ -88,7 +88,7 @@ class Settings(commands.Cog):
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
             f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ When None, it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.\n"
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
-            f"🟠 **Scaling**: guidance: `{guidance_scale}` **Default**: `7.5`, **SAG**: {sag_scale} **Default**: `0.75`\n❓ How closely the image follows the prompt. Below 1 = no prompts.\n"
+            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`, **SAG**: {sag_scale} **Default**: `0.75`\n❓ How closely the image follows the prompt. Below 1 = no prompts.\n"
             f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ The higher the strength, the more random the img2img becomes. Lower values become more deterministic.\n"
             f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `True`\n❓ Use SAG scaling to make higher quality images.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
