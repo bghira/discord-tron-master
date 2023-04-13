@@ -1,6 +1,7 @@
 from discord_tron_master.classes.job import Job
 import logging
 from discord_tron_master.models.transformers import Transformers
+from discord_tron_master.classes.app_config import AppConfig
 
 class ImageGenerationJob(Job):
     def __init__(self, payload):
@@ -23,8 +24,18 @@ class ImageGenerationJob(Job):
             "model_config": self.get_transformer_details(user_config)
         }
         return message
-
+    async def execute(self):
+        websocket = self.worker.websocket
+        message = await self.format_payload()
+        try:
+            await self.worker.send_websocket_message(json.dumps(message))
+        except Exception as e:
+            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
+            logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
+            return False
     def get_transformer_details(self, user_config):
         model_id = user_config['model']
-        transformer = Transformers.get_by_full_model_id(model_id)
+        app = AppConfig.flask
+        with app.app_context():
+            transformer = Transformers.get_by_full_model_id(model_id)
         return transformer.to_dict()
