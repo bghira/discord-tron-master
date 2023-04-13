@@ -101,9 +101,8 @@ class Model(commands.Cog):
         try:
             with app.app_context():
                 transformers = Transformers()
-                transformer = transformers.get_by_full_model_id(full_model_name)
-                transformer.delete()
-                Transformers.commit(transformer)
+                transformers.delete_by_model_id(full_model_name)
+                ctx.send(f"Sigh. Well, it is done. That model is now obliviated from existence.")
         except Exception as e:
             logging.error(f"Could not delete model: {e}")
             ctx.send(f"Sorry bae, could not delete that model for you. Have you tried using more lube? {e}")
