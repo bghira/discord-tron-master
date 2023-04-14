@@ -47,8 +47,12 @@ class GPT:
             prompt = prompt + '. Theme: ' + theme
         return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt, temperature=1.1)
 
-    async def discord_bot_response(self, prompt):
-        return await self.turbo_completion(self.discord_bot_role, prompt)
+    async def discord_bot_response(self, prompt, ctx = None):
+        user_role = self.discord_bot_role
+        if ctx is not None:
+            user_role = self.config.get_user_setting(ctx.author.id, "gpt_role", self.discord_bot_role)
+            user_temperature = self.config.get_user_setting(ctx.author.id, "temperature")
+        return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=2048)
 
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:

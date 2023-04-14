@@ -69,6 +69,7 @@ class Settings(commands.Cog):
         guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
         enable_sag = self.config.get_user_setting(user_id, "enable_sag")
         seed = self.config.get_user_setting(user_id, "seed", None)
+        gpt_role = self.config.get_user_setting(user_id, "gpt_role")
         negative_prompt = self.config.get_user_setting(
             user_id,
             "negative_prompt",
@@ -94,6 +95,7 @@ class Settings(commands.Cog):
             f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `False`\n❓ Use SAG scaling to make higher quality images. Requires a square aspect ratio on non-SAG models.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of every prompt, which has a limit of 77 tokens. This can become truncated. Set via `{self.config.get_command_prefix()}positive`.\n"
+            f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Defines how this bot will respond to you when chatting. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
 

@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
 
 DEFAULT_USER_CONFIG = {
     "steps": 100,
+    "gpt_role": "You are a Discord bot.",
     "temperature": 0.9,
     "strength": 0.5,
     "resize": 1,
