@@ -31,6 +31,7 @@ class Generate(commands.Cog):
                 await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of 'fuck you'.")
                 self.config.set_user_setting(ctx.author.id, "has_been_warned_about_count_being_digit", True);
             count = 3
+        out_theme = ''
         if not arg_count.isdigit():
             # We have arg_count, but the value is non-numeric. Set the default to three, and use the arg_count as the theme.
             out_theme = arg_count
