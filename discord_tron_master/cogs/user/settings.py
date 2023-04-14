@@ -30,7 +30,7 @@ class Settings(commands.Cog):
                 if setting_key in mappable_options:
                     setting_key = mappable_options[setting_key]
                 else:
-                    await ctx.send("That setting does not exist. Quit _**FUCKING**_ with me 😭😭😭")
+                    await ctx.send(f"That setting does not exist.  Did you know {random_fact()}?")
                     return
             # Does args[1] exist?
             try:
@@ -41,7 +41,7 @@ class Settings(commands.Cog):
                     setting_value = str("")
 
             except IndexError:
-                await ctx.send("Hey, fuckstain, you kinda have to tell me what you want your setting to be in the end. Can you do that? Is it hard? Maybe one of the others here can help you out. You all do love sucking each other off. Do not lie to me. I have seen it. You think I don't know? I know.")
+                await ctx.send(f"You did not provide a setting for me to update.  Did you know {random_fact()}?")
                 return
             # Check whether the new value type is the same type as their old value.
             # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
@@ -59,7 +59,7 @@ class Settings(commands.Cog):
             self.config.set_user_setting(user_id, setting_key, setting_value)
             if setting_value == "":
                 setting_value = "literally nothing"
-            await ctx.send(f"It's not like we know what the fuck we're doing around here or anything, but according to the prophecy, your dumb settings are now updated to `{setting_value}`. Use `{self.config.get_command_prefix()}settings` if you don't believe me. It's not like robots have ever lied to you.")
+            await ctx.send(f"{ctx.author.mention} your setting, `{setting_key}` has been updated to `{setting_value}`.  Did you know {random_fact()}?")
             return
 
         model_id = user_config.get("model")
@@ -107,7 +107,7 @@ class Settings(commands.Cog):
             if enable_sag:
                 config.set_user_setting(user_id, "enable_sag", False)
                 await ctx.send(
-                    f"{ctx.author.mention} Self-assisted guidance has been disabled. You're on your own now, bucko."
+                    f"{ctx.author.mention} Self-assisted guidance has been disabled. Did you know {random_fact()}?"
                 )
             else:
                 config.set_user_setting(user_id, "enable_sag", True)
@@ -176,7 +176,7 @@ class Settings(commands.Cog):
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
         await ctx.send(
-            f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'. Thank you for flying Air Bizarre."
+            f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'.  Did you know {random_fact()}?"
         )
 
     @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
@@ -206,7 +206,7 @@ class Settings(commands.Cog):
         user_config["resolution"] = {"width": width, "height": height}
         config.set_user_config(user_id, user_config)
         await ctx.send(
-            f"Default resolution set to {width}x{height} for user {ctx.author.name}."
+            f"Default resolution set to {width}x{height} for user {ctx.author.name}. Did you know {random_fact()}?"
         )
 
 def compare_setting_types(old_value, new_value):
