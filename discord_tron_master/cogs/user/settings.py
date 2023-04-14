@@ -154,7 +154,7 @@ class Settings(commands.Cog):
         user_config["guidance_scaling"] = guidance_scaling
         config.set_user_config(user_id, user_config)
         await ctx.send(
-            f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_scaling}', from '{original_guidance_scaling}'. Did you know {random_fact()}"
+            f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_scaling}', from '{original_guidance_scaling}'. Did you know {random_fact()}?"
         )
 
     @commands.command(name="seed", help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.")
