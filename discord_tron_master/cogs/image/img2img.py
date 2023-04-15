@@ -10,6 +10,8 @@ from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJob
 from discord_tron_master.bot import clean_traceback
+from discord_tron_master.cogs.image.generate import Generate
+
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
 from discord_tron_master.classes.openai.text import GPT
@@ -26,6 +28,26 @@ class Img2img(commands.Cog):
         if message.author == self.bot.user or message.author.bot:
             logging.debug("Ignoring message from this or another bot.")
             return
+        # Threaded replies without any command prefix:
+        in_my_thread = False
+        is_in_thread = False
+        if isinstance(message.channel, discord.Thread):
+            is_in_thread = True
+
+        # Whether we're in a thread the bot started.
+        if is_in_thread and message.channel.owner_id == self.bot.user.id or message.author.bot:
+            in_my_thread = True
+        if is_in_thread and len(message.content) > 0 and message.content[0] == "*":
+            # Respond to * as all bots.
+            in_my_thread = True
+        # Run only if it's in the bot's thread, and has no image attachments, and, has no "!" commands.
+        if in_my_thread and not message.attachments and message.content[0] != "!" and message.content[0] != "+":
+            print("Attempting to run generate command?")
+            generator = Generate(self.bot)
+            await generator.generate(message, message.content)
+            return
+
+        # Img2Img via bot @mention
         if self.bot.user in message.mentions:
             logging.debug("Message contains mention of self.")
             # Strip the mention from the message:
@@ -37,19 +59,6 @@ class Img2img(commands.Cog):
                 if attachment.content_type.startswith("image/"):
                     logging.debug("Attachment is an image.")
                     try:
-                        # Generate a "Job" object that will be put into the queue.
-                        discord_first_message = await message.channel.send(f"Adding image to queue for processing: " + attachment.url)
-                        job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
-                        # Get the worker that will process the job.
-                        worker = discord.worker_manager.find_best_fit_worker(job)
-                        if worker is None:
-                            await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
-                            # Wait a few seconds before deleting:
-                            await discord_first_message.delete(delay=10)
-                            return
-                        logging.info("Worker selected for job: " + str(worker.worker_id))
-                        # Add it to the queue
-                        await discord.queue_manager.enqueue_job(worker, job)
                     except Exception as e:
                         await message.channel.send(
                             f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
@@ -74,3 +83,17 @@ class Img2img(commands.Cog):
                         f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
                     )
                     logging.error(f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}")
+    async def _handle_image_attachment(self, message, attachment):
+        # Generate a "Job" object that will be put into the queue.
+        discord_first_message = await message.channel.send(f"Adding image to queue for processing: " + attachment.url)
+        job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+        # Get the worker that will process the job.
+        worker = discord.worker_manager.find_best_fit_worker(job)
+        if worker is None:
+            await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
+            # Wait a few seconds before deleting:
+            await discord_first_message.delete(delay=10)
+            return
+        logging.info("Worker selected for job: " + str(worker.worker_id))
+        # Add it to the queue
+        await discord.queue_manager.enqueue_job(worker, job)
