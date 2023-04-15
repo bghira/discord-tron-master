@@ -68,7 +68,7 @@ class Img2img(commands.Cog):
                     await chat_ml.add_user_reply(message.content)
                     response = await gpt.discord_bot_response(prompt=await chat_ml.get_prompt(), ctx=message)
                     await chat_ml.add_assistant_reply(response)
-                    await discord.send_large_message(message, message.author.mention + ' ' + response)
+                    await discord.send_large_message(message, message.author.mention + ' ' + ChatML.clean(response))
                 except Exception as e:
                     await message.channel.send(
                         f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
