@@ -119,7 +119,7 @@ class ChatML:
 
     async def add_to_history(self, role: str, content: str):
         # Store the reply for processing
-        self.reply = {"role": role, "content": self.clean(content)}
+        self.reply = {"role": role, "content": ChatML.clean(content)}
         if not await self.validate_reply():
             raise ValueError(f"I am sorry. It seems your reply would overrun the limits of reality and time. We are currently stuck at {self.token_limit} tokens, and your message used {await self.get_reply_token_count()} tokens. Please try again.")
         with app.app_context():
@@ -129,7 +129,8 @@ class ChatML:
             return conversation.history
 
     # Clean the txt in a manner it can be inserted into the DB.
-    def clean(self, text):
+    @staticmethod
+    def clean(text):
         # Clean the newlines.
         return text.replace('\\n', '\n')
 
