@@ -7,7 +7,6 @@ from discord_tron_master.classes.text_replies import return_random as random_fac
 import logging
 
 config = AppConfig()
-
 resolution_helper = ResolutionHelper()
 available_resolutions = resolution_helper.list_available_resolutions()
 
@@ -99,7 +98,7 @@ class Settings(commands.Cog):
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
 
-        await ctx.send(message)
+        await self.send_large_message(ctx, message)
 
     @commands.command(name="sag", help="Enable or disable self-assisted guidance pipeline that uses a self-reference routine to improve image quality. Default is True.")
     async def toggle_sag(self, ctx):
@@ -210,7 +209,20 @@ class Settings(commands.Cog):
         await ctx.send(
             f"Default resolution set to {width}x{height} for user {ctx.author.name}. Did you know {random_fact()}?"
         )
+    async def send_large_message(self, ctx, text, max_chars=2000):
+        if len(text) <= max_chars:
+            await ctx.channel.send(text)
+            return
 
+        lines = text.split("\n")
+        buffer = ""
+        for line in lines:
+            if len(buffer) + len(line) + 1 > max_chars:
+                await ctx.channel.send(buffer)
+                buffer = ""
+            buffer += line + "\n"
+        if buffer:
+            await ctx.channel.send(buffer)
 def compare_setting_types(old_value, new_value):
     # Check whether the new value type is the same type as their old value.
     # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
