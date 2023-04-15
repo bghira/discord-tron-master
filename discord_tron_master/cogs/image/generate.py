@@ -75,7 +75,7 @@ class Generate(commands.Cog):
             if not hasattr(ctx, "send"):
                 # Likely this came from on_message. Get the context properly.
                 context = await self.bot.get_context(ctx)
-            discord_first_message = await context.send("Queued: `" + prompt)
+            discord_first_message = await context.send("Queued: `" + prompt + "`")
             self.config.reload_config()
             job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
             # Get the worker that will process the job.
