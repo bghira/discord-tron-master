@@ -44,8 +44,8 @@ class Img2img(commands.Cog):
         if in_my_thread and not message.attachments and message.content[0] != "!" and message.content[0] != "+":
             print("Attempting to run generate command?")
             generator = self.bot.get_cog('Generate')
-            # Strip the first character:
-            prompt = message.content[1:]
+            # Strip the first character and remove surrounding whitespace:
+            prompt = message.content[1:].strip()
             await generator.generate(message, prompt=prompt)
             return
 
