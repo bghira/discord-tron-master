@@ -85,7 +85,7 @@ class Settings(commands.Cog):
         if negative_prompt == "":
             negative_prompt = "literally nothing. live dangerously, bucko."
         message = (
-            f"**Hello,** {ctx.author.mention}! Here are your current settings:\n"
+            f"{ctx.author.mention}\n"
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
             f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ When None, it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.\n"
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
