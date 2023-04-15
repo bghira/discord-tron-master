@@ -5,7 +5,7 @@
 from io import BytesIO
 from discord.ext import commands
 from discord_tron_master.classes.app_config import AppConfig
-import logging, traceback
+import logging, traceback, discord
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJob
@@ -13,7 +13,7 @@ from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
 
 # For queue manager, etc.
-discord = DiscordBot.get_instance()
+discord_wrapper = DiscordBot.get_instance()
 from discord_tron_master.classes.openai.text import GPT
 
 # Commands used for Stable Diffusion image gen.
@@ -78,7 +78,7 @@ class Img2img(commands.Cog):
                     await chat_ml.add_user_reply(message.content)
                     response = await gpt.discord_bot_response(prompt=await chat_ml.get_prompt(), ctx=message)
                     await chat_ml.add_assistant_reply(response)
-                    await discord.send_large_message(message, message.author.mention + ' ' + ChatML.clean(response))
+                    await discord_wrapper.send_large_message(message, message.author.mention + ' ' + ChatML.clean(response))
                 except Exception as e:
                     await message.channel.send(
                         f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
@@ -89,7 +89,7 @@ class Img2img(commands.Cog):
         discord_first_message = await message.channel.send(f"Adding image to queue for processing: " + attachment.url)
         job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         # Get the worker that will process the job.
-        worker = discord.worker_manager.find_best_fit_worker(job)
+        worker = discord_wrapper.worker_manager.find_best_fit_worker(job)
         if worker is None:
             await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
             # Wait a few seconds before deleting:
@@ -97,4 +97,4 @@ class Img2img(commands.Cog):
             return
         logging.info("Worker selected for job: " + str(worker.worker_id))
         # Add it to the queue
-        await discord.queue_manager.enqueue_job(worker, job)
+        await discord_wrapper.queue_manager.enqueue_job(worker, job)
