@@ -57,6 +57,20 @@ class Img2img(commands.Cog):
             else:
                 # We were mentioned, but no attachments. They must want to converse.
                 logging.debug("Message contains no attachments. Initiating conversation.")
-                gpt = GPT()
-                response = await gpt.discord_bot_response(prompt=message.content, ctx=message)
-                await discord.send_large_message(message, message.author.mention + ' ' + response)
+                try:
+                    gpt = GPT()
+                    from discord_tron_master.classes.openai.chat_ml import ChatML
+                    from discord_tron_master.models.conversation import Conversations
+                    app = AppConfig.flask
+                    with app.app_context():
+                        user_conversation = Conversations.create(message.author.id, self.config.get_user_setting(message.author.id, "gpt_role"), Conversations.get_new_history())
+                        chat_ml = ChatML(user_conversation)
+                    await chat_ml.add_user_reply(message.content)
+                    response = await gpt.discord_bot_response(prompt=await chat_ml.get_prompt(), ctx=message)
+                    await chat_ml.add_assistant_reply(response)
+                    await discord.send_large_message(message, message.author.mention + ' ' + response)
+                except Exception as e:
+                    await message.channel.send(
+                        f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
+                    )
+                    logging.error(f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}")
