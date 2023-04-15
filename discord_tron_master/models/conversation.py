@@ -5,7 +5,7 @@ class Conversations(db.Model):
     __tablename__ = 'conversations'
     id = db.Column(db.Integer, primary_key=True)
     owner = db.Column(db.BigInteger(), unique=False, nullable=False)
-    role = db.Column(db.String(255), unique=True, nullable=False)
+    role = db.Column(db.Text(), unique=True, nullable=False)
     history = db.Column(db.Text(), nullable=False, default='{}')
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
