@@ -119,7 +119,7 @@ class ChatML:
 
     async def add_to_history(self, role: str, content: str):
         # Store the reply for processing
-        self.reply = {"role": role, "content": content}
+        self.reply = {"role": role, "content": self.clean(content)}
         if not await self.validate_reply():
             raise ValueError(f"I am sorry. It seems your reply would overrun the limits of reality and time. We are currently stuck at {self.token_limit} tokens, and your message used {await self.get_reply_token_count()} tokens. Please try again.")
         with app.app_context():
@@ -128,6 +128,10 @@ class ChatML:
             self.conversations.set_history(self.user_id, conversation.history)
             return conversation.history
 
+    # Clean the txt in a manner it can be inserted into the DB.
+    def clean(self, text):
+        # Clean the newlines.
+        return text.replace('\\n', '\n')
 
     def truncate_conversation_history(self, conversation_history, new_prompt, max_tokens=2048):
         # Calculate tokens for new_prompt
