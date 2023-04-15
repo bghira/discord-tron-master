@@ -44,7 +44,9 @@ class Img2img(commands.Cog):
         if in_my_thread and not message.attachments and message.content[0] != "!" and message.content[0] != "+":
             print("Attempting to run generate command?")
             generator = Generate(self.bot)
-            await generator.generate(message, prompt=message.content)
+            context = message
+            prompt = message.content
+            await generator.generate(context, prompt)
             return
 
         # Img2Img via bot @mention
