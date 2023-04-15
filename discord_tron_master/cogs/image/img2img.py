@@ -59,6 +59,7 @@ class Img2img(commands.Cog):
                 if attachment.content_type.startswith("image/"):
                     logging.debug("Attachment is an image.")
                     try:
+                        return await self._handle_image_attachment(message, attachment)
                     except Exception as e:
                         await message.channel.send(
                             f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
