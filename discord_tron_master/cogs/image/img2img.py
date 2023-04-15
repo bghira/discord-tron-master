@@ -46,7 +46,7 @@ class Img2img(commands.Cog):
             generator = Generate(self.bot)
             context = message
             prompt = message.content
-            await generator.generate(context, prompt)
+            await generator.generate(context, prompt=prompt)
             return
 
         # Img2Img via bot @mention
