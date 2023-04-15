@@ -5,7 +5,7 @@ class Conversations(db.Model):
     __tablename__ = 'conversations'
     id = db.Column(db.Integer, primary_key=True)
     owner = db.Column(db.BigInteger(), unique=False, nullable=False)
-    role = db.Column(db.Text(), unique=True, nullable=False)
+    role = db.Column(db.String(255), nullable=False)
     history = db.Column(db.Text(), nullable=False, default='{}')
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
@@ -39,7 +39,7 @@ class Conversations(db.Model):
             return existing_definition
         if history is None:
             raise ValueError("History must be provided when creating a new conversation")
-        conversation = Conversations(owner=owner, role=role, history=json.dumps(history))
+        conversation = Conversations(owner=owner, role="", history=json.dumps(history))
         db.session.add(conversation)
         db.session.commit()
         return conversation
