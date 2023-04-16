@@ -111,8 +111,15 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     logging.debug(f"Found channel? {channel}")
     if channel is not None:
         try:
-            thread = await channel.create_thread(name=arguments["name"])
-            logging.debug(f"Created thread: {thread}")
+            # Maybe channel is already a thread.
+            if isinstance(channel, discord.Thread):
+                logging.debug(f"Channel is already a thread. Using it.")
+                thread = channel
+            elif isinstance(channel, discord.TextChannel):
+                logging.debug(f"Channel is a text channel. Creating thread.")
+                thread = await channel.create_thread(name=arguments["name"])
+            else:
+                raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
             embed = None
             if "image" in arguments:
                 logging.debug(f"Found image_data inside message")
