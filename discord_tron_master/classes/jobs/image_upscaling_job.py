@@ -10,6 +10,8 @@ class ImageUpscalingJob(Job):
         bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for img2img payload")
         logging.debug(f"{self.payload}")
+        user_config = config.get_user_config(user_id=ctx.author.id)
+        user_config["model"] = 'stabilityai/stable-diffusion-x4-upscaler'
         message = {
             "job_type": self.job_type,
             "job_id": self.id,
@@ -19,7 +21,7 @@ class ImageUpscalingJob(Job):
             "image_prompt": prompt,
             "image_data": image,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": config.get_user_config(user_id=ctx.author.id),
+            "config": user_config,
             "upscaler": True
         }
         return message
