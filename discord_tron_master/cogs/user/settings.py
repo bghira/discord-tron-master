@@ -136,7 +136,10 @@ class Settings(commands.Cog):
             f"{ctx.author.mention} Your steps have been updated. Thank you for flying Air Bizarre."
         )
         await response.delete(delay=15)
-        await ctx.delete()
+        if hasattr(ctx, "message"):
+            await ctx.message.delete()
+        else:
+            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}")
     @commands.command(name="guidance", help="Set your guidance scaling parameter. It defaults to 7.5.")
     async def set_guidance(self, ctx, guidance_scaling = None):
         user_id = ctx.author.id
