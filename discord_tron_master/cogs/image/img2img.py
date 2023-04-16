@@ -100,6 +100,8 @@ class Img2img(commands.Cog):
         discord_first_message = await message.channel.send(f"{message.author.mention} Adding image to queue for processing")
         # Does message contain "!upscale"?
         if "!upscale" in message.content:
+            # Remove "!upscale" from the contents:
+            message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         else:
             # Default to image variation job
