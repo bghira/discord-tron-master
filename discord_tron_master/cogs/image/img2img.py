@@ -9,6 +9,7 @@ import logging, traceback, discord
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJob
+from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJob
 from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
 
