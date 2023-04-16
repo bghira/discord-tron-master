@@ -97,7 +97,10 @@ class Settings(commands.Cog):
             f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Defines how this bot will respond to you when chatting. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
-        await ctx.delete()
+        if hasattr(ctx, "message"):
+            await ctx.message.delete()
+        elif hasattr(ctx, "delete"):
+            await ctx.delete()
         await self.send_large_message(ctx, message)
 
     @commands.command(name="sag", help="Enable or disable self-assisted guidance pipeline that uses a self-reference routine to improve image quality. Default is True.")
