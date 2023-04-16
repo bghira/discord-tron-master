@@ -50,6 +50,10 @@ class Worker(commands.Cog):
                 message = message + f"Worker {worker_id}:\n"
                 message = message + f"- {await worker.job_queue.view_payload_prompts()}\n"
             message = message + "```"
+        if hasattr(ctx, "message"):
+            await ctx.message.delete()
+        else:
+            await ctx.delete()
         await self.discord.send_large_message(ctx, message, delete_delay=15)
 
 def setup(bot):
