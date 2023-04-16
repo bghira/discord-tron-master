@@ -19,6 +19,7 @@ class ImageUpscalingJob(Job):
             "image_prompt": prompt,
             "image_data": image,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": config.get_user_config(user_id=ctx.author.id)
+            "config": config.get_user_config(user_id=ctx.author.id),
+            "upscaler": True
         }
         return message
