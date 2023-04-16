@@ -41,7 +41,11 @@ class Img2img(commands.Cog):
             # Respond to * as all bots.
             in_my_thread = True
         # Run only if it's in the bot's thread, and has no image attachments, and, has no "!" commands.
-        if in_my_thread and not message.attachments and message.content[0] != "!" and message.content[0] != "+":
+        if self.bot.user not in message.mentions and \
+            in_my_thread and \
+            not message.attachments \
+            and message.content[0] != "!" \
+            and message.content[0] != "+":
             print("Attempting to run generate command?")
             generator = self.bot.get_cog('Generate')
             prompt = message.content
@@ -92,8 +96,13 @@ class Img2img(commands.Cog):
                     logging.error(f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}")
     async def _handle_image_attachment(self, message, attachment):
         # Generate a "Job" object that will be put into the queue.
-        discord_first_message = await message.channel.send(f"Adding image to queue for processing: " + attachment.url)
-        job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+        discord_first_message = await message.channel.send(f"{message.author.mention} Adding image to queue for processing")
+        # Does message contain "!upscale"?
+        if "!upscale" in message.content:
+            job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+        else:
+            # Default to image variation job
+            job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         # Get the worker that will process the job.
         worker = discord_wrapper.worker_manager.find_best_fit_worker(job)
         if worker is None:
