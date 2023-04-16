@@ -97,7 +97,7 @@ class Settings(commands.Cog):
             f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Defines how this bot will respond to you when chatting. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
-
+        await ctx.delete()
         await self.send_large_message(ctx, message)
 
     @commands.command(name="sag", help="Enable or disable self-assisted guidance pipeline that uses a self-reference routine to improve image quality. Default is True.")
@@ -107,14 +107,16 @@ class Settings(commands.Cog):
         try:
             if enable_sag:
                 config.set_user_setting(user_id, "enable_sag", False)
-                await ctx.send(
+                response = await ctx.send(
                     f"{ctx.author.mention} Self-assisted guidance has been disabled. Did you know {random_fact()}?"
                 )
             else:
                 config.set_user_setting(user_id, "enable_sag", True)
-                await ctx.send(
+                response = await ctx.send(
                     f"{ctx.author.mention} Self-assisted guidance has been enabled. You're welcome."
                 )
+            await ctx.delete(delay=15)
+            await response.delete(delay=15)
         except Exception as e:
             logging.error("Caught error when toggling user SAG property: " + str(e))
 
@@ -130,9 +132,11 @@ class Settings(commands.Cog):
                 logging.error("Failed to delete messages.")
             return
         config.set_user_setting(user_id, "steps", int(steps))
-        await ctx.send(
+        response = await ctx.send(
             f"{ctx.author.mention} Your steps have been updated. Thank you for flying Air Bizarre."
         )
+        await response.delete(delay=15)
+        await ctx.delete()
     @commands.command(name="guidance", help="Set your guidance scaling parameter. It defaults to 7.5.")
     async def set_guidance(self, ctx, guidance_scaling = None):
         user_id = ctx.author.id
@@ -154,9 +158,11 @@ class Settings(commands.Cog):
             guidance_scaling = 7.5
         user_config["guidance_scaling"] = guidance_scaling
         config.set_user_config(user_id, user_config)
-        await ctx.send(
+        response = await ctx.send(
             f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_scaling}', from '{original_guidance_scaling}'. Did you know {random_fact()}?"
         )
+        await ctx.delete()
+        await response.delete(delay=15)
 
     @commands.command(name="seed", help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.")
     async def set_seed(self, ctx, seed = None):
@@ -176,9 +182,11 @@ class Settings(commands.Cog):
             seed = None
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
-        await ctx.send(
+        response = await ctx.send(
             f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'.  Did you know {random_fact()}?"
         )
+        await response.delete(delay=15)
+        await ctx.delete()
 
     @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
     async def set_resolution(self, ctx, resolution=None):
@@ -187,7 +195,7 @@ class Settings(commands.Cog):
         available_resolutions = await resolution_helper.list_available_resolutions(user_id=user_id)
         if resolution is None:
             resolution = user_config.get("resolution")
-            await ctx.send(
+            response = await ctx.send(
                 f'Your current resolution is set to {resolution["width"]}x{resolution["height"]}.\nAvailable resolutions:\n'
                 + available_resolutions
             )
@@ -199,16 +207,18 @@ class Settings(commands.Cog):
             width, height = map(int, resolution.split())
 
         if not resolution_helper.is_valid_resolution(width, height):
-            await ctx.send(
+            response = await ctx.send(
                 f"Invalid resolution. Available resolutions:\n" + available_resolutions
             )
             return
 
         user_config["resolution"] = {"width": width, "height": height}
         config.set_user_config(user_id, user_config)
-        await ctx.send(
+        response = await ctx.send(
             f"Default resolution set to {width}x{height} for user {ctx.author.name}. Did you know {random_fact()}?"
         )
+        await ctx.delete()
+        await response.delete(delay=15)
     async def send_large_message(self, ctx, text, max_chars=2000):
         if len(text) <= max_chars:
             await ctx.channel.send(text)
