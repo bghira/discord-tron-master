@@ -187,20 +187,26 @@ class DiscordBot:
             except Exception as e:
                 logging.info(f"Error deleting messages in {channel.name} ({channel.id}): {e}")
         
-    async def send_large_message(self, ctx, text, max_chars=2000):
+    async def send_large_message(self, ctx, text, max_chars=2000, delete_delay=None):
         if len(text) <= max_chars:
-            await ctx.channel.send(text)
+            response = await ctx.channel.send(text)
+            if delete_delay is not None:
+                await response.delete(delay=delete_delay)
             return
 
         lines = text.split("\n")
         buffer = ""
         for line in lines:
             if len(buffer) + len(line) + 1 > max_chars:
-                await ctx.channel.send(buffer)
+                response = await ctx.channel.send(buffer)
+                if delete_delay is not None:
+                    await response.delete(delay=delete_delay)
                 buffer = ""
             buffer += line + "\n"
         if buffer:
-            await ctx.channel.send(buffer)
+            response = await ctx.channel.send(buffer)
+            if delete_delay is not None:
+                await response.delete(delay=delete_delay)
 
     # for guild in command_processor.discord.bot.guilds:
     #     for channel in guild.channels:
