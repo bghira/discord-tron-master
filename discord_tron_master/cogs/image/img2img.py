@@ -45,11 +45,11 @@ class Img2img(commands.Cog):
             print("Attempting to run generate command?")
             generator = self.bot.get_cog('Generate')
             prompt = message.content
-            if message.content[:1] == "*":
-                # Strip the star if it's there.
+            # Strip the star if it's there.
+            if message.content[0] == "*":
                 prompt = message.content[1:]
             # Now the whitespace:
-            prompt = message.content[1:].strip()
+            prompt = message.content.strip()
             await generator.generate(message, prompt=prompt)
             return
 
