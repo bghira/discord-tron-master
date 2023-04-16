@@ -122,9 +122,9 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
             embed = None
             if "image" in arguments:
-                logging.debug(f"Found image_data inside message")
+                logging.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
-                embed = await get_embed(arguments["image_data"])
+                embed = await get_embed(arguments["image"])
             logging.debug(f"Sending message to thread: {arguments['message']}")
             if "mention" in arguments:
                 logging.debug(f"Mentioning user: {arguments['mention']}")
