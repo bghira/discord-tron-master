@@ -106,17 +106,23 @@ async def send_files(command_processor, arguments: Dict, data: Dict, websocket: 
     return {"success": True, "result": "Files sent."}
 
 async def create_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logging.debug(f"Entering create_thread: {arguments} {data} {websocket} {command_processor}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    logging.debug(f"Found channel? {channel}")
     if channel is not None:
         try:
             thread = await channel.create_thread(name=arguments["name"])
+            logging.debug(f"Created thread: {thread}")
             embed = None
             if "image_data" in arguments:
+                logging.debug(f"Found image_data inside message")
                 # We want to send any image data into the thread we create.
                 embed = await get_embed(arguments["image_data"])
+            logging.debug(f"Sending message to thread: {arguments['message']}")
             await thread.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
+    logging.debug(f"Exiting create_thread")
     return {"success": True, "result": "Thread created."}
 
 async def delete_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
