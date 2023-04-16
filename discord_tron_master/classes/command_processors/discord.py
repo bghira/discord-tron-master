@@ -33,19 +33,7 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
             image_data = arguments.get("image")
             embed = None
             if image_data is not None:
-                base64_decoded_image = base64.b64decode(image_data)
-                buffer = BytesIO(base64_decoded_image)
-                web_root = config.get_web_root()
-                url_base = config.get_url_base()
-                # Error 2: buffer is already a BytesIO object, so we don't need to call buffer.getvalue() before hashing it.
-                filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
-                # Error 3: buffer.save() is not a valid method. We should use Image.save() instead.
-                buffer.seek(0)
-                image = Image.open(buffer)
-                image.save(f"{web_root}/{filename}")
-                image_url = f"\n{url_base}/{filename}"
-                embed = discord.Embed()
-                embed.set_image(url=image_url)
+                embed = get_embed(image_data)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -121,7 +109,12 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
-            await channel.create_thread(name=arguments["name"])
+            thread = await channel.create_thread(name=arguments["name"])
+            embed = None
+            if "image_data" in arguments:
+                # We want to send any image data into the thread we create.
+                embed = await get_embed(arguments["image_data"])
+            await thread.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Thread created."}
@@ -143,3 +136,19 @@ async def send_message_to_thread(command_processor, arguments: Dict, data: Dict,
         except Exception as e:
             logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
+
+async def get_embed(image_data):
+    base64_decoded_image = base64.b64decode(image_data)
+    buffer = BytesIO(base64_decoded_image)
+    web_root = config.get_web_root()
+    url_base = config.get_url_base()
+    # Error 2: buffer is already a BytesIO object, so we don't need to call buffer.getvalue() before hashing it.
+    filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
+    # Error 3: buffer.save() is not a valid method. We should use Image.save() instead.
+    buffer.seek(0)
+    image = Image.open(buffer)
+    image.save(f"{web_root}/{filename}")
+    image_url = f"\n{url_base}/{filename}"
+    embed = discord.Embed()
+    embed.set_image(url=image_url)
+    return embed
