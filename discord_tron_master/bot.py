@@ -73,6 +73,10 @@ class DiscordBot:
                 if isinstance(channel, discord.TextChannel):
                     if channel.id == channel_id:
                         return channel
+        thread = self.bot.get_channel(channel_id)
+        if thread is not None:
+            return thread
+
         return None
 
     async def create_mention(self, user_id):
