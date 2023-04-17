@@ -2,6 +2,7 @@ import logging, json, asyncio
 import websockets
 from discord_tron_master.auth import Auth
 from discord_tron_master.exceptions.auth import AuthError
+from discord_tron_master.exceptions.registration import RegistrationError
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
 from discord_tron_master.classes.app_config import AppConfig
@@ -55,6 +56,9 @@ class WebSocketHub:
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
         except AuthError as e:
+            await websocket.close(code=4002, reason=raw_result)
+            return
+        except RegistrationError as e:
             await websocket.close(code=4002, reason=raw_result)
             return
         except asyncio.exceptions.IncompleteReadError as e:

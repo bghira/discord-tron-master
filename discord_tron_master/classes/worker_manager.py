@@ -2,6 +2,7 @@ from typing import Dict, Any, List
 import logging, websocket, traceback
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.exceptions.auth import AuthError
+from discord_tron_master.exceptions.registration import RegistrationError
 from discord_tron_master.classes.job import Job
 
 class WorkerManager:
@@ -77,6 +78,8 @@ class WorkerManager:
         if worker_id in self.workers:
             logging.error(f"Tried to register an already-registered worker: {worker_id}")
             raise AuthError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
+        if not worker_id or worker_id == "":
+            raise RegistrationError("Cannot register worker with blank worker_id.")
         logging.info("Registering a new worker!")
         worker = Worker(worker_id, supported_job_types, hardware_limits, hardware, hardware["hostname"])
         self.workers[worker_id] = worker
