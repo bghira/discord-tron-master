@@ -25,7 +25,7 @@ class Worker:
         self.websocket = None
 
     def set_job_queue(self, job_queue: Queue):
-        if type(self.worker_id) != "str":
+        if str(self.worker_id) == "":
             raise RegistrationError("RegistrationError: Worker ID must be a string.")
         logging.info(f"Setting job queue for worker {self.worker_id}")
         self.job_queue = job_queue
