@@ -47,12 +47,13 @@ class WebSocketHub:
                 raw_result = await self.command_processor.process_command(decoded, websocket)
                 result = json.dumps(raw_result)
                 # Did result error? If so, close the websocket connection:
+                if "RegistrationError" in raw_result:
+                    await websocket.close(code=4002, reason=raw_result)
+                    return
                 if raw_result is None or "error" in raw_result:
                     if raw_result is None:
                         raw_result = "No result was received. No execution occurred. Fuck right off!"
                         logging.error(f"Client requested some impossible task: {decoded}\nThe result was: {result}")
-                    # await websocket.close(code=4002, reason=raw_result)
-                    # return
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
         except AuthError as e:

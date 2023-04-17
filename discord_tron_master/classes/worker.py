@@ -26,7 +26,7 @@ class Worker:
 
     def set_job_queue(self, job_queue: Queue):
         if type(self.worker_id) != "str":
-            raise RegistrationError("Worker ID must be a string.")
+            raise RegistrationError("RegistrationError: Worker ID must be a string.")
         logging.info(f"Setting job queue for worker {self.worker_id}")
         self.job_queue = job_queue
 
