@@ -1,6 +1,7 @@
 import logging, json, asyncio
 import websockets
-from discord_tron_master.auth import Auth, AuthError
+from discord_tron_master.auth import Auth
+from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
 from discord_tron_master.classes.app_config import AppConfig

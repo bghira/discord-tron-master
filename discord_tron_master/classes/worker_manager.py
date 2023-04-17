@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import logging, websocket, traceback
 from discord_tron_master.classes.worker import Worker
-from discord_tron_master.auth import AuthError
+from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.classes.job import Job
 
 class WorkerManager:
