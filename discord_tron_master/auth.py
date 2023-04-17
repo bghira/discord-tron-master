@@ -110,3 +110,6 @@ class Auth:
         db.session.add(token_data)
         db.session.commit()
         return token_data
+    
+class AuthError(Exception):
+    pass

@@ -1,6 +1,6 @@
 import logging, json, asyncio
 import websockets
-from discord_tron_master.auth import Auth
+from discord_tron_master.auth import Auth, AuthError
 from discord_tron_master.models import User, OAuthToken
 from discord_tron_master.classes.command_processor import CommandProcessor
 from discord_tron_master.classes.app_config import AppConfig
@@ -53,6 +53,9 @@ class WebSocketHub:
                     # return
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
+        except AuthError as e:
+            await websocket.close(code=4002, reason=raw_result)
+            return
         except asyncio.exceptions.IncompleteReadError as e:
             logging.warning(f"IncompleteReadError: {e}")
             # ... handle the situation as needed
