@@ -1,3 +1,4 @@
+from webbrowser import Elinks
 from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.app_config import AppConfig
@@ -192,7 +193,12 @@ class Settings(commands.Cog):
             f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'.  Did you know {random_fact()}?"
         )
         await response.delete(delay=15)
-        await ctx.delete()
+        if hasattr(ctx, "delete"):
+            await ctx.delete()
+        elif hasattr(ctx, "message") and hasattr(ctx.message, "delete"):
+            await ctx.message.delete()
+        else:
+            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}. Cannot delete.")
 
     @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
     async def set_resolution(self, ctx, resolution=None):
