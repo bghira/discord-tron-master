@@ -4,6 +4,7 @@ from typing import Callable, Dict, Any, List
 from asyncio import Queue
 import asyncio
 from discord_tron_master.classes.job import Job
+from discord_tron_master.exceptions.registration import RegistrationError
 
 class Worker:
     def __init__(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any], hostname: str = "Amnesiac"):
@@ -25,7 +26,7 @@ class Worker:
 
     def set_job_queue(self, job_queue: Queue):
         if type(self.worker_id) != "str":
-            raise ValueError("Worker ID must be a string.")
+            raise RegistrationError("Worker ID must be a string.")
         logging.info(f"Setting job queue for worker {self.worker_id}")
         self.job_queue = job_queue
 
