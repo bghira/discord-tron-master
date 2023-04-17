@@ -138,7 +138,10 @@ class WorkerManager:
     async def register(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
         logging.debug("Registering worker via WebSocket")
         try:
-            worker_id = payload["worker_id"]
+            if "worker_id" in payload:
+                worker_id = payload["worker_id"]
+            elif "worker_id" in payload["arguments"]:
+                worker_id = payload["arguments"]["worker_id"]
         except KeyError:
             logging.error(f"Worker ID not provided in payload: {payload}")
             return {"error": "Worker ID not provided in payload"}
