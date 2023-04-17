@@ -59,6 +59,7 @@ class WebSocketHub:
             await websocket.close(code=4002, reason=raw_result)
             return
         except RegistrationError as e:
+            logging.error(f"Sending registration error to worker:")
             await websocket.close(code=4002, reason=raw_result)
             return
         except asyncio.exceptions.IncompleteReadError as e:
