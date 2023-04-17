@@ -73,6 +73,9 @@ class WorkerManager:
         return capable_workers[0]
 
     def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
+        if worker_id in self.workers:
+            logging.error(f"Tried to register an already-registered worker: {worker_id}")
+            raise ValueError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
         logging.info("Registering a new worker!")
         worker = Worker(worker_id, supported_job_types, hardware_limits, hardware, hardware["hostname"])
         self.workers[worker_id] = worker
