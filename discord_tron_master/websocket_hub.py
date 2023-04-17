@@ -57,6 +57,7 @@ class WebSocketHub:
                 logging.debug(f"Sending message to {websocket.remote_address}: {result}")
                 await websocket.send(result)
         except AuthError as e:
+            logging.error(f"Client sent invalid auth credentials. Naughty!")
             await websocket.close(code=4002, reason=raw_result)
             return
         except RegistrationError as e:

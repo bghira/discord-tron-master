@@ -77,7 +77,7 @@ class WorkerManager:
     def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
         if worker_id in self.workers:
             logging.error(f"Tried to register an already-registered worker: {worker_id}")
-            raise AuthError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
+            raise RegistrationError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
         if not worker_id or worker_id == "":
             raise RegistrationError("Cannot register worker with blank worker_id.")
         logging.info(f"Registering a new worker, {worker_id}!")
