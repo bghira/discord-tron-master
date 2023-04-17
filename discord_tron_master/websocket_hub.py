@@ -81,6 +81,7 @@ class WebSocketHub:
                 await self.queue_manager.unregister_worker(worker_id)
                 logging.warn("Removing worker from the WorkerManager")
                 await self.worker_manager.unregister_worker(worker_id)
+        await asyncio.sleep(5)
 
 
     async def broadcast(self, message):
