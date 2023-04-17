@@ -1,4 +1,3 @@
-from webbrowser import Elinks
 from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.app_config import AppConfig
