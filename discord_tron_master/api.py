@@ -1,4 +1,5 @@
 import logging
+from re import I
 
 from flask import ( Flask, request, jsonify )
 from flask_restful import Api, Resource
@@ -13,8 +14,8 @@ class API:
         self.config = AppConfig()
         self.app = Flask(__name__)
         AppConfig.set_flask(self.app)
-        database_handler = DatabaseHandler(self.app, self.config)
-        self.db = database_handler.db
+        self.database_handler = DatabaseHandler(self.app, self.config)
+        self.db = self.database_handler.db
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
         self.migrate = Migrate(self.app, self.db)
@@ -75,6 +76,10 @@ class API:
             user_id = api_key_data.user_id
             from discord_tron_master.models import OAuthToken
             token_data = OAuthToken.query.filter_by(client_id=client_id, user_id=user_id).first()
+            if not token_data:
+                logging.debug(f"Could not find token_data for client_id {client_id} and user_id {user_id}")
+                return jsonify({"error": "No token data found"}), 401
+                
             new_token = self.auth.refresh_access_token(token_data)
 
             return jsonify({"access_token": new_token.to_dict()})
