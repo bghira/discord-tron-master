@@ -1,5 +1,4 @@
 import logging
-from re import I
 
 from flask import ( Flask, request, jsonify )
 from flask_restful import Api, Resource
@@ -14,8 +13,8 @@ class API:
         self.config = AppConfig()
         self.app = Flask(__name__)
         AppConfig.set_flask(self.app)
-        self.database_handler = DatabaseHandler(self.app, self.config)
-        self.db = self.database_handler.db
+        database_handler = DatabaseHandler(self.app, self.config)
+        self.db = database_handler.db
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
         self.migrate = Migrate(self.app, self.db)
