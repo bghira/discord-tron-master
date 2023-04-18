@@ -34,6 +34,7 @@ class ResolutionHelper:
         {"width": 1024, "height": 576, "scaling_factor": 40},
         {"width": 1280, "height": 720, "scaling_factor": 30},
         {"width": 1920, "height": 1080, "scaling_factor": 30},
+        {"width": 2160, "height": 1440, "scaling_factor": 30},
         {"width": 3840, "height": 2160, "scaling_factor": 30},
         {"width": 7680, "height": 4320, "scaling_factor": 30},
     ]
