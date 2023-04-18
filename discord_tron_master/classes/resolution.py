@@ -4,68 +4,38 @@ config = AppConfig()
 
 class ResolutionHelper:
     resolutions = [
+        # 1:1 aspect ratio
+        {"width": 128, "height": 128, "scaling_factor": 100},
+        {"width": 256, "height": 256, "scaling_factor": 88},
         {"width": 512, "height": 512, "scaling_factor": 30},
-        {"width": 768, "height": 768, "scaling_factor": 30},
-        {"width": 800, "height": 800, "scaling_factor": 30},
-        {"width": 904, "height": 904, "scaling_factor": 30},
-        {"width": 1000, "height": 1000, "scaling_factor": 30},
-        {"width": 128, "height": 96, "scaling_factor": 100},
+        {"width": 1024, "height": 1024, "scaling_factor": 30},
+        {"width": 2048, "height": 2048, "scaling_factor": 30},
+        {"width": 4096, "height": 4096, "scaling_factor": 30},
+
+        # 2:3 aspect ratio
+        {"width": 128, "height": 192, "scaling_factor": 80},
+        {"width": 256, "height": 384, "scaling_factor": 60},
+        {"width": 512, "height": 768, "scaling_factor": 49},
+        {"width": 1024, "height": 1536, "scaling_factor": 30},
+        {"width": 2048, "height": 3072, "scaling_factor": 30},
+        {"width": 4096, "height": 6144, "scaling_factor": 30},
+
+        # 3:2 aspect ratio
         {"width": 192, "height": 128, "scaling_factor": 94},
-        {"width": 256, "height": 192, "scaling_factor": 88},
         {"width": 384, "height": 256, "scaling_factor": 76},
-        {"width": 512, "height": 384, "scaling_factor": 64},
-        {"width": 640, "height": 480, "scaling_factor": 64},
-        {"width": 800, "height": 600, "scaling_factor": 64},
-        {"width": 1024, "height": 768, "scaling_factor": 64},
-        {"width": 1280, "height": 960, "scaling_factor": 64},
         {"width": 768, "height": 512, "scaling_factor": 52},
-        {"width": 1140, "height": 760, "scaling_factor": 52},
-        {"width": 1320, "height": 880, "scaling_factor": 52},
-        {"width": 768, "height": 512, "scaling_factor": 52},
-        {"width": 800, "height": 456, "scaling_factor": 50},
-        {"width": 1200, "height": 684, "scaling_factor": 50},
-        {"width": 1300, "height": 741, "scaling_factor": 50},
-        {"width": 1500, "height": 855, "scaling_factor": 50},
-        {"width": 1600, "height": 912, "scaling_factor": 50},
+        {"width": 1536, "height": 1024, "scaling_factor": 30},
+        {"width": 3072, "height": 2048, "scaling_factor": 30},
+        {"width": 6144, "height": 4096, "scaling_factor": 30},
+
+        # 16:9 aspect ratio
+        {"width": 256, "height": 144, "scaling_factor": 40},
+        {"width": 512, "height": 288, "scaling_factor": 40},
         {"width": 1024, "height": 576, "scaling_factor": 40},
-        {"width": 1152, "height": 648, "scaling_factor": 34},
         {"width": 1280, "height": 720, "scaling_factor": 30},
         {"width": 1920, "height": 1080, "scaling_factor": 30},
         {"width": 3840, "height": 2160, "scaling_factor": 30},
         {"width": 7680, "height": 4320, "scaling_factor": 30},
-        {"width": 64, "height": 96, "scaling_factor": 100},
-        {"width": 128, "height": 192, "scaling_factor": 80},
-        {"width": 256, "height": 384, "scaling_factor": 60},
-        {"width": 512, "height": 768, "scaling_factor": 49},
-        {"width": 1024, "height": 1536,"scaling_factor": 30},
-        {"width": 2048, "height": 3072, "scaling_factor": 30},
-
-        # Additional resolutions added
-        {"width": 224, "height": 128, "scaling_factor": 94},
-        {"width": 448, "height": 256, "scaling_factor": 94},
-        {"width": 896, "height": 512, "scaling_factor": 94},
-        {"width": 1792, "height": 1024, "scaling_factor": 94},
-
-        {"width": 240, "height": 192, "scaling_factor": 88},
-        {"width": 480, "height": 384, "scaling_factor": 88},
-        {"width": 960, "height": 768, "scaling_factor": 88},
-        {"width": 1920, "height": 1536, "scaling_factor": 88},
-
-        {"width": 1200, "height": 800, "scaling_factor": 52},
-        {"width": 1440, "height": 960, "scaling_factor": 52},
-        {"width": 1680, "height": 1120, "scaling_factor": 52},
-
-        {"width": 1056, "height": 600, "scaling_factor": 50},
-        {"width": 2112, "height": 1200, "scaling_factor": 50},
-
-        {"width": 1088, "height": 612, "scaling_factor": 40},
-        {"width": 2176, "height": 1224, "scaling_factor": 40},
-
-        {"width": 2304, "height": 1296, "scaling_factor": 34},
-
-        {"width": 384, "height": 576, "scaling_factor": 60},
-        {"width": 768, "height": 1152, "scaling_factor": 60},
-        {"width": 1536, "height": 2304, "scaling_factor": 60}
     ]
 
 
