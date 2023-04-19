@@ -129,7 +129,10 @@ class Settings(commands.Cog):
         if not steps.isdigit():
             our_reply = await ctx.send(f"Steps must be a number. You gave me `{steps}`. Try again.")
             try:
-                await ctx.delete(delay=15)
+                if hasattr(ctx, "message"):
+                    await ctx.message.delete(delay=15)
+                else:
+                    await ctx.delete(delay=15)
                 await our_reply.delete(delay=15)
             except:
                 logging.error("Failed to delete messages.")
@@ -228,7 +231,10 @@ class Settings(commands.Cog):
         response = await ctx.send(
             f"Default resolution set to {width}x{height} for user {ctx.author.name}. Did you know {random_fact()}?"
         )
-        await ctx.delete()
+        if hasattr(ctx, "message"):
+            await ctx.message.delete()
+        else:
+            await ctx.delete()
         await response.delete(delay=15)
     async def send_large_message(self, ctx, text, max_chars=2000):
         if len(text) <= max_chars:
