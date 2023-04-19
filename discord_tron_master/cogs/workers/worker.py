@@ -44,12 +44,10 @@ class Worker(commands.Cog):
         if len(all_workers) > 0:
             # List all payloads from all workers:
             message = message + f"All workers:\n"
-            message = message + "```"
             for worker_id in all_workers:
                 worker = all_workers[worker_id]
                 message = message + f"Worker {worker_id}:\n"
                 message = message + f"- {await worker.job_queue.view_payload_prompts()}\n"
-            message = message + "```"
         if hasattr(ctx, "message"):
             await ctx.message.delete()
         else:
