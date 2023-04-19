@@ -171,4 +171,8 @@ def decompress_b64(compressed_b64: str) -> Image:
     decompressed_b64 = BytesIO()
     with gzip.GzipFile(fileobj=BytesIO(compressed_b64), mode="rb") as gzip_file:
         decompressed_b64.write(gzip_file.read())
-    return decompressed_b64.getvalue()
+
+    # Decode the base64 string back to an image
+    image_data = decompressed_b64.getvalue()
+    image = Image.open(BytesIO(base64.b64decode(image_data)))
+    return image
