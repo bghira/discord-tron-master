@@ -95,7 +95,7 @@ class API:
                 return jsonify({"error": "image is required"}), 400
             import asyncio
             create_embed = False
-            image_url = asyncio.run(DiscordCommandProcessor.get_embed, image, create_embed)
+            image_url = asyncio.run(DiscordCommandProcessor.get_embed(image, create_embed))
             return jsonify({"image_url": image_url})
 
     def check_auth(self, request):
