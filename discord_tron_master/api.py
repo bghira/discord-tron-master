@@ -98,16 +98,21 @@ class API:
             return jsonify({"image_url": image_url})
 
     def check_auth(self, request):
-        access_token = request.headers.get("Authorization")
-        token_type, access_token = access_token.split(' ', 1)
-        if token_type.lower() != "bearer":
-            # Invalid token type
-            return
+        try:
+            access_token = request.headers.get("Authorization")
+            logging.debug(f"Checking auth for access_token: {request.headers}")
+            token_type, access_token = access_token.split(' ', 1)
+            if token_type.lower() != "bearer":
+                # Invalid token type
+                return
 
-        if not access_token or not self.auth.validate_access_token(access_token):
-            logging.error(f"Client provided invalid access token to REST API: {access_token}")
+            if not access_token or not self.auth.validate_access_token(access_token):
+                logging.error(f"Client provided invalid access token to REST API: {access_token}")
+                return False
+            return True
+        except Exception as e:
+            logging.error(f"Error checking auth: {e}")
             return False
-        return True
 
     def create_db(self):
         with self.app.app_context():
