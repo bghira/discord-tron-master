@@ -3,7 +3,7 @@ import logging
 from flask import ( Flask, request, jsonify )
 from flask_restful import Api, Resource
 from discord_tron_master.classes.database_handler import DatabaseHandler
-from discord_tron_master.classes.command_processor import discord as DiscordCommandProcessor
+from discord_tron_master.classes.command_processors import discord as DiscordCommandProcessor
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
