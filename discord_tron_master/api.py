@@ -7,6 +7,9 @@ from discord_tron_master.classes.command_processors import discord as DiscordCom
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
+from PIL import Image
+from io import BytesIO
+import base64
 
 class API:
     def __init__(self):
@@ -84,7 +87,6 @@ class API:
 
             return jsonify({"access_token": new_token.to_dict()})
 
-        # Protect this endpoint with OAuth:
         @self.app.route("/upload_image", methods=["POST"])
         def upload_image():
             logging.debug("upload_image endpoint hit")
@@ -93,9 +95,16 @@ class API:
             image = request.files.get("image")
             if not image:
                 return jsonify({"error": "image is required"}), 400
+
+            # Read the image and convert it to a base64-encoded string
+            img = Image.open(image.stream)
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
             import asyncio
             create_embed = False
-            image_url = asyncio.run(DiscordCommandProcessor.get_embed(image, create_embed))
+            image_url = asyncio.run(DiscordCommandProcessor.get_embed(base64_encoded_image, create_embed))
             return jsonify({"image_url": image_url})
 
     def check_auth(self, request):
