@@ -31,8 +31,7 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
             image_data = arguments.get("image")
             embed = None
             if image_data is not None:
-                decoded_image = decompress_b64(image_data)
-                embed = get_embed(decoded_image)
+                embed = get_embed(image_data)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -164,16 +163,3 @@ async def get_embed(image_data):
     embed = discord.Embed()
     embed.set_image(url=image_url)
     return embed
-
-def decompress_b64(compressed_b64: str) -> Image:
-    # Decode base64 to compressed bytes
-    compressed_bytes = base64.b64decode(compressed_b64)
-
-    # Decompress the bytes using gzip
-    decompressed_bytes = BytesIO()
-    with gzip.GzipFile(fileobj=BytesIO(compressed_bytes), mode="rb") as gzip_file:
-        decompressed_bytes.write(gzip_file.read())
-
-    # Convert decompressed bytes back into an image
-    image = Image.open(decompressed_bytes)
-    return image
