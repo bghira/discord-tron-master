@@ -3,6 +3,7 @@ import logging
 from flask import ( Flask, request, jsonify )
 from flask_restful import Api, Resource
 from discord_tron_master.classes.database_handler import DatabaseHandler
+from discord_tron_master.classes.command_processor import discord as DiscordCommandProcessor
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
@@ -82,6 +83,31 @@ class API:
             new_token = self.auth.refresh_access_token(token_data)
 
             return jsonify({"access_token": new_token.to_dict()})
+
+        # Protect this endpoint with OAuth:
+        @self.app.route("/upload_image", methods=["POST"])
+        def upload_image():
+            logging.debug("upload_image endpoint hit")
+            if not self.check_auth(request):
+                return jsonify({"error": "Authentication required"}), 401
+            image = request.files.get("image")
+            if not image:
+                return jsonify({"error": "image is required"}), 400
+            import asyncio
+            image_url = asyncio.run(DiscordCommandProcessor.get_embed, image, create_embed=False)
+            return jsonify({"image_url": image_url})
+
+    def check_auth(self, request):
+        access_token = request.headers.get("Authorization")
+        token_type, access_token = access_token.split(' ', 1)
+        if token_type.lower() != "bearer":
+            # Invalid token type
+            return
+
+        if not access_token or not self.auth.validate_access_token(access_token):
+            logging.error(f"Client provided invalid access token to REST API: {access_token}")
+            return False
+        return True
 
     def create_db(self):
         with self.app.app_context():

@@ -148,7 +148,7 @@ async def send_message_to_thread(command_processor, arguments: Dict, data: Dict,
             logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
-async def get_embed(image_data):
+async def get_embed(image_data, create_embed: bool = True):
     base64_decoded_image = base64.b64decode(image_data)
     buffer = BytesIO(base64_decoded_image)
     web_root = config.get_web_root()
@@ -160,6 +160,8 @@ async def get_embed(image_data):
     image = Image.open(buffer)
     image.save(f"{web_root}/{filename}")
     image_url = f"\n{url_base}/{filename}"
-    embed = discord.Embed()
-    embed.set_image(url=image_url)
-    return embed
+    if create_embed:
+        embed = discord.Embed()
+        embed.set_image(url=image_url)
+        return embed
+    return image_url
