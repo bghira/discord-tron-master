@@ -100,6 +100,8 @@ class API:
     def check_auth(self, request):
         try:
             access_token = request.headers.get("Authorization")
+            if access_token is None:
+                raise Exception("No access token provided")
             logging.debug(f"Checking auth for access_token: {request.headers}")
             token_type, access_token = access_token.split(' ', 1)
             if token_type.lower() != "bearer":
