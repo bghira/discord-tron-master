@@ -122,7 +122,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 embed = await get_embed(arguments["image"])
             if "image_url" in arguments:
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
-                embed = await discord.Embed(url=arguments["image_url"])
+                embed = discord.Embed(url=arguments["image_url"])
             logging.debug(f"Sending message to thread: {arguments['message']}")
             if "mention" in arguments:
                 logging.debug(f"Mentioning user: {arguments['mention']}")
