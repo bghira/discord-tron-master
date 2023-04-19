@@ -166,13 +166,14 @@ async def get_embed(image_data):
     return embed
 
 def decompress_b64(compressed_b64: str) -> Image:
-    # Decompress the base64-encoded image
-    compressed_b64 = compressed_b64.encode('utf-8')
-    decompressed_b64 = BytesIO()
-    with gzip.GzipFile(fileobj=BytesIO(compressed_b64), mode="rb") as gzip_file:
-        decompressed_b64.write(gzip_file.read())
+    # Decode base64 to compressed bytes
+    compressed_bytes = base64.b64decode(compressed_b64)
 
-    # Decode the base64 string back to an image
-    image_data = decompressed_b64.getvalue()
-    image = Image.open(BytesIO(base64.b64decode(image_data)))
+    # Decompress the bytes using gzip
+    decompressed_bytes = BytesIO()
+    with gzip.GzipFile(fileobj=BytesIO(compressed_bytes), mode="rb") as gzip_file:
+        decompressed_bytes.write(gzip_file.read())
+
+    # Convert decompressed bytes back into an image
+    image = Image.open(decompressed_bytes)
     return image
