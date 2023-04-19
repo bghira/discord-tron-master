@@ -1,5 +1,5 @@
 from typing import Dict
-import websocket, discord, base64, logging, time, hashlib
+import websocket, discord, base64, logging, time, hashlib, gzip
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
@@ -24,8 +24,6 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
     return {"success": True, "result": "Message sent."}
 
 async def send_image(command_processor, arguments: Dict[str, str], data: Dict[str, str], websocket: WebSocketClientProtocol):
-    # Error 1: the argument data is a dictionary containing another dictionary "channel".
-    # Use data["channel"] to access its members, such as "id".
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -33,15 +31,13 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
             image_data = arguments.get("image")
             embed = None
             if image_data is not None:
-                embed = get_embed(image_data)
+                decoded_image = decompress_b64(image_data)
+                embed = get_embed(decoded_image)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
-            # Error 4: return a failure result if an exception is raised.
             return {"success": False, "result": str(e)}
-        # Error 5: return a success result if the try block completes without raising any exceptions.
         return {"success": True, "result": "Message sent."}
-    # Error 6: return a failure result if channel is None.
     return {"success": False, "result": "Channel not found."}
 
 
@@ -168,3 +164,11 @@ async def get_embed(image_data):
     embed = discord.Embed()
     embed.set_image(url=image_url)
     return embed
+
+def decompress_b64(compressed_b64: str) -> Image:
+    # Decompress the base64-encoded image
+    compressed_b64 = compressed_b64.encode('utf-8')
+    decompressed_b64 = BytesIO()
+    with gzip.GzipFile(fileobj=BytesIO(compressed_b64), mode="rb") as gzip_file:
+        decompressed_b64.write(gzip_file.read())
+    return decompressed_b64.getvalue()
