@@ -105,7 +105,7 @@ class API:
             import asyncio
             create_embed = False
             image_url = asyncio.run(DiscordCommandProcessor.get_embed(base64_encoded_image, create_embed))
-            return jsonify({"image_url": image_url})
+            return jsonify({"image_url": image_url.strip()})
 
     def check_auth(self, request):
         try:
