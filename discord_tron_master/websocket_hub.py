@@ -48,7 +48,7 @@ class WebSocketHub:
                 result = json.dumps(raw_result)
                 # Did result error? If so, close the websocket connection:
                 if "RegistrationError" in raw_result:
-                    await websocket.close(code=4002, reason=raw_result)
+                    await websocket.close(code=4002, reason="RegistrationError:" + raw_result)
                     return
                 if raw_result is None or "error" in raw_result:
                     if raw_result is None:

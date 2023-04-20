@@ -9,6 +9,7 @@ import logging, traceback, discord
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJob
+from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJob
 from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
@@ -103,6 +104,8 @@ class Img2img(commands.Cog):
             # Remove "!upscale" from the contents:
             message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+        elif message.content != "":
+            job = ImageGenerationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         else:
             # Default to image variation job
             job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
