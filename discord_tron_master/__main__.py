@@ -1,4 +1,5 @@
-import logging
+print(f"Loading main file..")
+import logging, threading
 from discord_tron_master.classes import log_format
 
 from discord_tron_master.classes.database_handler import DatabaseHandler
@@ -64,10 +65,10 @@ def main():
         asyncio.set_event_loop(loop)
         loop.run_until_complete(discord_bot.run())
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         tasks = [
-            # executor.submit(run_flask_api),
             executor.submit(run_discord_bot),
+            # executor.submit(run_websocket_hub),
         ]
 
         for future in concurrent.futures.as_completed(tasks):

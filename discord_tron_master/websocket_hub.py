@@ -24,6 +24,7 @@ class WebSocketHub:
         self.worker_manager = worker_manager
 
     async def handler(self, websocket, path):
+        logging.debug(f"Hitting WebSocket Handler..")
         access_token = websocket.request_headers.get("Authorization")
         token_type, access_token = access_token.split(' ', 1)
         if token_type.lower() != "bearer":
@@ -47,7 +48,7 @@ class WebSocketHub:
                 raw_result = await self.command_processor.process_command(decoded, websocket)
                 result = json.dumps(raw_result)
                 # Did result error? If so, close the websocket connection:
-                if "RegistrationError" in raw_result or "RegistrationError" in result.json()["error"]:
+                if "RegistrationError" in raw_result or "error" in result and "RegistrationError" in result["error"]:
                     await websocket.close(code=4002, reason="RegistrationError:" + raw_result)
                     return
                 if raw_result is None or "error" in raw_result:
@@ -90,12 +91,19 @@ class WebSocketHub:
             await client.send(message)
 
     async def run(self, host="0.0.0.0", port=6789):
-        import ssl
-        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        ssl_context.load_cert_chain(self.config.project_root + '/config/server_cert.pem', self.config.project_root + '/config/server_key.pem')
-        # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
-        ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
-        websocket_logger = logging.getLogger('websockets')
-        websocket_logger.setLevel(logging.WARNING)
-        server = websockets.serve(self.handler, host, port, max_size=33554432, ssl=ssl_context, ping_timeout=60, ping_interval=2)
-        await server
+        logging.info(f"Running WebSocket Hub!")
+        try:
+            import ssl
+            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_context.load_cert_chain(self.config.project_root + '/config/server_cert.pem', self.config.project_root + '/config/server_key.pem')
+            # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
+            ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+            websocket_logger = logging.getLogger('websockets')
+            websocket_logger.setLevel(logging.DEBUG)
+            server = websockets.serve(self.handler, host, port, max_size=31554432, ssl=ssl_context, ping_timeout=60, ping_interval=2)
+            await server
+            logging.warn("Server exited.")
+        except Exception as e:
+            import traceback
+            logging.error(f"Error running WebSocket Hub: {e}, traceback: {traceback.print_exc()}")
+            exit(1)
