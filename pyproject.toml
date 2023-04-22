@@ -22,6 +22,7 @@ tiktoken = "^0.3.3"
 transformers = "^4.28.1"
 xformers = "^0.0.18"
 accelerate = "^0.18.0"
+gunicorn = "^20.1.0"
 
 
 [build-system]

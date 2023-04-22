@@ -98,7 +98,10 @@ class Settings(commands.Cog):
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
         )
         if hasattr(ctx, "message"):
-            await ctx.message.delete()
+            try:
+                await ctx.message.delete()
+            except:
+                logging.warning(f"Could not delete message, it was likely deleted by another worker or a moderator.")
         elif hasattr(ctx, "delete"):
             await ctx.delete()
         await self.send_large_message(ctx, message)

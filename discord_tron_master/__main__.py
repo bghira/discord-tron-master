@@ -66,7 +66,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         tasks = [
-            executor.submit(run_flask_api),
+            # executor.submit(run_flask_api),
             executor.submit(run_discord_bot),
         ]
 
