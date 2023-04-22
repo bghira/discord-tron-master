@@ -152,7 +152,6 @@ class Model(commands.Cog):
                 new_record.create(
                     model_id=full_model_name,
                     model_type=model_type,
-                    preferred_ar="none",
                     recommended_negative="set a recommended negative string for this model with `!model-negative <model_id> <negative_string>`",
                     recommended_positive="set a recommended positive string for this model with `!model-positive <model_id> <positive_string>`",
                     approved=addition_status,

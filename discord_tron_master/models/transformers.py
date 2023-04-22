@@ -65,14 +65,14 @@ class Transformers(db.Model):
         model_owner = full_model_id.split('/')[0]
         return Transformers.query.filter_by(model_id=model_id, model_owner=model_owner).first()
     @staticmethod
-    def create(model_id: str, model_type: str, added_by: str, approved: bool, preferred_ar: str = None, description: str = None, recommended_positive: str = None, recommended_negative: str = None, tags: str = None):
+    def create(model_id: str, model_type: str, added_by: str, approved: bool, description: str = None, recommended_positive: str = None, recommended_negative: str = None, tags: str = None):
         existing_definition = Transformers.query.filter_by(model_id=model_id).first()
         if existing_definition is not None:
             db.session.delete(existing_definition)
             db.session.commit()
         model_owner = model_id.split('/')[0]
         model_id = model_id.split('/')[1]
-        transformer = Transformers(model_id=model_id, model_owner=model_owner, model_type=model_type, approved=approved, preferred_ar=preferred_ar, description=description, recommended_positive=recommended_positive, recommended_negative=recommended_negative, tags=tags, added_by=added_by)
+        transformer = Transformers(model_id=model_id, model_owner=model_owner, model_type=model_type, approved=approved, description=description, recommended_positive=recommended_positive, recommended_negative=recommended_negative, tags=tags, added_by=added_by)
         db.session.add(transformer)
         db.session.commit()
         return transformer
@@ -81,7 +81,6 @@ class Transformers(db.Model):
         return {
             'model_id': self.model_id,
             'model_type': self.model_type,
-            'preferred_ar': self.preferred_ar,
             'description': self.description,
             'recommended_positive': self.recommended_positive,
             'recommended_negative': self.recommended_negative,
