@@ -97,4 +97,3 @@ class Job:
             return True
         except Exception as e:
             logging.error("Error updating the discord message on job lost: " + str(e))
-            raise e
