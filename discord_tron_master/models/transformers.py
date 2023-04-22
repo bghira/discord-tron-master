@@ -6,7 +6,6 @@ class Transformers(db.Model):
     model_owner = db.Column(db.String(255), unique=False, nullable=False)
     model_id = db.Column(db.String(255), unique=True, nullable=False)
     model_type = db.Column(db.String(16), nullable=False)
-    preferred_ar = db.Column(db.String(4))
     description = db.Column(db.String(255), nullable=True)
     recommended_positive = db.Column(db.String(255), nullable=True)
     recommended_negative = db.Column(db.String(255), nullable=True)
@@ -14,7 +13,6 @@ class Transformers(db.Model):
     added_by = db.Column(db.String(255), nullable=False)
     tags = db.Column(db.String(255), nullable=True)
     config_blob = db.Column(db.Text(), nullable=True)
-    sag_capable = db.Column(db.Boolean, default=False)
 
     @staticmethod
     def get_all():
@@ -34,30 +32,6 @@ class Transformers(db.Model):
         for transformer in unapproved:
             db.session.delete(transformer)
         db.session.commit()
-
-    @staticmethod
-    def toggle_sag_mode_requirement(model_id):
-        model_id = model_id.split('/')[1]
-        existing_definition = Transformers.query.filter_by(model_id=model_id).first()
-        if existing_definition is not None:
-            if existing_definition.sag_capable and existing_definition.sag_cable is not None:
-                existing_definition.sag_capable = False
-            else:
-                existing_definition.sag_capable = True
-            db.session.commit()
-        return existing_definition
-
-    @staticmethod
-    def set_model_aspect(model_id, type: str = 'enforced', aspect: str = '16:9'):
-        model_id = model_id.split('/')[1]
-        existing_definition = Transformers.query.filter_by(model_id=model_id).first()
-        if existing_definition is not None:
-            if type == 'enforced':
-                existing_definition.enforced_ar = aspect
-            elif type == 'preferred':
-                existing_definition.preferred_ar = aspect
-            db.session.commit()
-        return existing_definition
 
     @staticmethod
     def get_all_by_model_type(model_type):
@@ -112,7 +86,6 @@ class Transformers(db.Model):
             'recommended_positive': self.recommended_positive,
             'recommended_negative': self.recommended_negative,
             'config_blob': self.config_blob,
-            'sag_capable': self.sag_capable,
             'tags': self.tags,
             'approved': self.approved,
             'added_by': self.added_by

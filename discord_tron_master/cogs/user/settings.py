@@ -64,9 +64,7 @@ class Settings(commands.Cog):
         model_id = user_config.get("model")
         steps = self.config.get_user_setting(user_id, "steps")
         strength = self.config.get_user_setting(user_id, "strength")
-        sag_scale = self.config.get_user_setting(user_id, "sag_scale")
         guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
-        enable_sag = self.config.get_user_setting(user_id, "enable_sag")
 
         seed = self.config.get_user_setting(user_id, "seed", None)
         if seed == -1:
@@ -95,9 +93,8 @@ class Settings(commands.Cog):
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
             f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ When None, it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.\n"
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
-            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`, **SAG**: {sag_scale} **Default**: `0.75`\n❓ How closely the image follows the prompt. Below 1 = no prompts.\n"
+            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
             f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ The higher the strength, the more random the img2img becomes. Lower values become more deterministic.\n"
-            f"🟠 **Self-Assisted Guidance (SAG)**: `{enable_sag}` **Default**: `False`\n❓ Use SAG scaling to make higher quality images. Requires a square aspect ratio on non-SAG models.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of every prompt, which has a limit of 77 tokens. This can become truncated. Set via `{self.config.get_command_prefix()}positive`.\n"
             f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Defines how this bot will respond to you when chatting. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
@@ -111,26 +108,6 @@ class Settings(commands.Cog):
         elif hasattr(ctx, "delete"):
             await ctx.delete()
         await self.send_large_message(ctx, message)
-
-    @commands.command(name="sag", help="Enable or disable self-assisted guidance pipeline that uses a self-reference routine to improve image quality. Default is True.")
-    async def toggle_sag(self, ctx):
-        user_id = ctx.author.id
-        enable_sag = config.get_user_setting(user_id, "enable_sag")
-        try:
-            if enable_sag:
-                config.set_user_setting(user_id, "enable_sag", False)
-                response = await ctx.send(
-                    f"{ctx.author.mention} Self-assisted guidance has been disabled. Did you know {random_fact()}?"
-                )
-            else:
-                config.set_user_setting(user_id, "enable_sag", True)
-                response = await ctx.send(
-                    f"{ctx.author.mention} Self-assisted guidance has been enabled. You're welcome."
-                )
-            await ctx.delete(delay=15)
-            await response.delete(delay=15)
-        except Exception as e:
-            logging.error("Caught error when toggling user SAG property: " + str(e))
 
     @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
     async def set_steps(self, ctx, steps):
