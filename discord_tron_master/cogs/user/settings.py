@@ -67,7 +67,13 @@ class Settings(commands.Cog):
         sag_scale = self.config.get_user_setting(user_id, "sag_scale")
         guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
         enable_sag = self.config.get_user_setting(user_id, "enable_sag")
+
         seed = self.config.get_user_setting(user_id, "seed", None)
+        if seed == -1:
+            seed = "random"
+        elif seed == 0:
+            seed = None
+
         gpt_role = self.config.get_user_setting(user_id, "gpt_role")
         negative_prompt = self.config.get_user_setting(
             user_id,
@@ -190,8 +196,10 @@ class Settings(commands.Cog):
                 logging.error("Failed to delete messages.")
             return
         # Allow specifying "None", "none", "NoNe" etc on the cmdline and map to None to enable random seeds.
-        if "none" in seed.lower() or seed == "random":
+        if "none" in seed.lower():
             seed = None
+        elif seed == "random":
+            seed = -1
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
         response = await ctx.send(
