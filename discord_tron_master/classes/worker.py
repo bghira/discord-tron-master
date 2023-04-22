@@ -60,6 +60,7 @@ class Worker:
     async def stop(self):
         self.terminate = True
         await self.job_queue.stop()
+        await self.websocket.close(code=4002, reason="Worker is stopping due to deregistration request.")
 
     async def process_jobs(self):
         while not self.terminate:
