@@ -7,7 +7,6 @@ class Transformers(db.Model):
     model_id = db.Column(db.String(255), unique=True, nullable=False)
     model_type = db.Column(db.String(16), nullable=False)
     preferred_ar = db.Column(db.String(4))
-    enforced_ar = db.Column(db.String(4), nullable=False)
     description = db.Column(db.String(255), nullable=True)
     recommended_positive = db.Column(db.String(255), nullable=True)
     recommended_negative = db.Column(db.String(255), nullable=True)
@@ -116,8 +115,7 @@ class Transformers(db.Model):
             'sag_capable': self.sag_capable,
             'tags': self.tags,
             'approved': self.approved,
-            'added_by': self.added_by,
-            'enforced_ar': self.enforced_ar
+            'added_by': self.added_by
         }
     
     def to_json(self):
