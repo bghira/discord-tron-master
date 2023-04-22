@@ -52,6 +52,8 @@ class QueueManager:
             return -1
 
     async def unregister_worker(self, worker_id):
+        if worker_id not in self.queues:
+            return
         worker_data = self.queues[worker_id]
         logging.info(f"Found {worker_data} worker data.?")
         if worker_data:

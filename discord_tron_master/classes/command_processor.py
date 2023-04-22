@@ -1,6 +1,7 @@
 from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.message import WebsocketMessage
+from discord_tron_master.exceptions.registration import RegistrationError
 from typing import Dict, Any
 from discord_tron_master.classes.command_processors import hardware
 from discord_tron_master.classes.command_processors import discord as discord_module
@@ -47,6 +48,8 @@ class CommandProcessor:
             command_result = await handler(self, message["arguments"], message["data"], websocket)
             logging.debug(f"Command returned result, {command_result}")
             return command_result
+        except RegistrationError as e:
+            raise e
         except Exception as e:
             logging.error("Error processing command: " + str(e), exc_info=True)
             

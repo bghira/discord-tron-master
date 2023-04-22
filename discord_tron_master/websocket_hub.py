@@ -47,8 +47,10 @@ class WebSocketHub:
                     logging.info("Worker ID found in message. Updating worker ID to " + str(worker_id) + ".")
                 raw_result = await self.command_processor.process_command(decoded, websocket)
                 result = json.dumps(raw_result)
+                logging.debug(f"Raw result: {raw_result}")
+                logging.debug(f"JSON result: {result}")
                 # Did result error? If so, close the websocket connection:
-                if "RegistrationError" in raw_result or "error" in result and "RegistrationError" in result["error"]:
+                if "RegistrationError" in raw_result or "error" in raw_result and "RegistrationError" in raw_result["error"]:
                     await websocket.close(code=4002, reason="RegistrationError:" + raw_result)
                     return
                 if raw_result is None or "error" in raw_result:
@@ -59,11 +61,11 @@ class WebSocketHub:
                 await websocket.send(result)
         except AuthError as e:
             logging.error(f"Client sent invalid auth credentials. Naughty!")
-            await websocket.close(code=4002, reason=raw_result)
+            await websocket.close(code=4002, reason=str(e))
             return
         except RegistrationError as e:
-            logging.error(f"Sending registration error to worker:")
-            await websocket.close(code=4002, reason=raw_result)
+            logging.error(f"Sending registration error to worker: {str(e)}")
+            await websocket.close(code=4002, reason=str(e))
             return
         except asyncio.exceptions.IncompleteReadError as e:
             logging.warning(f"IncompleteReadError: {e}")
@@ -72,7 +74,8 @@ class WebSocketHub:
             logging.warning(f"ConnectionClosedError: {e}")
             # ... handle the situation as needed
         except Exception as e:
-            logging.error(f"Unhandled exception in handler: {e}")
+            import traceback
+            logging.error(f"Unhandled exception in handler: {e}, traceback: {traceback.format_exc()}")
         finally:
             # Remove the client from the set of clients
             logging.info(f"Removing worker {worker_id} from connected clients")
