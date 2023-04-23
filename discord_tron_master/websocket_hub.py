@@ -50,7 +50,7 @@ class WebSocketHub:
                 logging.debug(f"Raw result: {raw_result}")
                 logging.debug(f"JSON result: {result}")
                 # Did result error? If so, close the websocket connection:
-                if "RegistrationError" in raw_result or "error" in raw_result and "RegistrationError" in raw_result["error"]:
+                if raw_result is not None and ("RegistrationError" in raw_result or "error" in raw_result and "RegistrationError" in raw_result["error"]):
                     await websocket.close(code=4002, reason="RegistrationError:" + raw_result)
                     return
                 if raw_result is None or "error" in raw_result:
