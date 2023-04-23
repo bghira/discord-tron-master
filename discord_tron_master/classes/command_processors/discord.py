@@ -28,7 +28,7 @@ async def send_large_message(command_processor, arguments: Dict, data: Dict, web
     if channel is not None:
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
-            await command_processor.discord.send_large_message(channel)
+            await command_processor.discord.send_large_message(channel, arguments["message"])
         except Exception as e:
             logging.error(f"Error sending large message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Large message sent."}
