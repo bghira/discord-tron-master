@@ -31,16 +31,21 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_USER_CONFIG = {
+    "seed": None,
+    "scheduler": "default",
     "steps": 100,
     "gpt_role": "You are a Discord bot.",
     "temperature": 0.9,
+    "repeat_penalty": 1.1,
+    "top_p": 0.95,
+    "top_k": 40,
+    "max_tokens": 2048,
     "strength": 0.5,
     "resize": 1,
     "guidance_scaling": 7.5,
-    "seed": None,
     "model": "theintuitiveye/HARDblend",
-    "negative_prompt": "(child, teen) (malformed, malignant)",
-    "positive_prompt": "(beautiful, unreal engine 5, highly detailed, hyperrealistic)",
+    "negative_prompt": "child- childish- out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
+    "positive_prompt": "(centred in frame) (widescreen) (seamless) (non-repeating) (8k) (sharp focus) (cinematic) (epic) (bokeh) (depth-of-field) (photorealistic) (highly detailed) (masterpiece) (trending on artstation) (trending on deviantart)",
     "resolution": {
         "width": 512,
         "height": 768
@@ -60,6 +65,10 @@ class AppConfig:
     @classmethod
     def set_flask(cls, flask):
         cls.flask = flask
+
+    @classmethod
+    def get_flask(cls):
+        return cls.flask
 
     @staticmethod
     def merge_dicts(dict1, dict2):

@@ -73,6 +73,13 @@ class Settings(commands.Cog):
             seed = None
 
         gpt_role = self.config.get_user_setting(user_id, "gpt_role")
+        temperature = self.config.get_user_setting(user_id, "temperature")
+        max_tokens = self.config.get_user_setting(user_id, "max_tokens")
+        repeat_penalty = self.config.get_user_setting(user_id, "repeat_penalty")
+        top_p = self.config.get_user_setting(user_id, "top_p")
+        top_k = self.config.get_user_setting(user_id, "top_k")
+        top_p = self.config.get_user_setting(user_id, "top_p")
+
         negative_prompt = self.config.get_user_setting(
             user_id,
             "negative_prompt",
@@ -88,17 +95,23 @@ class Settings(commands.Cog):
             positive_prompt = "literally nothing. fly free, birdie."
         if negative_prompt == "":
             negative_prompt = "literally nothing. live dangerously, bucko."
+
         message = (
             f"{ctx.author.mention}\n"
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
-            f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ When None, it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.\n"
-            f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ This represents how many denoising iterations the model will do on your image. Less is more.\n"
+            f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ None sets it to the current timestamp, 'random' or -1 set it to a more random value. Applies to all generation (img, txt).\n"
+            f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n"
+            f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ About 20 to 200 steps will produce good images.\n"
             f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
-            f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ The higher the strength, the more random the img2img becomes. Lower values become more deterministic.\n"
-            f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}negative`.\n"
-            f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of every prompt, which has a limit of 77 tokens. This can become truncated. Set via `{self.config.get_command_prefix()}positive`.\n"
-            f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Defines how this bot will respond to you when chatting. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
-            f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n❓ Lower resolutions render more quickly, and has a relationship with `steps` that can really influence the output. See **{self.config.get_command_prefix()}help resolution** for more information."
+            f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ Higher values make the img2img more random. Lower values make it deterministic.\n"
+            f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}settings negative`.\n"
+            f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of each image prompt. Set via `{self.config.get_command_prefix()}settings positive`.\n"
+            f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Set a bot persona. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
+            f"🟠 **Temperature**: `{temperature}` **Default**: `1.0`\n❓ The higher the temperature, the more random the txt2txt becomes. Lower values become more deterministic.\n"
+            f"🟠 **Repeat penalty**: `{repeat_penalty}` **Default**: `1.1`\n❓ Penalize repeating tokens during text generation. Encourages diverse responses.\n"
+            f"🟠 **Max tokens**: `{max_tokens}` **Default**: `2048`\n❓ How many tokens to limit LLM output to. Encourages quicker replies.\n"
+            f"🟠 **top_k**: `{top_k}` **Default**: `40`\n❓ Sampling a greater number of possible tokens slows down output while possibly improving the quality, eg. 10 is faster than 40.\n"
+            f"🟠 **top_p**: `{top_p}` **Default**: `0.95`\n❓ Can be used to tune the speed vs quality of text generation. Ask GPT to explain this parameter.\n"
         )
         if hasattr(ctx, "message"):
             try:

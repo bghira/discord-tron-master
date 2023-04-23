@@ -1,5 +1,6 @@
 from discord_tron_master.classes.job import Job
 import logging, base64
+from discord_tron_master.models.schedulers import Schedulers
 
 class ImageUpscalingJob(Job):
     def __init__(self, payload):
@@ -22,6 +23,7 @@ class ImageUpscalingJob(Job):
             "image_data": image,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
             "config": user_config,
+            "scheduler_config": Schedulers.get_user_scheduler(config),
             "upscaler": True
         }
         return message

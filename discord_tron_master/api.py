@@ -21,6 +21,7 @@ class API:
         self.db = database_handler.db
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
+        from discord_tron_master.models.schedulers import Schedulers
         self.migrate = Migrate(self.app, self.db)
         self.register_routes()
         self.auth = None

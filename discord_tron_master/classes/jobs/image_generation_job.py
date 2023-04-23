@@ -2,7 +2,8 @@ from discord_tron_master.classes.job import Job
 import logging, json
 from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.app_config import AppConfig
-
+from discord_tron_master.models.schedulers import Schedulers
+flask = AppConfig.get_flask()
 class ImageGenerationJob(Job):
     def __init__(self, payload):
         super().__init__("gpu", "image_generation", "generate_image", payload)
@@ -12,17 +13,19 @@ class ImageGenerationJob(Job):
         bot, config, ctx, prompt, discord_first_message = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
-        message = {
-            "job_type": self.job_type,
-            "job_id": self.id,
-            "module_name": self.module_name,
-            "module_command": self.module_command,
-            "discord_context": self.context_to_dict(ctx),
-            "image_prompt": prompt,
-            "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": user_config,
-            "model_config": self.get_transformer_details(user_config)
-        }
+        with flask.app_context():
+            message = {
+                "job_type": self.job_type,
+                "job_id": self.id,
+                "module_name": self.module_name,
+                "module_command": self.module_command,
+                "discord_context": self.context_to_dict(ctx),
+                "image_prompt": prompt,
+                "discord_first_message": self.discordmsg_to_dict(discord_first_message),
+                "config": user_config,
+                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
+                "model_config": self.get_transformer_details(user_config)
+            }
         return message
     async def execute(self):
         websocket = self.worker.websocket
