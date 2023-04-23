@@ -12,6 +12,7 @@ class WorkerManager:
             "gpu": [],
             "compute": [],
             "memory": [],
+            "llama": []
         }
         self.queue_manager = None
 

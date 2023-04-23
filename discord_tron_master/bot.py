@@ -52,20 +52,24 @@ class DiscordBot:
     async def load_cogs(self, cogs_path="discord_tron_master/cogs"):
         import logging
         logging.debug("Loading cogs! Path: " + cogs_path)
-        for root, _, files in os.walk(cogs_path):
-            logging.debug("Found cogs: " + str(files))
-            for file in files:
-                if file.endswith(".py"):
-                    cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
-                    try:
-                        import importlib
-                        cog_module = importlib.import_module(cog_path)
-                        cog_class_name = getattr(cog_module, file[:-3].capitalize())
-                        await self.bot.add_cog(cog_class_name(self.bot))
-                        logging.debug(f"Loaded cog: {cog_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to load cog: {cog_path}")
-                        logging.error(e)
+        try:
+            for root, _, files in os.walk(cogs_path):
+                logging.debug("Found cogs: " + str(files))
+                for file in files:
+                    if file.endswith(".py"):
+                        cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
+                        try:
+                            import importlib
+                            cog_module = importlib.import_module(cog_path)
+                            cog_class_name = getattr(cog_module, file[:-3].capitalize())
+                            await self.bot.add_cog(cog_class_name(self.bot))
+                            logging.debug(f"Loaded cog: {cog_path}")
+                        except Exception as e:
+                            logging.error(f"Failed to load cog: {cog_path}")
+                            logging.error(e)
+        except Exception as e:
+            logging.error(f"Ran into error: {e}")
+            raise e
 
     async def find_channel(self, channel_id):
         for guild in self.bot.guilds:

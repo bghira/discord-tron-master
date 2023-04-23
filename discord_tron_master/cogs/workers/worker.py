@@ -15,6 +15,7 @@ class Worker(commands.Cog):
         user_config = self.config.get_user_config(user_id=user_id)
 
         next_worker_gpu = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="gpu")
+        next_worker_llama = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="llama")
         next_worker_compute = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="compute")
         next_worker_memory = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="memory")
         message = "Worker status:\n"
@@ -32,6 +33,15 @@ class Worker(commands.Cog):
         else:
             message = message + "No Compute workers available.\n"
         message = message + "```"
+
+        message = message + "```"
+        if next_worker_memory is not None:
+            message = message + f"First Llama worker:     {next_worker_llama.worker_id}\n"
+            message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_llama)) + " jobs in queue\n"
+        else:
+            message = message + "No Llama workers available.\n"
+        message = message + "```"
+
         message = message + "```"
         if next_worker_memory is not None:
             message = message + f"First Memory worker:  {next_worker_memory.worker_id}\n"
@@ -53,10 +63,10 @@ class Worker(commands.Cog):
                 await ctx.message.delete()
             else:
                 await ctx.delete()
-            await self.discord.send_large_message(ctx, message, delete_delay=15)
         except Exception as e:
             import traceback, logging
             logging.error(f"Could not delete or send a message: {e}, traceback: {traceback.format_exc()}")
+        await self.discord.send_large_message(ctx, message, delete_delay=15)
 
 def setup(bot):
     bot.add_cog(Worker(bot))
