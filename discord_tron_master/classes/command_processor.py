@@ -23,6 +23,7 @@ class CommandProcessor:
             },
             "message": {
                 "send": discord_module.send_message,
+                "send_large_message": discord_module.send_large_message,
                 "create_thread": discord_module.create_thread,
                 "send_image": discord_module.send_image,
                 "edit": discord_module.edit_message,
