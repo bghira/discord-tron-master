@@ -193,7 +193,10 @@ class DiscordBot:
         
     async def send_large_message(self, ctx, text, max_chars=2000, delete_delay=None):
         if len(text) <= max_chars:
-            response = await ctx.channel.send(text)
+            if hasattr(ctx, "channel"):
+                response = await ctx.channel.send(text)
+            elif hasattr(ctx, "send"):
+                response = await ctx.send(text)
             if delete_delay is not None:
                 await response.delete(delay=delete_delay)
             return
@@ -202,13 +205,20 @@ class DiscordBot:
         buffer = ""
         for line in lines:
             if len(buffer) + len(line) + 1 > max_chars:
-                response = await ctx.channel.send(buffer)
+                if hasattr(ctx, "channel"):
+                    response = await ctx.channel.send(buffer)
+                elif hasattr(ctx, "send"):
+                    response = await ctx.send(buffer)
+
                 if delete_delay is not None:
                     await response.delete(delay=delete_delay)
                 buffer = ""
             buffer += line + "\n"
         if buffer:
-            response = await ctx.channel.send(buffer)
+            if hasattr(ctx, "channel"):
+                response = await ctx.channel.send(buffer)
+            elif hasattr(ctx, "send"):
+                response = await ctx.send(buffer)
             if delete_delay is not None:
                 await response.delete(delay=delete_delay)
 
