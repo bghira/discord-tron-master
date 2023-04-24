@@ -15,7 +15,7 @@ class Job:
         self.worker = worker
     def payload_text(self):
         dict_version = self.format_payload()
-        return dict_version["prompt"]
+        return dict_version["prompt"] or "Unknown prompt for job: " + self.module_command
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
