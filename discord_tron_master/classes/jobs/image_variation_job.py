@@ -23,7 +23,7 @@ class ImageVariationJob(Job):
                 "discord_context": self.context_to_dict(ctx),
                 "image_prompt": prompt,
                 "image_data": image,
-                "scheduler_config": Schedulers.get_user_scheduler(user_config),
+                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": config.get_user_config(user_id=ctx.author.id)
             }
