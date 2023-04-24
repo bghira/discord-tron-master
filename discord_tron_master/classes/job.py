@@ -14,7 +14,9 @@ class Job:
     def set_worker(self, worker):
         self.worker = worker
     def payload_text(self):
-        if 
+        dict_version = self.format_payload()
+        return dict_version["prompt"]
+
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
         bot, config, ctx, prompt, discord_first_message = self.payload
