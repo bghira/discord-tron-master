@@ -13,7 +13,8 @@ class Job:
 
     def set_worker(self, worker):
         self.worker = worker
-
+    def payload_text(self):
+        if 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
         bot, config, ctx, prompt, discord_first_message = self.payload
@@ -25,7 +26,7 @@ class Job:
             "module_name": self.module_name,
             "module_command": self.module_command,
             "discord_context": self.context_to_dict(ctx),
-            "image_prompt": prompt,
+            "prompt": prompt,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
             "config": user_config
         }

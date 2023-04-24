@@ -23,6 +23,7 @@ class ImageUpscalingJob(Job):
                 "module_command": self.module_command,
                 "discord_context": self.context_to_dict(ctx),
                 "image_prompt": prompt,
+                "prompt": prompt,
                 "image_data": image,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,

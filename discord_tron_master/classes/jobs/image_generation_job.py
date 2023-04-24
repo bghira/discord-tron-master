@@ -21,6 +21,7 @@ class ImageGenerationJob(Job):
                 "module_command": self.module_command,
                 "discord_context": self.context_to_dict(ctx),
                 "image_prompt": prompt,
+                "prompt": prompt,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
                 "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
