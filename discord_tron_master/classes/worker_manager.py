@@ -54,7 +54,7 @@ class WorkerManager:
                 selected_worker = None
                 continue
             logging.debug(f"worker_id: {worker_id}, worker: {worker}")
-            if job_type in worker.supported_job_types:
+            if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
                 logging.info(f"Found valid worker for {job_type} job")
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks < min_queued_tasks:
@@ -86,7 +86,8 @@ class WorkerManager:
         worker = Worker(worker_id, supported_job_types, hardware_limits, hardware, hardware["hostname"])
         self.workers[worker_id] = worker
         for job_type in supported_job_types:
-            self.workers_by_capability[job_type].append(worker)
+            if supported_job_types[job_type] is True:
+                self.workers_by_capability[job_type].append(worker)
         return worker
 
     async def unregister_worker(self, worker_id):
