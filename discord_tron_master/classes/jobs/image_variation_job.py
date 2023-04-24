@@ -11,6 +11,7 @@ class ImageVariationJob(Job):
         bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for img2img payload")
         logging.debug(f"{self.payload}")
+        user_config = config.get_user_config(user_id=ctx.author.id)
         message = {
             "job_type": self.job_type,
             "job_id": self.id,
@@ -19,7 +20,7 @@ class ImageVariationJob(Job):
             "discord_context": self.context_to_dict(ctx),
             "image_prompt": prompt,
             "image_data": image,
-            "scheduler_config": Schedulers.get_user_scheduler(config),
+            "scheduler_config": Schedulers.get_user_scheduler(user_config),
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
             "config": config.get_user_config(user_id=ctx.author.id)
         }
