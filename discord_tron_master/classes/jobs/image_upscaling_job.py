@@ -1,6 +1,7 @@
 from discord_tron_master.classes.job import Job
 import logging, base64
 from discord_tron_master.models.schedulers import Schedulers
+from discord_tron_master.classes.app_config import AppConfig
 
 class ImageUpscalingJob(Job):
     def __init__(self, payload):
@@ -13,17 +14,19 @@ class ImageUpscalingJob(Job):
         logging.debug(f"{self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
         user_config["model"] = 'stabilityai/stable-diffusion-x4-upscaler'
-        message = {
-            "job_type": self.job_type,
-            "job_id": self.id,
-            "module_name": self.module_name,
-            "module_command": self.module_command,
-            "discord_context": self.context_to_dict(ctx),
-            "image_prompt": prompt,
-            "image_data": image,
-            "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": user_config,
-            "scheduler_config": Schedulers.get_user_scheduler(user_config),
-            "upscaler": True
-        }
+        flask = AppConfig.get_flask()
+        with flask.app_context():
+            message = {
+                "job_type": self.job_type,
+                "job_id": self.id,
+                "module_name": self.module_name,
+                "module_command": self.module_command,
+                "discord_context": self.context_to_dict(ctx),
+                "image_prompt": prompt,
+                "image_data": image,
+                "discord_first_message": self.discordmsg_to_dict(discord_first_message),
+                "config": user_config,
+                "scheduler_config": Schedulers.get_user_scheduler(user_config),
+                "upscaler": True
+            }
         return message
