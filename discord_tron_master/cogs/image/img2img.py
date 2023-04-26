@@ -105,7 +105,7 @@ class Img2img(commands.Cog):
             message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         elif message.content != "":
-            job = ImageGenerationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+            job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         else:
             # Default to image variation job
             job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
