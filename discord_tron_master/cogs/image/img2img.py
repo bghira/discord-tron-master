@@ -110,11 +110,6 @@ class Img2img(commands.Cog):
             # Default to image variation job
             job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         # Get the worker that will process the job.
-        try:
-            await message.delete()
-        except Exception as e:
-            logging.error(f"Could not delete message during image attachment handling: {e}")
-
         worker = discord_wrapper.worker_manager.find_best_fit_worker(job)
         if worker is None:
             await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
