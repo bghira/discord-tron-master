@@ -8,7 +8,7 @@ class LlamaPredictionJob(Job):
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
-        num_artefacts = self.payload.len()
+        num_artefacts = len(self.payload)
         if num_artefacts == 5:
             bot, config, ctx, prompt, discord_first_message = self.payload
         elif num_artefacts == 6:
