@@ -139,6 +139,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             else:
                 raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
             embed = None
+            embeds = None
             if "image" in arguments:
                 logging.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
@@ -147,11 +148,22 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
                 embed.set_image(url=arguments["image_url"])
+            if "image_url_list" in arguments:
+                if arguments["image_url_list"] is not None:
+                    logging.debug(f"Incoming message to send, has an image url list.")
+                    embeds = []
+                    for image_url in arguments["image_url_list"]:
+                        logging.debug(f"Adding {image_url} to embed")
+                        new_embed = discord.Embed(url="http://tripleback.net")
+                        new_embed.set_image(url=image_url)
+                        embeds.append(new_embed)
+                else:
+                    logging.debug(f"Incoming message to send, has zero image url list.")
             logging.debug(f"Sending message to thread: {arguments['message']}")
             if "mention" in arguments:
                 logging.debug(f"Mentioning user: {arguments['mention']}")
                 arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
-            await thread.send(content=arguments["message"], embed=embed)
+            await thread.send(content=arguments["message"], embed=embed, embeds=embeds)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logging.debug(f"Exiting create_thread")
