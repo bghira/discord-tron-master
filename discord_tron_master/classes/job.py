@@ -19,7 +19,11 @@ class Job:
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
-        bot, config, ctx, prompt, discord_first_message = self.payload
+        num_artefacts = self.payload.len()
+        if num_artefacts == 5:
+            bot, config, ctx, prompt, discord_first_message = self.payload
+        elif num_artefacts == 6:
+            bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
         message = {
