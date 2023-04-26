@@ -8,7 +8,8 @@ from discord_tron_master.classes.app_config import AppConfig
 import logging, traceback, discord
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
-from discord_tron_master.classes.jobs.image_variation_job import ImageVariationJob
+from discord_tron_master.classes.jobs.promptless_variation_job import PromptlessVariationJob
+from discord_tron_master.classes.jobs.prompt_variation_job import PromptVariationJob
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJob
 from discord_tron_master.bot import clean_traceback
@@ -105,10 +106,10 @@ class Img2img(commands.Cog):
             message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         elif message.content != "":
-            job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+            job = PromptVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         else:
             # Default to image variation job
-            job = ImageVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+            job = PromptlessVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         # Get the worker that will process the job.
         worker = discord_wrapper.worker_manager.find_best_fit_worker(job)
         if worker is None:

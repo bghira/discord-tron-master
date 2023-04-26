@@ -3,9 +3,9 @@ from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
 import logging, base64
 
-class ImageVariationJob(Job):
+class PromptVariationJob(Job):
     def __init__(self, payload):
-        super().__init__("gpu", "image_variation", "variation_image", payload)
+        super().__init__("gpu", "image_variation", "prompt_variation", payload)
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
