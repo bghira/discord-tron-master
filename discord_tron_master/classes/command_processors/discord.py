@@ -13,7 +13,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             file=None
-            embed=None
+            embeds=None
             if "image" in arguments:
                 if arguments["image"] is not None:
                     base64_decoded_image = base64.b64decode(arguments["image"])
@@ -22,13 +22,15 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logging.debug(f"Incoming message to send, has an image url list.")
-                    embed = discord.Embed(url="http://tripleback.net")
+                    embeds = []
                     for image_url in arguments["image_url_list"]:
                         logging.debug(f"Adding {image_url} to embed")
+                        embed = discord.Embed(url="http://tripleback.net")
                         embed.set_image(url=image_url)
+                        embeds.append(embed)
                 else:
                     logging.debug(f"Incoming message to send, has zero image url list.")
-            await channel.send(content=arguments["message"], file=file, embed=embed)
+            await channel.send(content=arguments["message"], file=file, embeds=embeds)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
