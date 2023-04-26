@@ -13,12 +13,17 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             file=None
+            embed=None
             if "image" in arguments:
                 if arguments["image"] is not None:
                     base64_decoded_image = base64.b64decode(arguments["image"])
                     buffer = BytesIO(base64_decoded_image)
                     file=discord.File(buffer, "image.png")
-            await channel.send(content=arguments["message"], file=file)
+                if arguments["image_url_list"] is not None:
+                    embed = discord.Embed(url="http://tripleback.net")
+                    for image_url in arguments["image_url_list"]:
+                        embed.set_image(url=image_url)
+            await channel.send(content=arguments["message"], file=file, embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
@@ -133,7 +138,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 embed = await get_embed(arguments["image"])
             if "image_url" in arguments:
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
-                embed = discord.Embed()
+                embed = discord.Embed(url='https://tripleback.net')
                 embed.set_image(url=arguments["image_url"])
             logging.debug(f"Sending message to thread: {arguments['message']}")
             if "mention" in arguments:
