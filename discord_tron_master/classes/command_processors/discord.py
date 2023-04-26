@@ -19,6 +19,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     base64_decoded_image = base64.b64decode(arguments["image"])
                     buffer = BytesIO(base64_decoded_image)
                     file=discord.File(buffer, "image.png")
+            if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logging.debug(f"Incoming message to send, has an image url list.")
                     embed = discord.Embed(url="http://tripleback.net")
