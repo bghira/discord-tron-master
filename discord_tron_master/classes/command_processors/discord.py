@@ -20,9 +20,13 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     buffer = BytesIO(base64_decoded_image)
                     file=discord.File(buffer, "image.png")
                 if arguments["image_url_list"] is not None:
+                    logging.debug(f"Incoming message to send, has an image url list.")
                     embed = discord.Embed(url="http://tripleback.net")
                     for image_url in arguments["image_url_list"]:
+                        logging.debug(f"Adding {image_url} to embed")
                         embed.set_image(url=image_url)
+                else:
+                    logging.debug(f"Incoming message to send, has zero image url list.")
             await channel.send(content=arguments["message"], file=file, embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
