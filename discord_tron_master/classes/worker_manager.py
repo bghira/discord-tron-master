@@ -12,7 +12,8 @@ class WorkerManager:
             "gpu": [],
             "compute": [],
             "memory": [],
-            "llama": []
+            "llama": [],
+            "stableml": []
         }
         self.queue_manager = None
 
