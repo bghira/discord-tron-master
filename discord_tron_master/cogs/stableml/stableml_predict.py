@@ -17,12 +17,7 @@ class Stableml_predict(commands.Cog):
     async def stableml(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            context = ctx
-            if not hasattr(ctx, "send"):
-                # Likely this came from on_message. Get the context properly.
-                context = await self.bot.get_context(ctx)
-
-            discord_first_message = await context.send("A worker has been selected for your query: `" + prompt + "`")
+            discord_first_message = await discord.send_large_message(ctx=ctx, text="A worker has been selected for your query: `" + prompt + "`")
 
             self.config.reload_config()
 
