@@ -204,3 +204,12 @@ async def get_embed(image_data, create_embed: bool = True):
         embed.set_image(url=image_url)
         return embed
     return image_url
+
+async def get_message_txt_file(text):
+    # write to file
+    with open("result.txt", "w") as file:
+        file.write('arg1 = {0}, arg2 = {1}'.format(arg1, arg2))
+    
+    # send file to Discord in message
+    with open("result.txt", "rb") as file:
+        await ctx.send("Your file is:", file=discord.File(file, "result.txt"))
