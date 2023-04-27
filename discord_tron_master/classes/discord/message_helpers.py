@@ -34,6 +34,9 @@ async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
 
 async def fix_onmessage_context(ctx, bot = None):
     context = ctx
+    if hasattr(ctx, "channel"):
+        logging.debug(f"Context already has channel attribute.")
+        return context
     logging.debug(f"Running fix_onmessage_context with\nContext: {ctx}\nBot: {bot}, Traceback: {traceback.format_stack()}")
     if not hasattr(ctx, "send") and bot is None:
         error = "Cannot fix context without access to discord bot instance. You must import DiscordBot and use get_instance()."
