@@ -17,7 +17,7 @@ class Stableml_predict(commands.Cog):
     async def stableml(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await discord.send_large_message(ctx=ctx, text="A worker has been selected for your query: `" + prompt + "`")
+            discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="A worker has been selected for your query: `" + prompt + "`")
 
             self.config.reload_config()
 

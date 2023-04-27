@@ -5,6 +5,7 @@ from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.resolution import ResolutionHelper
 from discord_tron_master.classes.text_replies import return_random as random_fact
 import logging
+from discord_tron_master.bot import DiscordBot
 
 config = AppConfig()
 resolution_helper = ResolutionHelper()
@@ -120,7 +121,7 @@ class Settings(commands.Cog):
                 logging.warning(f"Could not delete message, it was likely deleted by another worker or a moderator.")
         elif hasattr(ctx, "delete"):
             await ctx.delete()
-        await self.send_large_message(ctx, message)
+        await DiscordBot.send_large_message(ctx, message)
 
     @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
     async def set_steps(self, ctx, steps):
@@ -237,20 +238,7 @@ class Settings(commands.Cog):
         else:
             await ctx.delete()
         await response.delete(delay=15)
-    async def send_large_message(self, ctx, text, max_chars=2000):
-        if len(text) <= max_chars:
-            await ctx.channel.send(text)
-            return
 
-        lines = text.split("\n")
-        buffer = ""
-        for line in lines:
-            if len(buffer) + len(line) + 1 > max_chars:
-                await ctx.channel.send(buffer)
-                buffer = ""
-            buffer += line + "\n"
-        if buffer:
-            await ctx.channel.send(buffer)
 def compare_setting_types(old_value, new_value):
     # Check whether the new value type is the same type as their old value.
     # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.

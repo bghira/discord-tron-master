@@ -71,7 +71,7 @@ class Generate(commands.Cog):
     async def generate(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await discord.send_large_message(ctx=ctx, text="Queued: `" + prompt + "`")
+            discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + prompt + "`")
             self.config.reload_config()
             job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
             # Get the worker that will process the job.

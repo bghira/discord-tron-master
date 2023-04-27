@@ -66,7 +66,7 @@ class Worker(commands.Cog):
         except Exception as e:
             import traceback, logging
             logging.error(f"Could not delete or send a message: {e}, traceback: {traceback.format_exc()}")
-        await self.discord.send_large_message(ctx, message, delete_delay=15)
+        await DiscordBot.send_large_message(ctx, message, delete_delay=15)
 
 def setup(bot):
     bot.add_cog(Worker(bot))

@@ -8,6 +8,7 @@ from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.custom_help import CustomHelp
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.bot import DiscordBot
 config = AppConfig()
 
 class DiscordBot:
@@ -190,14 +191,18 @@ class DiscordBot:
                 logging.info(f"Bot doesn't have permission to delete messages in {channel.name} ({channel.id})")
             except Exception as e:
                 logging.info(f"Error deleting messages in {channel.name} ({channel.id}): {e}")
-    async def fix_onmessage_context(self, ctx):
+
+    @staticmethod
+    async def fix_onmessage_context(ctx):
         context = ctx
         if not hasattr(ctx, "send"):
             # Likely this came from on_message. Get the context properly.
-            context = await self.bot.get_context(ctx)
+            context = await DiscordBot.get_instance().get_context(ctx)
         return context
-    async def send_large_message(self, ctx, text, max_chars=2000, delete_delay=None):
-        ctx = self.fix_onmessage_context(ctx)
+
+    @staticmethod
+    async def send_large_message(ctx, text, max_chars=2000, delete_delay=None):
+        ctx = DiscordBot.fix_onmessage_context(ctx)
         if len(text) <= max_chars:
             if hasattr(ctx, "channel"):
                 response = await ctx.channel.send(text)
