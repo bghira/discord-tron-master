@@ -42,4 +42,6 @@ async def fix_onmessage_context(ctx, bot = None):
         # Likely this came from on_message. Get the context properly.
         logging.debug(f"Running get_context on bot object.")
         context = await bot.get_context(ctx)
+    else:
+        logging.debug(f"Passing through context object.")
     return context
