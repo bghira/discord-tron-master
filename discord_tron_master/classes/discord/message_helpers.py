@@ -8,7 +8,7 @@ async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
             response = await ctx.send(text)
         if delete_delay is not None:
             await response.delete(delay=delete_delay)
-        return
+        return response
 
     lines = text.split("\n")
     buffer = ""
