@@ -1,3 +1,4 @@
+import logging
 async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
     ctx = await fix_onmessage_context(ctx)
     if len(text) <= max_chars:
@@ -32,9 +33,13 @@ async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
 
 async def fix_onmessage_context(ctx, bot = None):
     context = ctx
+    logging.debug(f"Running fix_onmessage_context with\nContext: {ctx}\nBot: {bot}")
     if not hasattr(ctx, "send") and bot is None:
-        raise RuntimeError("Cannot fix context without access to discord bot instance. You must import DiscordBot and use get_instance().")
+        error = "Cannot fix context without access to discord bot instance. You must import DiscordBot and use get_instance()."
+        logging.error(error)
+        raise RuntimeError(error)
     elif not hasattr(ctx, "send") and bot is not None:
         # Likely this came from on_message. Get the context properly.
+        logging.debug(f"Running get_context on bot object.")
         context = await bot.get_context(ctx)
     return context
