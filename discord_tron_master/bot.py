@@ -8,6 +8,7 @@ from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.custom_help import CustomHelp
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.discord import message_helpers as helper
 from discord_tron_master.bot import DiscordBot
 config = AppConfig()
 
@@ -194,54 +195,22 @@ class DiscordBot:
 
     @staticmethod
     async def fix_onmessage_context(ctx):
-        context = ctx
-        if not hasattr(ctx, "send"):
-            # Likely this came from on_message. Get the context properly.
-            context = await DiscordBot.get_instance().get_context(ctx)
-        return context
+        return helper.fix_onmessage_context(ctx, DiscordBot.get_instance())
 
     @staticmethod
     async def send_large_message(ctx, text, max_chars=2000, delete_delay=None):
-        ctx = DiscordBot.fix_onmessage_context(ctx)
-        if len(text) <= max_chars:
-            if hasattr(ctx, "channel"):
-                response = await ctx.channel.send(text)
-            elif hasattr(ctx, "send"):
-                response = await ctx.send(text)
-            if delete_delay is not None:
-                await response.delete(delay=delete_delay)
-            return
+        helper.send_large_messages(ctx, text, max_chars, delete_delay)
 
-        lines = text.split("\n")
-        buffer = ""
-        for line in lines:
-            if len(buffer) + len(line) + 1 > max_chars:
-                if hasattr(ctx, "channel"):
-                    response = await ctx.channel.send(buffer)
-                elif hasattr(ctx, "send"):
-                    response = await ctx.send(buffer)
-
-                if delete_delay is not None:
-                    await response.delete(delay=delete_delay)
-                buffer = ""
-            buffer += line + "\n"
-        if buffer:
-            if hasattr(ctx, "channel"):
-                response = await ctx.channel.send(buffer)
-            elif hasattr(ctx, "send"):
-                response = await ctx.send(buffer)
-            if delete_delay is not None:
-                await response.delete(delay=delete_delay)
-
-    # for guild in command_processor.discord.bot.guilds:
-    #     for channel in guild.channels:
-    #         if isinstance(channel, discord.TextChannel):
-    #             try:
-    #                 await channel.send(message)
-    #             except discord.Forbidden:
-    #                 logging.info(f"Bot doesn't have permission to send messages in {channel.name} ({channel.id})")
-    #             except Exception as e:
-    #                 logging.info(f"Error sending message to {channel.name} ({channel.id}): {e}")
+    async def send_broadcast_message(self, message):
+        for guild in self.bot.guilds:
+            for channel in guild.channels:
+                if isinstance(channel, discord.TextChannel):
+                    try:
+                        await channel.send(message)
+                    except discord.Forbidden:
+                        logging.info(f"Bot doesn't have permission to send messages in {channel.name} ({channel.id})")
+                    except Exception as e:
+                        logging.info(f"Error sending message to {channel.name} ({channel.id}): {e}")
     
 async def clean_traceback(trace: str):
     lines = trace.split("\n")
