@@ -9,7 +9,6 @@ from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.custom_help import CustomHelp
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.discord import message_helpers as helper
-from discord_tron_master.bot import DiscordBot
 config = AppConfig()
 
 class DiscordBot:
