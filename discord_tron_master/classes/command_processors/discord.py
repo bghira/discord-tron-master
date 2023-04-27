@@ -5,7 +5,6 @@ from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
 from PIL import Image
 from websockets import WebSocketClientProtocol
-from discord_tron_master.bot import DiscordBot
 config = AppConfig()
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -41,7 +40,7 @@ async def send_large_message(command_processor, arguments: Dict, data: Dict, web
     if channel is not None:
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
-            await DiscordBot.send_large_message(channel, arguments["message"])
+            await command_processor.discord.send_large_message(channel, arguments["message"])
         except Exception as e:
             logging.error(f"Error sending large message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Large message sent."}
