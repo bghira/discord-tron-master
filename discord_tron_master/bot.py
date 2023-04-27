@@ -194,11 +194,11 @@ class DiscordBot:
 
     @staticmethod
     async def fix_onmessage_context(ctx):
-        return helper.fix_onmessage_context(ctx, DiscordBot.get_instance())
+        return await helper.fix_onmessage_context(ctx, DiscordBot.get_instance())
 
     @staticmethod
     async def send_large_message(ctx, text, max_chars=2000, delete_delay=None):
-        helper.send_large_messages(ctx, text, max_chars, delete_delay)
+        await helper.send_large_messages(ctx, text, max_chars, delete_delay)
 
     async def send_broadcast_message(self, message):
         for guild in self.bot.guilds:
