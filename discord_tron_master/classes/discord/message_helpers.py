@@ -1,5 +1,5 @@
 async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
-    ctx = fix_onmessage_context(ctx)
+    ctx = await fix_onmessage_context(ctx)
     if len(text) <= max_chars:
         if hasattr(ctx, "channel"):
             response = await ctx.channel.send(text)
