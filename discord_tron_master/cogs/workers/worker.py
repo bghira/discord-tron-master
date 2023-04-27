@@ -35,7 +35,7 @@ class Worker(commands.Cog):
         message = message + "```"
 
         message = message + "```"
-        if next_worker_memory is not None:
+        if next_worker_llama is not None:
             message = message + f"First Llama worker:     {next_worker_llama.worker_id}\n"
             message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_llama)) + " jobs in queue\n"
         else:
