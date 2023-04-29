@@ -6,7 +6,7 @@ from discord_tron_master.classes.jobs.llama_prediction_job import LlamaPredictio
 from discord_tron_master.bot import clean_traceback
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
-logging.debug(f"Loading StableML predict helper")
+logging.debug(f"Loading StableLM predict helper")
 # Commands used for Stable Diffusion image gen.
 class Predict(commands.Cog):
     def __init__(self, bot: commands.Bot):

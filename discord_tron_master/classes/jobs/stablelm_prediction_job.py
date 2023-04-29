@@ -2,9 +2,9 @@ import logging, json
 from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.app_config import AppConfig
 
-class StableMLPredictionJob(Job):
+class StableLMPredictionJob(Job):
     def __init__(self, payload):
-        super().__init__("stableml", "stableml", "predict", payload)
+        super().__init__("stablelm", "stablelm", "predict", payload)
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
