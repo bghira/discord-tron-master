@@ -110,7 +110,7 @@ class API:
 
         @self.app.route("/upload_audio", methods=["POST"])
         def upload_audio():
-            logging.debug(f"upload_audio endpoint hit with form data: {request.form}")
+            logging.debug(f"upload_audio endpoint hit with data: {request}")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
             audio_base64 = request.form.get("audio_base64")
