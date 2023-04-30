@@ -212,8 +212,7 @@ async def get_image_embed(image_data, create_embed: bool = True):
         return embed
     return image_url
 
-async def get_audio_url(audio_base64):
-    audio_data = base64.b64decode(audio_base64)
+async def get_audio_url(audio_data):
     wav_binary_stream = BytesIO(audio_data)
     sample_rate, audio_array = read_wav(wav_binary_stream)
     filename = f"{time.time()}{hashlib.md5(audio_data).hexdigest()}.wav"
