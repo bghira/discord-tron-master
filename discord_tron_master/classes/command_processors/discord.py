@@ -41,6 +41,10 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
                 else:
                     logging.debug(f"Incoming message to send, has zero audio url.")
+            if "audio_data" in arguments:
+                if arguments["audio_data"] is not None:
+                    logging.debug(f"Incoming message had audio data. Embedding as a file.")
+                    file=get_audio_file(arguments["audio_data"])
             await channel.send(content=arguments["message"], file=file, embeds=embeds)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -211,15 +215,25 @@ async def get_image_embed(image_data, create_embed: bool = True):
         embed.set_image(url=image_url)
         return embed
     return image_url
+async def get_audio_file(audio_data):
+    base64_decoded_audio = base64.b64decode(audio_data)
+    buffer = BytesIO(base64_decoded_audio)
+    buffer.seek(0)
+    file = discord.File(filename='audio.wav', fp=buffer, spoiler=False)
+    return file
 
 async def get_audio_url(audio_data):
-    wav_binary_stream = BytesIO(audio_data)
-    sample_rate, audio_array = read_wav(wav_binary_stream)
+    sample_rate, audio_array = extract_wav(audio_data)
     filename = f"{time.time()}{hashlib.md5(audio_data).hexdigest()}.wav"
     # Save the audio file and get its URL
     write_wav(os.path.join(web_root, filename), sample_rate, audio_array)
     audio_url = f"\n{url_base}/{filename}"
     return audio_url
+
+def extract_wav(audio_data):
+    wav_binary_stream = BytesIO(audio_data)
+    return read_wav(wav_binary_stream)
+    
 
 async def get_audio_url_from_numpy(audio_array):
     audio_base64 = base64.b64encode(audio_array)
