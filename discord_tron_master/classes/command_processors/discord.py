@@ -219,7 +219,7 @@ async def get_audio_file(audio_data):
     base64_decoded_audio = base64.b64decode(audio_data)
     buffer = BytesIO(base64_decoded_audio)
     buffer.seek(0)
-    file = discord.File(filename='audio.wav', fp=buffer, spoiler=False)
+    file = discord.File(filename='audio.mp3', fp=buffer, spoiler=False)
     return file
 
 async def get_audio_url(audio_data):
