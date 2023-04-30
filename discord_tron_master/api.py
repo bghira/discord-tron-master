@@ -113,10 +113,10 @@ class API:
             logging.debug(f"upload_audio endpoint hit with data: {request}")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
-            audio_base64 = request.form.get("audio_base64")
-            if not audio_base64:
-                return jsonify({"error": "audio_base64 is required"}), 400
-            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_base64))
+            audio_buffer = request.files.get("audio_buffer")
+            if not audio_buffer:
+                return jsonify({"error": "audio_buffer is required"}), 400
+            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_buffer))
             return jsonify({"audio_url": audio_url.strip()})
 
     def check_auth(self, request):
