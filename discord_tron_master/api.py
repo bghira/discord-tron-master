@@ -116,7 +116,7 @@ class API:
             audio_buffer = request.files.get("audio_buffer")
             if not audio_buffer:
                 return jsonify({"error": "audio_buffer is required"}), 400
-            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_buffer))
+            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_buffer.read()))
             return jsonify({"audio_url": audio_url.strip()})
 
     def check_auth(self, request):
