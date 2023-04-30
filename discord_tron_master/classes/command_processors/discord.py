@@ -1,11 +1,16 @@
 from typing import Dict
-import websocket, discord, base64, logging, time, hashlib, gzip
+import websocket, discord, base64, logging, time, hashlib, gzip, os
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
 from PIL import Image
 from websockets import WebSocketClientProtocol
 config = AppConfig()
+from scipy.io.wavfile import write as write_wav
+from scipy.io.wavfile import read as read_wav
+BARK_SAMPLE_RATE = 24_000
+web_root = config.get_web_root()
+url_base = config.get_url_base()
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
@@ -30,6 +35,12 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                         embeds.append(embed)
                 else:
                     logging.debug(f"Incoming message to send, has zero image url list.")
+            if "audio_url" in arguments:
+                if arguments["audio_url"] is not None:
+                    logging.debug(f"Incoming message to send, has an audio url.")
+                    arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
+                else:
+                    logging.debug(f"Incoming message to send, has zero audio url.")
             await channel.send(content=arguments["message"], file=file, embeds=embeds)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -54,7 +65,7 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
             image_data = arguments.get("image")
             embed = None
             if image_data is not None:
-                embed = get_embed(image_data)
+                embed = get_image_embed(image_data)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -143,7 +154,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "image" in arguments:
                 logging.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
-                embed = await get_embed(arguments["image"])
+                embed = await get_image_embed(arguments["image"])
             if "image_url" in arguments:
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
@@ -187,14 +198,10 @@ async def send_message_to_thread(command_processor, arguments: Dict, data: Dict,
             logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
-async def get_embed(image_data, create_embed: bool = True):
+async def get_image_embed(image_data, create_embed: bool = True):
     base64_decoded_image = base64.b64decode(image_data)
     buffer = BytesIO(base64_decoded_image)
-    web_root = config.get_web_root()
-    url_base = config.get_url_base()
-    # Error 2: buffer is already a BytesIO object, so we don't need to call buffer.getvalue() before hashing it.
     filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
-    # Error 3: buffer.save() is not a valid method. We should use Image.save() instead.
     buffer.seek(0)
     image = Image.open(buffer)
     image.save(f"{web_root}/{filename}")
@@ -204,6 +211,20 @@ async def get_embed(image_data, create_embed: bool = True):
         embed.set_image(url=image_url)
         return embed
     return image_url
+
+async def get_audio_url(audio_base64):
+    audio_data = base64.b64decode(audio_base64)
+    wav_binary_stream = BytesIO(audio_data)
+    sample_rate, audio_array = read_wav(wav_binary_stream)
+    filename = f"{time.time()}{hashlib.md5(audio_data).hexdigest()}.wav"
+    # Save the audio file and get its URL
+    write_wav(os.path.join(web_root, filename), sample_rate, audio_array)
+    audio_url = f"\n{url_base}/{filename}"
+    return audio_url
+
+async def get_audio_url_from_numpy(audio_array):
+    audio_base64 = base64.b64encode(audio_array)
+    return get_audio_url(audio_base64)
 
 async def get_message_txt_file(text):
     # write to file

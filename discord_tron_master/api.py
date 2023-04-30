@@ -9,6 +9,9 @@ from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
 from PIL import Image
 from io import BytesIO
+import io, asyncio
+from scipy.io.wavfile import read as read_wav
+from scipy.io.wavfile import write as write_wav
 import base64
 
 class API:
@@ -102,11 +105,19 @@ class API:
             buffered = BytesIO()
             img.save(buffered, format="PNG")
             base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-
-            import asyncio
-            create_embed = False
-            image_url = asyncio.run(DiscordCommandProcessor.get_embed(base64_encoded_image, create_embed))
+            image_url = asyncio.run(DiscordCommandProcessor.get_image_embed(base64_encoded_image, create_embed=False))
             return jsonify({"image_url": image_url.strip()})
+
+        @self.app.route("/upload_audio", methods=["POST"])
+        def upload_audio():
+            logging.debug("upload_audio endpoint hit")
+            if not self.check_auth(request):
+                return jsonify({"error": "Authentication required"}), 401
+            audio_base64 = request.form.get("audio_base64")
+            if not audio_base64:
+                return jsonify({"error": "audio_base64 is required"}), 400
+            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_base64))
+            return jsonify({"audio_url": audio_url.strip()})
 
     def check_auth(self, request):
         try:

@@ -13,7 +13,8 @@ class WorkerManager:
             "compute": [],
             "memory": [],
             "llama": [],
-            "stablelm": []
+            "stablelm": [],
+            "tts_bark": [],
         }
         self.queue_manager = None
 
