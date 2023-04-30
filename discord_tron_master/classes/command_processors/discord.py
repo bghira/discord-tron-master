@@ -44,7 +44,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             if "audio_data" in arguments:
                 if arguments["audio_data"] is not None:
                     logging.debug(f"Incoming message had audio data. Embedding as a file.")
-                    file=get_audio_file(arguments["audio_data"])
+                    file=await get_audio_file(arguments["audio_data"])
             await channel.send(content=arguments["message"], file=file, embeds=embeds)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
