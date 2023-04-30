@@ -66,7 +66,7 @@ class API:
             logging.debug("authorize endpoint hit")
             client_id = request.json.get("client_id")
             api_key = request.json.get("api_key")
-            
+            logging.debug(f"Received {client_id} client_id and {api_key} api_key")
             if not all([client_id, api_key]):
                 return jsonify({"error": "client_id and api_key are required"}), 400
 
