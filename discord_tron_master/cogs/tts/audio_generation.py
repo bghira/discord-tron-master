@@ -83,7 +83,7 @@ class Audio_generation(commands.Cog):
             )
     async def list_available_languages(self, user_id=None, languages=None):
         if languages is None:
-            languages = LanguageHelper.languages
+            languages = Audio_generation.VOICES
         indicator = "**"  # Indicator variable
         indicator_length = len(indicator)
         max_columns = 5  # Maximum number of columns
