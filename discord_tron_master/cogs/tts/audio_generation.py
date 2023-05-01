@@ -23,24 +23,17 @@ class Audio_generation(commands.Cog):
         "en_speaker_0": "en_speaker_0",
         "en_speaker_3": "en_speaker_3", "en_speaker_4": "en_speaker_4", "en_speaker_5": "en_speaker_5", "en_speaker_6": "en_speaker_6", "en_speaker_7": "en_speaker_7", "en_speaker_8": "en_speaker_8", "en_speaker_9": "en_speaker_9", "en_british": "en_british","en_deadpan": "en_deadpan","en_female_intense": "en_female_intense",
         "en_female_professional_reader": "en_female_professional_reader","en_female_storyteller": "en_female_storyteller",
-
         "es_speaker_0": "es_speaker_0", "es_speaker_3": "es_speaker_3", "es_speaker_4": "es_speaker_4", "es_speaker_5": "es_speaker_5", "es_speaker_6": "es_speaker_6", "es_speaker_7": "es_speaker_7", "es_speaker_8": "es_speaker_8", "es_speaker_9": "es_speaker_9",
-
         # Weird, needs more investigation:
         "cool_duo": "cool_duo", "en_guitar": "en_guitar",
         "classic_robot_tts": "classic_robot_tts",
-
-        # Unchecked:
         "en_german_professor": "en_german_professor","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
-
         "it_speaker_2": "it_speaker_2","it_speaker_5": "it_speaker_5","it_speaker_6": "it_speaker_6","it_speaker_7": "it_speaker_7","it_speaker_8": "it_speaker_8","it_speaker_9": "it_speaker_9",
-
-        "ja_speaker_0": "ja_speaker_0", "ja_speaker_1": "ja_speaker_1", "ja_speaker_3": "ja_speaker_3", "ja_speaker_4": "ja_speaker_4"
-
+        "ja_speaker_0": "ja_speaker_0", "ja_speaker_1": "ja_speaker_1", "ja_speaker_3": "ja_speaker_3", "ja_speaker_4": "ja_speaker_4",
         "ko_speaker_1": "ko_speaker_1", "ko_speaker_3": "ko_speaker_3", "ko_speaker_7": "ko_speaker_7", "ko_speaker_8": "ko_speaker_8", "ko_speaker_9": "ko_speaker_9",
-
         "kpop_acoustic": "kpop_acoustic",
         "music_off_the_rails": "music_off_the_rails",
+        # Unchecked:
         "pl_speaker_0": "pl_speaker_0", "pl_speaker_1": "pl_speaker_1", "pl_speaker_2": "pl_speaker_2", "pl_speaker_3": "pl_speaker_3", "pl_speaker_4": "pl_speaker_4", "pl_speaker_5": "pl_speaker_5", "pl_speaker_6": "pl_speaker_6", "pl_speaker_7": "pl_speaker_7", "pl_speaker_8": "pl_speaker_8", "pl_speaker_9": "pl_speaker_9",
         "pt_speaker_0": "pt_speaker_0", "pt_speaker_1": "pt_speaker_1", "pt_speaker_2": "pt_speaker_2", "pt_speaker_3": "pt_speaker_3", "pt_speaker_4": "pt_speaker_4", "pt_speaker_5": "pt_speaker_5", "pt_speaker_6": "pt_speaker_6", "pt_speaker_7": "pt_speaker_7", "pt_speaker_8": "pt_speaker_8", "pt_speaker_9": "pt_speaker_9",
         "rock_maybe": "rock_maybe",
