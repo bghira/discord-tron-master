@@ -87,7 +87,7 @@ class Audio_generation(commands.Cog):
     def list_available_languages(self, languages=None):
         if languages is None:
             languages = Audio_generation.VOICES
-        min_entities = 3
+        min_entities = 6
         max_entities = 12
         grouped_languages = {}
         misc_group = []
