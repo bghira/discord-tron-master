@@ -30,7 +30,6 @@ facts = [
     "polar bears have black skin to better absorb the sun's warmth",
     "sharks have been around for over 400 million years, which is longer than trees",
     "slugs have four noses",
-    "a cop once fucked my sister"
     "some plants can \"hear\" when they are being eaten and respond defensively",
     "spiders are not insects; they belong to the arachnid family",
     "the average person produces enough saliva in their lifetime to fill two swimming pools",
