@@ -87,7 +87,7 @@ class Audio_generation(commands.Cog):
     def list_available_languages(self, languages=None):
         if languages is None:
             languages = Audio_generation.VOICES
-        min_entities = 2
+        min_entities = 3
         max_entities = 16
         grouped_languages = {}
         misc_group = []
@@ -113,7 +113,7 @@ class Audio_generation(commands.Cog):
             grouped_languages["misc"] = misc_group
 
         # Split the grouped languages into blocks of 5 columns
-        max_columns = 3
+        max_columns = 4
         language_blocks = [dict(list(grouped_languages.items())[i:i + max_columns]) for i in range(0, len(grouped_languages), max_columns)]
 
         output = []
