@@ -35,6 +35,7 @@ DEFAULT_USER_CONFIG = {
     "scheduler": "default",
     "steps": 100,
     "gpt_role": "You are a Discord bot.",
+    "tts_voice": "en_fiery",
     "temperature": 0.9,
     "repeat_penalty": 1.1,
     "top_p": 0.95,

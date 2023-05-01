@@ -64,6 +64,7 @@ class Settings(commands.Cog):
 
         model_id = user_config.get("model")
         steps = self.config.get_user_setting(user_id, "steps")
+        tts_voice = self.config.get_user_setting(user_id, "tts_voice")
         strength = self.config.get_user_setting(user_id, "strength")
         guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
 
@@ -108,6 +109,7 @@ class Settings(commands.Cog):
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}settings negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of each image prompt. Set via `{self.config.get_command_prefix()}settings positive`.\n"
             f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Set a bot persona. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
+            f"🟠 **TTS Voice:**:\n➡️  `{tts_voice}`\n❓ `!tts` voice. Use `{self.config.get_command_prefix()}tts-voices` and `{self.config.get_command_prefix()}tts-voice [new voice]`.\n"
             f"🟠 **Temperature**: `{temperature}` **Default**: `1.0`\n❓ The higher the temperature, the more random the txt2txt becomes. Lower values become more deterministic.\n"
             f"🟠 **Repeat penalty**: `{repeat_penalty}` **Default**: `1.1`\n❓ Penalize repeating tokens during text generation. Encourages diverse responses.\n"
             f"🟠 **Max tokens**: `{max_tokens}` **Default**: `2048`\n❓ How many tokens to limit LLM output to. Encourages quicker replies.\n"
