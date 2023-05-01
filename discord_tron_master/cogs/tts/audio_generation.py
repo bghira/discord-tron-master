@@ -73,7 +73,7 @@ class Audio_generation(commands.Cog):
                 f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
             )
     @commands.command(name="tts-voices", help="List the available TTS voices.")
-    async def tts_voice_list(self, ctx, *, prompt):
+    async def tts_voice_list(self, ctx):
         try:
             available_languages = self.list_available_languages()
             await discord.send_large_message(ctx=ctx, text="Available languages:\n" + available_languages)
