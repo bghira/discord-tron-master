@@ -83,7 +83,7 @@ class Audio_generation(commands.Cog):
             )
     async def list_available_languages(self, user_id=None, languages=None):
         if languages is None:
-            languages = Audio_generation.VOICES
+            languages = LanguageHelper.languages
         indicator = "**"  # Indicator variable
         indicator_length = len(indicator)
         max_columns = 5  # Maximum number of columns
@@ -111,7 +111,7 @@ class Audio_generation(commands.Cog):
                             current_language_indicator = indicator
                     lang_str = current_language_indicator + lang + current_language_indicator
                     row_text += lang_str.ljust(max_field_widths[0]) + " | "
-                language_list += row_text + "\n"
+                language_list += row_text + "\n" + separator_row
             # Wrap the output in triple backticks for fixed-width formatting in Discord
             output += f"```\n{language_list}\n```\n"
         return output
