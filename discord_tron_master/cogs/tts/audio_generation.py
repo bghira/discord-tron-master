@@ -22,31 +22,30 @@ class Audio_generation(commands.Cog):
         "de_speaker_0": "de_speaker_0","de_speaker_1": "de_speaker_1","de_speaker_2": "de_speaker_2","de_speaker_5": "de_speaker_5","de_speaker_7": "de_speaker_7","de_speaker_9": "de_speaker_9",
         "en_speaker_0": "en_speaker_0",
         "en_speaker_3": "en_speaker_3", "en_speaker_4": "en_speaker_4", "en_speaker_5": "en_speaker_5", "en_speaker_6": "en_speaker_6", "en_speaker_7": "en_speaker_7", "en_speaker_8": "en_speaker_8", "en_speaker_9": "en_speaker_9", "en_british": "en_british","en_deadpan": "en_deadpan","en_female_intense": "en_female_intense",
+        "en_german_professor": "en_german_professor","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
         "en_female_professional_reader": "en_female_professional_reader","en_female_storyteller": "en_female_storyteller",
         "es_speaker_0": "es_speaker_0", "es_speaker_3": "es_speaker_3", "es_speaker_4": "es_speaker_4", "es_speaker_5": "es_speaker_5", "es_speaker_6": "es_speaker_6", "es_speaker_7": "es_speaker_7", "es_speaker_8": "es_speaker_8", "es_speaker_9": "es_speaker_9",
-        # Weird, needs more investigation:
-        "cool_duo": "cool_duo", "en_guitar": "en_guitar",
-        "classic_robot_tts": "classic_robot_tts",
-        "en_german_professor": "en_german_professor","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
+        "zh_speaker_0": "zh_speaker_0","zh_speaker_1": "zh_speaker_1","zh_speaker_3": "zh_speaker_3","zh_speaker_4": "zh_speaker_4","zh_speaker_5": "zh_speaker_5","zh_speaker_6": "zh_speaker_6",
         "it_speaker_2": "it_speaker_2","it_speaker_5": "it_speaker_5","it_speaker_6": "it_speaker_6","it_speaker_7": "it_speaker_7","it_speaker_8": "it_speaker_8","it_speaker_9": "it_speaker_9",
         "ja_speaker_0": "ja_speaker_0", "ja_speaker_1": "ja_speaker_1", "ja_speaker_3": "ja_speaker_3", "ja_speaker_4": "ja_speaker_4",
         "ko_speaker_1": "ko_speaker_1", "ko_speaker_3": "ko_speaker_3", "ko_speaker_7": "ko_speaker_7", "ko_speaker_8": "ko_speaker_8", "ko_speaker_9": "ko_speaker_9",
+        "pl_speaker_3": "pl_speaker_3", "pl_speaker_4": "pl_speaker_4", "pl_speaker_7": "pl_speaker_7",
+        "pt_speaker_3": "pt_speaker_3", "pt_speaker_4": "pt_speaker_4", "pt_speaker_5": "pt_speaker_5", "pt_speaker_6": "pt_speaker_6",
+        "ru_speaker_2": "ru_speaker_2", "ru_speaker_3": "ru_speaker_3", "ru_speaker_7": "ru_speaker_7",
         "kpop_acoustic": "kpop_acoustic",
         "music_off_the_rails": "music_off_the_rails",
+        # Weird, needs more investigation:
+        "cool_duo": "cool_duo", "en_guitar": "en_guitar",
+        "classic_robot_tts": "classic_robot_tts",
         # Unchecked:
-        "pl_speaker_0": "pl_speaker_0", "pl_speaker_1": "pl_speaker_1", "pl_speaker_2": "pl_speaker_2", "pl_speaker_3": "pl_speaker_3", "pl_speaker_4": "pl_speaker_4", "pl_speaker_5": "pl_speaker_5", "pl_speaker_6": "pl_speaker_6", "pl_speaker_7": "pl_speaker_7", "pl_speaker_8": "pl_speaker_8", "pl_speaker_9": "pl_speaker_9",
-        "pt_speaker_0": "pt_speaker_0", "pt_speaker_1": "pt_speaker_1", "pt_speaker_2": "pt_speaker_2", "pt_speaker_3": "pt_speaker_3", "pt_speaker_4": "pt_speaker_4", "pt_speaker_5": "pt_speaker_5", "pt_speaker_6": "pt_speaker_6", "pt_speaker_7": "pt_speaker_7", "pt_speaker_8": "pt_speaker_8", "pt_speaker_9": "pt_speaker_9",
         "rock_maybe": "rock_maybe",
-        "ru_speaker_0": "ru_speaker_0", "ru_speaker_1": "ru_speaker_1", "ru_speaker_2": "ru_speaker_2", "ru_speaker_3": "ru_speaker_3", "ru_speaker_4": "ru_speaker_4", "ru_speaker_5": "ru_speaker_5", "ru_speaker_6": "ru_speaker_6", "ru_speaker_7": "ru_speaker_7", "ru_speaker_8": "ru_speaker_8", "ru_speaker_9": "ru_speaker_9",
         "sing1": "sing1", "sing2": "sing2", "sing_3": "sing_3",
         "snarky_but_noisy": "snarky_but_noisy", "snarky_narrator_but_noisy": "snarky_narrator_but_noisy",
-        "speaker_0": "speaker_0", "speaker_1": "speaker_1", "speaker_2": "speaker_2", "speaker_3": "speaker_3", "speaker_4": "speaker_4", "speaker_5": "speaker_5", "speaker_6": "speaker_6", "speaker_7": "speaker_7", "speaker_8": "speaker_8", "speaker_9": "speaker_9",
+        "speaker_2": "speaker_2", "speaker_3": "speaker_3",
         "talkradio": "talkradio",
         "timid_jane": "timid_jane",
-        "tr_speaker_0": "tr_speaker_0", "tr_speaker_1": "tr_speaker_1", "tr_speaker_2": "tr_speaker_2", "tr_speaker_3": "tr_speaker_3", "tr_speaker_4": "tr_speaker_4", "tr_speaker_5": "tr_speaker_5", "tr_speaker_6": "tr_speaker_6", "tr_speaker_7": "tr_speaker_7", "tr_speaker_8": "tr_speaker_8", "tr_speaker_9": "tr_speaker_9",
         "weirdvibes2": "weirdvibes2",
         "weirdvibes": "weirdvibes",
-        "zh_speaker_0": "zh_speaker_0","zh_speaker_1": "zh_speaker_1","zh_speaker_2": "zh_speaker_2","zh_speaker_3": "zh_speaker_3","zh_speaker_4": "zh_speaker_4","zh_speaker_5": "zh_speaker_5","zh_speaker_6": "zh_speaker_6","zh_speaker_7": "zh_speaker_7","zh_speaker_8": "zh_speaker_8","zh_speaker_9": "zh_speaker_9"
     }
     @commands.command(name="t", help="An alias for `!tts`")
     async def t(self, ctx, *, prompt):
