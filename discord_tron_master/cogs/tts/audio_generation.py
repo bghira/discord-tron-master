@@ -94,7 +94,7 @@ class Audio_generation(commands.Cog):
             end_index = min((block + 1) * max_columns, len(languages))
             block_languages = list(languages)[start_index:end_index]
             # Calculate the maximum number of rows for the table
-            max_rows = len(block_languages)
+            max_rows = (len(block_languages) + max_columns - 1) // max_columns
             # Calculate the maximum field text width for each column, including the indicator
             max_field_widths = [max(len(lang) + 2 * indicator_length for lang in block_languages)]
             # Generate language list in Markdown columns with padding
@@ -103,7 +103,8 @@ class Audio_generation(commands.Cog):
             language_list = header_row + separator_row
             for i in range(max_rows):
                 row_text = "| "
-                for lang in block_languages:
+                for j in range(i, len(block_languages), max_rows):
+                    lang = block_languages[j]
                     current_language_indicator = ""
                     if user_id is not None:
                         user_language = config.get_user_setting(user_id, "language")
