@@ -75,7 +75,7 @@ class Audio_generation(commands.Cog):
     @commands.command(name="tts-voices", help="List the available TTS voices.")
     async def tts_voice_list(self, ctx):
         try:
-            available_languages = self.list_available_languages()
+            available_languages = await self.list_available_languages()
             await discord.send_large_message(ctx=ctx, text="Available languages:\n" + available_languages)
         except Exception as e:
             await ctx.send(
