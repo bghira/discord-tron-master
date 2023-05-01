@@ -98,6 +98,11 @@ class Audio_generation(commands.Cog):
                     prefix = f"more_{prefix}"
                     if prefix not in grouped_languages:
                         grouped_languages[prefix] = []
+                    else:
+                        if len(grouped_languages[prefix]) > max_entities:
+                            prefix = f"more{prefix}"
+                            if prefix not in grouped_languages:
+                                grouped_languages[prefix] = []
             grouped_languages[prefix].append(lang)
 
         # Move single-item groups to the miscellaneous group
