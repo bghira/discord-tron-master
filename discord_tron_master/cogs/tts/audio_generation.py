@@ -14,20 +14,31 @@ class Audio_generation(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
     VOICES = {
+        # Checked and filtered:
+        "fr_speaker_1": "fr_speaker_1", "fr_speaker_3": "fr_speaker_3", "fr_speaker_4": "fr_speaker_4",
+        "hi_speaker_1": "hi_speaker_1", "hi_speaker_5": "hi_speaker_5", "hi_speaker_8": "hi_speaker_8", "hi_speaker_9": "hi_speaker_9",
         "announcer": "announcer",
         "cartoon_extreme": "cartoon_extreme",
+        "de_speaker_0": "de_speaker_0","de_speaker_1": "de_speaker_1","de_speaker_2": "de_speaker_2","de_speaker_5": "de_speaker_5","de_speaker_7": "de_speaker_7","de_speaker_9": "de_speaker_9",
+        "en_speaker_0": "en_speaker_0",
+        "en_speaker_3": "en_speaker_3", "en_speaker_4": "en_speaker_4", "en_speaker_5": "en_speaker_5", "en_speaker_6": "en_speaker_6", "en_speaker_7": "en_speaker_7", "en_speaker_8": "en_speaker_8", "en_speaker_9": "en_speaker_9", "en_british": "en_british","en_deadpan": "en_deadpan","en_female_intense": "en_female_intense",
+        "en_female_professional_reader": "en_female_professional_reader","en_female_storyteller": "en_female_storyteller",
+
+        "es_speaker_0": "es_speaker_0", "es_speaker_3": "es_speaker_3", "es_speaker_4": "es_speaker_4", "es_speaker_5": "es_speaker_5", "es_speaker_6": "es_speaker_6", "es_speaker_7": "es_speaker_7", "es_speaker_8": "es_speaker_8", "es_speaker_9": "es_speaker_9",
+
+        # Weird, needs more investigation:
+        "cool_duo": "cool_duo", "en_guitar": "en_guitar",
         "classic_robot_tts": "classic_robot_tts",
-        "cool_duo": "cool_duo",
-        "de_speaker_0": "de_speaker_0","de_speaker_1": "de_speaker_1","de_speaker_2": "de_speaker_2","de_speaker_3": "de_speaker_3","de_speaker_4": "de_speaker_4","de_speaker_5": "de_speaker_5","de_speaker_6": "de_speaker_6","de_speaker_7": "de_speaker_7","de_speaker_8": "de_speaker_8","de_speaker_9": "de_speaker_9", "en_speaker_0": "en_speaker_0",
-        "en_speaker_1": "en_speaker_1", "en_speaker_2": "en_speaker_2", "en_speaker_3": "en_speaker_3", "en_speaker_4": "en_speaker_4", "en_speaker_5": "en_speaker_5", "en_speaker_6": "en_speaker_6", "en_speaker_7": "en_speaker_7", "en_speaker_8": "en_speaker_8", "en_speaker_9": "en_speaker_9", "en_british": "en_british","en_deadpan": "en_deadpan","en_female_intense": "en_female_intense",
-        "en_female_professional_reader": "en_female_professional_reader","en_female_slow_talker": "en_female_slow_talker","en_female_storyteller": "en_female_storyteller",
-        "en_german_professor": "en_german_professor","en_guitar": "en_guitar","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
-        "es_speaker_0": "es_speaker_0", "es_speaker_1": "es_speaker_1", "es_speaker_2": "es_speaker_2", "es_speaker_3": "es_speaker_3", "es_speaker_4": "es_speaker_4", "es_speaker_5": "es_speaker_5", "es_speaker_6": "es_speaker_6", "es_speaker_7": "es_speaker_7", "es_speaker_8": "es_speaker_8", "es_speaker_9": "es_speaker_9",
-        "fr_speaker_0": "fr_speaker_0", "fr_speaker_1": "fr_speaker_1", "fr_speaker_2": "fr_speaker_2", "fr_speaker_3": "fr_speaker_3", "fr_speaker_4": "fr_speaker_4", "fr_speaker_5": "fr_speaker_5", "fr_speaker_6": "fr_speaker_6", "fr_speaker_7": "fr_speaker_7", "fr_speaker_8": "fr_speaker_8", "fr_speaker_9": "fr_speaker_9",
-        "hi_speaker_0": "hi_speaker_0", "hi_speaker_1": "hi_speaker_1", "hi_speaker_2": "hi_speaker_2", "hi_speaker_3": "hi_speaker_3", "hi_speaker_4": "hi_speaker_4", "hi_speaker_5": "hi_speaker_5", "hi_speaker_6": "hi_speaker_6", "hi_speaker_7": "hi_speaker_7", "hi_speaker_8": "hi_speaker_8", "hi_speaker_9": "hi_speaker_9",
-        "it_speaker_0": "it_speaker_0","it_speaker_1": "it_speaker_1","it_speaker_2": "it_speaker_2","it_speaker_3": "it_speaker_3","it_speaker_4": "it_speaker_4","it_speaker_5": "it_speaker_5","it_speaker_6": "it_speaker_6","it_speaker_7": "it_speaker_7","it_speaker_8": "it_speaker_8","it_speaker_9": "it_speaker_9",
-        "ja_speaker_0": "ja_speaker_0", "ja_speaker_1": "ja_speaker_1", "ja_speaker_2": "ja_speaker_2", "ja_speaker_3": "ja_speaker_3", "ja_speaker_4": "ja_speaker_4", "ja_speaker_5": "ja_speaker_5", "ja_speaker_6": "ja_speaker_6", "ja_speaker_7": "ja_speaker_7", "ja_speaker_8": "ja_speaker_8", "ja_speaker_9": "ja_speaker_9",
-        "ko_speaker_0": "ko_speaker_0", "ko_speaker_1": "ko_speaker_1", "ko_speaker_2": "ko_speaker_2", "ko_speaker_3": "ko_speaker_3", "ko_speaker_4": "ko_speaker_4", "ko_speaker_5": "ko_speaker_5", "ko_speaker_6": "ko_speaker_6", "ko_speaker_7": "ko_speaker_7", "ko_speaker_8": "ko_speaker_8", "ko_speaker_9": "ko_speaker_9",
+
+        # Unchecked:
+        "en_german_professor": "en_german_professor","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
+
+        "it_speaker_2": "it_speaker_2","it_speaker_5": "it_speaker_5","it_speaker_6": "it_speaker_6","it_speaker_7": "it_speaker_7","it_speaker_8": "it_speaker_8","it_speaker_9": "it_speaker_9",
+
+        "ja_speaker_0": "ja_speaker_0", "ja_speaker_1": "ja_speaker_1", "ja_speaker_3": "ja_speaker_3", "ja_speaker_4": "ja_speaker_4"
+
+        "ko_speaker_1": "ko_speaker_1", "ko_speaker_3": "ko_speaker_3", "ko_speaker_7": "ko_speaker_7", "ko_speaker_8": "ko_speaker_8", "ko_speaker_9": "ko_speaker_9",
+
         "kpop_acoustic": "kpop_acoustic",
         "music_off_the_rails": "music_off_the_rails",
         "pl_speaker_0": "pl_speaker_0", "pl_speaker_1": "pl_speaker_1", "pl_speaker_2": "pl_speaker_2", "pl_speaker_3": "pl_speaker_3", "pl_speaker_4": "pl_speaker_4", "pl_speaker_5": "pl_speaker_5", "pl_speaker_6": "pl_speaker_6", "pl_speaker_7": "pl_speaker_7", "pl_speaker_8": "pl_speaker_8", "pl_speaker_9": "pl_speaker_9",
