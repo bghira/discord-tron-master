@@ -14,14 +14,13 @@ class Audio_generation(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
     VOICES = {
-        "default": "en_fiery",
         "announcer": "announcer",
         "cartoon_extreme": "cartoon_extreme",
         "classic_robot_tts": "classic_robot_tts",
         "cool_duo": "cool_duo",
         "de_speaker_0": "de_speaker_0","de_speaker_1": "de_speaker_1","de_speaker_2": "de_speaker_2","de_speaker_3": "de_speaker_3","de_speaker_4": "de_speaker_4","de_speaker_5": "de_speaker_5","de_speaker_6": "de_speaker_6","de_speaker_7": "de_speaker_7","de_speaker_8": "de_speaker_8","de_speaker_9": "de_speaker_9", "en_speaker_0": "en_speaker_0",
         "en_speaker_1": "en_speaker_1", "en_speaker_2": "en_speaker_2", "en_speaker_3": "en_speaker_3", "en_speaker_4": "en_speaker_4", "en_speaker_5": "en_speaker_5", "en_speaker_6": "en_speaker_6", "en_speaker_7": "en_speaker_7", "en_speaker_8": "en_speaker_8", "en_speaker_9": "en_speaker_9", "en_british": "en_british","en_deadpan": "en_deadpan","en_female_intense": "en_female_intense",
-        "en_female_professional_reader": "en_female_professional_reader","en_female_slow_talker": "en_female_slow_talker","en_female_storyteller": "en_female_storyteller","en_fiery": "en_fiery",
+        "en_female_professional_reader": "en_female_professional_reader","en_female_slow_talker": "en_female_slow_talker","en_female_storyteller": "en_female_storyteller",
         "en_german_professor": "en_german_professor","en_guitar": "en_guitar","en_interesting_tone": "en_interesting_tone","en_male_nervous_subdued": "en_male_nervous_subdued","en_male_professional_reader": "en_male_professional_reader","en_man_giving_ted_talk": "en_man_giving_ted_talk","en_narrator_deep": "en_narrator_deep","en_narrator_light_bg": "en_narrator_light_bg","en_old_movie_actor": "en_old_movie_actor","en_public_speaker_2": "en_public_speaker_2","en_public_speaker": "en_public_speaker","en_quiet_intense": "en_quiet_intense","en_smooth_gruff": "en_smooth_gruff","en_solo_singer": "en_solo_singer",  "en_tv_commercial": "en_tv_commercial",
         "es_speaker_0": "es_speaker_0", "es_speaker_1": "es_speaker_1", "es_speaker_2": "es_speaker_2", "es_speaker_3": "es_speaker_3", "es_speaker_4": "es_speaker_4", "es_speaker_5": "es_speaker_5", "es_speaker_6": "es_speaker_6", "es_speaker_7": "es_speaker_7", "es_speaker_8": "es_speaker_8", "es_speaker_9": "es_speaker_9",
         "fr_speaker_0": "fr_speaker_0", "fr_speaker_1": "fr_speaker_1", "fr_speaker_2": "fr_speaker_2", "fr_speaker_3": "fr_speaker_3", "fr_speaker_4": "fr_speaker_4", "fr_speaker_5": "fr_speaker_5", "fr_speaker_6": "fr_speaker_6", "fr_speaker_7": "fr_speaker_7", "fr_speaker_8": "fr_speaker_8", "fr_speaker_9": "fr_speaker_9",
