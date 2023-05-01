@@ -92,7 +92,7 @@ class Audio_generation(commands.Cog):
         for block in range(num_blocks):
             start_index = block * max_columns
             end_index = min((block + 1) * max_columns, len(languages))
-            block_languages = languages[start_index:end_index]
+            block_languages = list(languages)[start_index:end_index]
             # Calculate the maximum number of rows for the table
             max_rows = len(block_languages)
             # Calculate the maximum field text width for each column, including the indicator
