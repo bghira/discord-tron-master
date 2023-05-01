@@ -111,7 +111,7 @@ class Audio_generation(commands.Cog):
             grouped_languages["misc"] = misc_group
 
         # Split the grouped languages into blocks of 5 columns
-        max_columns = 5
+        max_columns = 3
         language_blocks = [dict(list(grouped_languages.items())[i:i + max_columns]) for i in range(0, len(grouped_languages), max_columns)]
 
         output = []
