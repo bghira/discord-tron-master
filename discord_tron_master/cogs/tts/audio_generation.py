@@ -74,45 +74,74 @@ class Audio_generation(commands.Cog):
             )
     @commands.command(name="tts-voices", help="List the available TTS voices.")
     async def tts_voice_list(self, ctx):
-        try:
-            available_languages = await self.list_available_languages()
-            await discord.send_large_message(ctx=ctx, text="Available languages:\n" + available_languages)
-        except Exception as e:
-            await ctx.send(
-                f"Error listing voices: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-            )
-    async def list_available_languages(self, user_id=None, languages=None):
+            try:
+                available_languages = self.list_available_languages()
+                for chunk in available_languages:
+                    await discord.send_large_message(ctx=ctx, text=chunk)
+            except Exception as e:
+                await ctx.send(
+                    f"Error listing voices: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                )
+    def list_available_languages(self, languages=None):
         if languages is None:
             languages = Audio_generation.VOICES
-        indicator = "**"  # Indicator variable
-        indicator_length = len(indicator)
-        max_columns = 5  # Maximum number of columns
-        num_blocks = (len(languages) + max_columns - 1) // max_columns
-        output = ""
-        for block in range(num_blocks):
-            start_index = block * max_columns
-            end_index = min((block + 1) * max_columns, len(languages))
-            block_languages = list(languages)[start_index:end_index]
-            # Calculate the maximum number of rows for the table
-            max_rows = (len(block_languages) + max_columns - 1) // max_columns
-            # Calculate the maximum field text width for each column, including the indicator
-            max_field_widths = [max(len(lang) + 2 * indicator_length for lang in block_languages)]
-            # Generate language list in Markdown columns with padding
-            header_row = "| " + " | ".join(lang.ljust(max_field_widths[0]) for lang in block_languages) + " |\n"
-            separator_row = "+-" + "-+-".join("-" * (max_field_widths[0]) for _ in block_languages) + "-+\n"
+        min_entities = 2
+        max_entities = 16
+        grouped_languages = {}
+        misc_group = []
+
+        for lang in languages:
+            prefix = lang.split("_")[0]
+            if prefix not in grouped_languages:
+                grouped_languages[prefix] = []
+            else:
+                if len(grouped_languages[prefix]) > max_entities:
+                    prefix = f"more_{prefix}"
+                    if prefix not in grouped_languages:
+                        grouped_languages[prefix] = []
+            grouped_languages[prefix].append(lang)
+
+        # Move single-item groups to the miscellaneous group
+        for prefix, voices in list(grouped_languages.items()):
+            if len(voices) < min_entities:
+                misc_group.extend(voices)
+                del grouped_languages[prefix]
+
+        if misc_group:
+            grouped_languages["misc"] = misc_group
+
+        # Split the grouped languages into blocks of 5 columns
+        max_columns = 5
+        language_blocks = [dict(list(grouped_languages.items())[i:i + max_columns]) for i in range(0, len(grouped_languages), max_columns)]
+
+        output = []
+
+        for block in language_blocks:
+            # Get the maximum number of rows
+            max_rows = max(len(voices) for voices in block.values())
+
+            # Calculate the maximum field text width for each column
+            max_field_widths = {}
+            for prefix, voices in block.items():
+                max_field_widths[prefix] = max(len(lang) for lang in voices) + 4
+
+            # Create the header row
+            header_row = "| " + " | ".join(prefix.ljust(max_field_widths[prefix]) for prefix in block.keys()) + " |\n"
+
+            # Create the separator row
+            separator_row = "+-" + "-+-".join("-" * max_field_widths[prefix] for prefix in block.keys()) + "-+\n"
+
             language_list = header_row + separator_row
+
             for i in range(max_rows):
                 row_text = "| "
-                for j in range(i, len(block_languages), max_rows):
-                    lang = block_languages[j]
-                    current_language_indicator = ""
-                    if user_id is not None:
-                        user_language = config.get_user_setting(user_id, "language")
-                        if user_language is not None and user_language == lang:
-                            current_language_indicator = indicator
-                    lang_str = current_language_indicator + lang + current_language_indicator
-                    row_text += lang_str.ljust(max_field_widths[0]) + " | "
-                language_list += row_text + "\n" + separator_row
-            # Wrap the output in triple backticks for fixed-width formatting in Discord
-            output += f"```\n{language_list}\n```\n"
+                for prefix, voices in block.items():
+                    if i < len(voices):
+                        lang = voices[i]
+                        row_text += lang.ljust(max_field_widths[prefix]) + " | "
+                    else:
+                        row_text += " ".ljust(max_field_widths[prefix]) + " | "
+                language_list += row_text + "\n"
+
+            output.append(f"```\n{language_list}\n```")
         return output
