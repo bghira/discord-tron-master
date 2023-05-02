@@ -207,5 +207,6 @@ class Audio_generation(commands.Cog):
         output = ""
         for actor in actors:
             output = output + f"        `{actor}`: `{actors[actor]['voice']}`\n"
+            output = output + f"                   To use it in a prompt, on its own line, type" + " {`" + f"{actor}" + "}`: Hello, world!\n"
             
         return output
