@@ -91,12 +91,12 @@ class Audio_generation(commands.Cog):
             user_config = self.config.get_user_config(ctx.author.id)
             current_actors = user_config.get("tts_actors", {})
             if len(current_actors) > 0:
-                current_actor_text = f"You currently have {len(current_actors)} voice actor(s) set: {current_actors}"
+                current_actor_text = f"{len(current_actors)} voice actor(s) configured: {current_actors}"
             else:
-                current_actor_text = f"You currently have zero voice actors configured."
+                current_actor_text = f"Zero voice actors are configured."
             if actor is None:
                 sent_message = await ctx.send(
-                    f"Since no actor name was provided, here are your current actor settings: {current_actor_text}"
+                    f"{ctx.author.mention} Since no actor name was provided, here are your current actor settings:\n{current_actor_text}"
                 )
                 await sent_message.delete(delay=15)
                 return
@@ -201,4 +201,11 @@ class Audio_generation(commands.Cog):
                 language_list += row_text + "\n"
 
             output.append(f"```\n{language_list}\n```")
+        return output
+    
+    def list_actors(self, actors: dict):
+        output = ""
+        for actor in actors:
+            output = output + f"`{actor}`: `{actors[actor]['voice']}`\n"
+            
         return output
