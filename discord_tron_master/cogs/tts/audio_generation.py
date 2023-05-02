@@ -91,7 +91,7 @@ class Audio_generation(commands.Cog):
             user_config = self.config.get_user_config(ctx.author.id)
             current_actors = user_config.get("tts_actors", {})
             if len(current_actors) > 0:
-                current_actor_text = f"{len(current_actors)} voice actor(s) configured: {self.list_actors(current_actors)}"
+                current_actor_text = f"{len(current_actors)} voice actor(s) configured:\n{self.list_actors(current_actors)}"
             else:
                 current_actor_text = f"Zero voice actors are configured."
             if actor is None:
@@ -206,6 +206,6 @@ class Audio_generation(commands.Cog):
     def list_actors(self, actors: dict):
         output = ""
         for actor in actors:
-            output = output + f"`{actor}`: `{actors[actor]['voice']}`\n"
+            output = output + f"        `{actor}`: `{actors[actor]['voice']}`\n"
             
         return output
