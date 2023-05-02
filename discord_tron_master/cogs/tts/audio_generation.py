@@ -98,6 +98,7 @@ class Audio_generation(commands.Cog):
                 await ctx.send(
                     f"Since no actor name was provided, here are your current actor settings: {current_actor_text}"
                 )
+                return
             if voice is None:
                 if actor not in current_actors:
                     message_text = f"The actor '{actor}' is not currently defined for your profile. You must use `{config.get_command_prefix()}tts-voice {actor} <voice>` to define a voice for this actor."
