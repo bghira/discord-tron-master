@@ -95,9 +95,10 @@ class Audio_generation(commands.Cog):
             else:
                 current_actor_text = f"You currently have zero voice actors configured."
             if actor is None:
-                await ctx.send(
+                sent_message = await ctx.send(
                     f"Since no actor name was provided, here are your current actor settings: {current_actor_text}"
                 )
+                await sent_message.delete(delay=15)
                 return
             if voice is None:
                 if actor not in current_actors:
