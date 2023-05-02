@@ -124,6 +124,10 @@ class Audio_generation(commands.Cog):
             await ctx.send(
                 f"Error setting TTS voice: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
             )
+        
+        finally:
+            ctx.delete()
+
     @commands.command(name="tts-voices", help="List the available TTS voices.")
     async def tts_voice_list(self, ctx):
             try:
