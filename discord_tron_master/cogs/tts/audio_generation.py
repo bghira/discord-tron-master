@@ -74,6 +74,54 @@ class Audio_generation(commands.Cog):
             await ctx.send(
                 f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
             )
+
+    @commands.command(name="tts-voice", help="Set a voice for your whole TTS experience.")
+    async def tts_voice_set(self, ctx, *, voice):
+        try:
+            self.config.reload_config()
+            self.config.set_user_setting(ctx.author.id, "tts_voice", voice)
+        except Exception as e:
+            await ctx.send(
+                f"Error setting TTS voice: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+            )
+    @commands.command(name="actors", help="Configure specific voices for characters, allowing you to use {CHARACTER_NAME_HERE} as a string .")
+    async def tts_actors(self, ctx, actor = None, voice = None):
+        try:
+            self.config.reload_config()
+            user_config = self.config.get_user_config(ctx.author.id)
+            current_actors = user_config.get("tts_actors", {})
+            if len(current_actors) > 0:
+                current_actor_text = f"You currently have {len(current_actors)} voice actor(s) set: {current_actors}"
+            else:
+                current_actor_text = f"You currently have zero voice actors configured."
+            if actor is None:
+                await ctx.send(
+                    f"Since no actor name was provided, here are your current actor settings: {current_actor_text}"
+                )
+            if voice is None:
+                if actor not in current_actors:
+                    message_text = f"The actor '{actor}' is not currently defined for your profile. You must use `{config.get_command_prefix()}tts-voice {actor} <voice>` to define a voice for this actor."
+                else:
+                    message_text = f"The actor '{actor}' is currently configured to use `{current_actors[actor]}` for its voice."
+                sent_message = await ctx.send(message_text)
+                await sent_message.delete(delay=15)
+                return
+            current_actor = current_actors.get(actor, None)
+            if current_actor is None:
+                # Set the message up so that no actor becomes the default voice.
+                current_actor = {"voice": "default"}
+            old_voice = current_actor.get("voice", "default")
+            message_text = f"The actor '{actor} was set to use the `{old_voice}` voice, and will now use `{voice}`"
+            sent_message = await ctx.send(message_text)
+            await sent_message.delete(delay=15)
+            current_actor["voice"] = voice
+            current_actors[actor] = current_actor
+            self.config.set_user_setting(ctx.author.id, "tts_actors", current_actors)
+
+        except Exception as e:
+            await ctx.send(
+                f"Error setting TTS voice: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+            )
     @commands.command(name="tts-voices", help="List the available TTS voices.")
     async def tts_voice_list(self, ctx):
             try:
