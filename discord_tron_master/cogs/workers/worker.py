@@ -18,25 +18,26 @@ class Worker(commands.Cog):
         next_worker_llama = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="llama")
         next_worker_stablelm = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="stablelm")
         next_worker_stablevicuna = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="stablevicuna")
+        next_worker_bark = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="bark")
         next_worker_compute = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="compute")
         next_worker_memory = self.discord.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type="memory")
         message = "Worker status:\n"
         message = message + "```"
-        if next_worker_memory is not None:
+        if next_worker_gpu is not None:
             message = message + f"First GPU worker:     {next_worker_gpu.worker_id}\n"
             message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_gpu)) + " jobs in queue\n"
         else:
             message = message + "No GPU workers available.\n"
         message = message + "```"
         message = message + "```"
-        if next_worker_memory is not None:
+        if next_worker_stablelm is not None:
             message = message + f"First StableLM worker:     {next_worker_stablelm.worker_id}\n"
             message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_stablelm)) + " jobs in queue\n"
         else:
             message = message + "No StableLM workers available.\n"
         message = message + "```"
         message = message + "```"
-        if next_worker_memory is not None:
+        if next_worker_stablevicuna is not None:
             message = message + f"First StableVicuna worker:     {next_worker_stablevicuna.worker_id}\n"
             message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_stablevicuna)) + " jobs in queue\n"
         else:
@@ -49,7 +50,6 @@ class Worker(commands.Cog):
         else:
             message = message + "No Compute workers available.\n"
         message = message + "```"
-
         message = message + "```"
         if next_worker_llama is not None:
             message = message + f"First Llama worker:     {next_worker_llama.worker_id}\n"
@@ -57,7 +57,13 @@ class Worker(commands.Cog):
         else:
             message = message + "No Llama workers available.\n"
         message = message + "```"
-
+        message = message + "```"
+        if next_worker_bark is not None:
+            message = message + f"First Bark worker:     {next_worker_bark.worker_id}\n"
+            message = message + f"- " + str(self.discord.queue_manager.worker_queue_length(next_worker_bark)) + " jobs in queue\n"
+        else:
+            message = message + "No Bark workers available.\n"
+        message = message + "```"
         message = message + "```"
         if next_worker_memory is not None:
             message = message + f"First Memory worker:  {next_worker_memory.worker_id}\n"
