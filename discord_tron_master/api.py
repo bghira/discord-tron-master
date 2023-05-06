@@ -86,7 +86,6 @@ class API:
             if not token_data:
                 logging.debug(f"Could not find token_data for client_id {client_id} and user_id {user_id}")
                 return jsonify({"error": "No token data found"}), 401
-                
             new_token = self.auth.refresh_access_token(token_data)
 
             return jsonify({"access_token": new_token.to_dict()})

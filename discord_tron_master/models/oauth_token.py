@@ -24,8 +24,11 @@ class OAuthToken(db.Model):
         self.expires_in = expires_in or 3600
         self.issued_at = datetime.utcnow()
 
-    def is_expired(self):
-        return datetime.utcnow() > self.issued_at + timedelta(seconds=self.expires_in)
+    def is_expired(self, slop: float = .75):
+        # Reduce expiry time by 25% to account for clock drift and delays.
+        expires_in = self.expires_in * slop
+        test = datetime.utcnow() > self.issued_at + timedelta(seconds=expires_in)
+        return test
 
     def to_dict(self):
         return {
