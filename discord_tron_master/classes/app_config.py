@@ -47,6 +47,8 @@ DEFAULT_USER_CONFIG = {
     "model": "theintuitiveye/HARDblend",
     "negative_prompt": "child- childish- out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
     "positive_prompt": "(centred in frame) (widescreen) (seamless) (non-repeating) (8k) (sharp focus) (cinematic) (epic) (bokeh) (depth-of-field) (photorealistic) (highly detailed) (masterpiece) (trending on artstation) (trending on deviantart)",
+    "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",
+    "tile_positive": "best quality",
     "resolution": {
         "width": 512,
         "height": 768
