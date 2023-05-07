@@ -5,7 +5,7 @@ import logging, base64
 
 class PromptlessVariationJob(Job):
     def __init__(self, payload):
-        super().__init__("gpu", "image_variation", "promptless_variation", payload)
+        super().__init__("variation", "image_variation", "promptless_variation", payload)
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.

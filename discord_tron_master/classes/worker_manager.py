@@ -10,6 +10,7 @@ class WorkerManager:
         self.workers = {}  # {"worker_id": <Worker>, ...}
         self.workers_by_capability = {
             "gpu": [],
+            "variation": [],
             "compute": [],
             "memory": [],
             "llama": [],
