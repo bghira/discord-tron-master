@@ -101,7 +101,7 @@ class Auth:
         return token_data
 
     # An existing access_token can be updated.
-    def refresh_access_token(self, token_data, expires_in=None):
+    def refresh_access_token(self, token_data):
         logging.debug("Refreshing access token!")
         token_data.access_token = OAuthToken.make_token()
         logging.debug("Updating token for client_id: %s, user_id: %s, previous issued_at was %s" % (token_data.client_id, token_data.user_id, token_data.issued_at))
