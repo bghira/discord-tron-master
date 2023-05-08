@@ -24,17 +24,20 @@ class ResolutionHelper:
         {"width": 192, "height": 128, "speed_factor": 94},
         {"width": 384, "height": 256, "speed_factor": 76},
         {"width": 768, "height": 512, "speed_factor": 52},
+        {"width": 1152, "height": 768, "speed_factor": 40},
         {"width": 1536, "height": 1024, "speed_factor": 30, "default_max": True},
         {"width": 3072, "height": 2048, "speed_factor": 30},
         {"width": 6144, "height": 4096, "speed_factor": 30},
         # 16:9 aspect ratio
         {"width": 256, "height": 144, "speed_factor": 40},
         {"width": 512, "height": 288, "speed_factor": 40},
+
         {"width": 1024, "height": 576, "speed_factor": 40},
         {"width": 1280, "height": 720, "speed_factor": 30},
-        {"width": 1920, "height": 1080, "speed_factor": 30, "default_max": True},
-        {"width": 2160, "height": 1440, "speed_factor": 30},
-        {"width": 3840, "height": 2160, "speed_factor": 30},
+        {"width": 1440, "height": 810, "speed_factor": 20},
+        {"width": 1920, "height": 1080, "speed_factor": 20, "default_max": True},
+        {"width": 2160, "height": 1440, "speed_factor": 20},
+        {"width": 3840, "height": 2160, "speed_factor": 20},
     ]
 
     def is_valid_resolution(self, width, height):
