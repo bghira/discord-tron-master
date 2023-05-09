@@ -7,7 +7,7 @@ from discord_tron_master.classes.command_processors import discord as DiscordCom
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from io import BytesIO
 import io, asyncio
 from scipy.io.wavfile import read as read_wav
@@ -100,7 +100,12 @@ class API:
                 return jsonify({"error": "image is required"}), 400
 
             # Read the image and convert it to a base64-encoded string
-            img = Image.open(image.stream)
+            try:
+                img = Image.open(image.stream)
+            except UnidentifiedImageError as e:
+                logging.debug(f'Malformed image was supplied: {image.stream}')
+                logging.error(f"Could not open image: {e}")
+                return jsonify({"error": "Malformed image was supplied", "error_class": "UnidentifiedImageError"}), 400
             buffered = BytesIO()
             img.save(buffered, format="PNG")
             base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
