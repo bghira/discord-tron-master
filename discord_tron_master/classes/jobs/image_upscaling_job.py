@@ -13,7 +13,7 @@ class ImageUpscalingJob(Job):
         logging.info(f"Formatting message for img2img payload")
         logging.debug(f"{self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
-        user_config["model"] = 'stabilityai/stable-diffusion-x4-upscaler'
+        user_config["model"] = 'theinutitiveye/HARDblend'
         flask = AppConfig.get_flask()
         with flask.app_context():
             message = {
