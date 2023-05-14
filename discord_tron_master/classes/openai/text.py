@@ -42,7 +42,7 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print ONLY a random text-to-image prompt for Stable Diffusion using condensed keywords and plus++ to emphasise and minus-- to deemphasize."
+        prompt = f"Print ONLY a random text-to-image prompt for Stable Diffusion using condensed keywords and suffixes ++ to emphasize and -- to deemphasize."
         if theme is not None:
             prompt = prompt + '. Theme: ' + theme
         return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
