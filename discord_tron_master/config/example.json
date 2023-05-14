@@ -1,1 +1,34 @@
-{}
+{
+    "log_level": "INFO",
+    "concurrent_slots": 1,
+    "cmd_prefix": "!",
+    "websocket_hub": {
+        "host": "localhost",
+        "port": 6789,
+        "tls": true,
+        "protocol": "wss"
+    },
+    "openai_api": {
+        "api_key": null
+    },
+    "huggingface_api": {
+        "api_key": null
+    },
+    "discord": {
+        "api_key": null
+    },
+    "huggingface": {
+        "local_model_path": null
+    },
+    "users": {
+    },
+    "mysql": {
+        "user": "diffusion",
+        "password": null,
+        "hostname": "127.0.0.1",
+        "dbname": "diffusion_master"
+    },
+    "web_root": "/tmp/discord",
+    "tls_key_path": "discord_tron_master/config/server_key.pem",
+    "tls_pem_path": "discord_tron_master/config/server_cert.pem"
+}
