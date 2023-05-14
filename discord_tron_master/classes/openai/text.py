@@ -42,10 +42,10 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print ONLY a random image prompt for Stable Diffusion using condensed keywords and (grouped words) where concepts might be ambiguous without grouping."
+        prompt = f"Print ONLY a random text-to-image prompt for Stable Diffusion using condensed keywords and plus++ to emphasise and minus-- to deemphasize."
         if theme is not None:
             prompt = prompt + '. Theme: ' + theme
-        return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt, temperature=1.1)
+        return await self.turbo_completion("You are a Stable Diffusion Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
 
     async def discord_bot_response(self, prompt, ctx = None):
         user_role = self.discord_bot_role
