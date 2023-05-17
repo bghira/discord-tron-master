@@ -46,6 +46,7 @@ class Guilds:
     def get_guild_config(self, guild_id = None):
         self.reload_config()
         guild_config = self.config.get("guilds", {})
+        logging.debug(f'Guild config: {guild_config}')
         if guild_id is not None:
             guild_config = guild_config.get(str(guild_id), {})
             return self.merge_dicts(DEFAULT_GUILD_CONFIG, guild_config)
