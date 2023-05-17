@@ -2,8 +2,10 @@ from discord.ext import commands
 from asyncio import Lock
 from typing import List
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.guilds import Guilds as GuildConfig
 from discord_tron_master.models.transformers import Transformers
 import logging
+guild_config = GuildConfig()
 
 class Model(commands.Cog):
     def __init__(self, bot):
@@ -15,8 +17,13 @@ class Model(commands.Cog):
         user_id = ctx.author.id
         user_config = self.config.get_user_config(user_id=user_id)
         app = AppConfig.flask
+        allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
         with app.app_context():
             all_transformers = Transformers.get_all_approved()
+            for transformer in all_transformers:
+                if f'{transformer.model_owner}/{transformer.model_id}' not in allowed_models and allowed_models != []:
+                    all_transformers.remove(transformer)
+
         wrapper = "```"
         def build_transformer_output(transformer):
             cluster = f"{transformer.model_owner}/{transformer.model_id}: {transformer.description}\n" \
@@ -63,6 +70,19 @@ class Model(commands.Cog):
                     else:
                         message = "Successfully set the new description for " + str(model_id)
         await ctx.send(message)
+    @commands.command(name='model-allow', help="Allow a model from the list of available models. (Admin only)"):
+    async def model_allow(self, ctx, model_id):
+        # Is the user in the Image Admin role?
+        app = AppConfig.flask
+        is_admin = await self.is_admin(ctx)
+        if not is_admin:
+            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            return
+        allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
+        allowed_models.append(model_id)
+        guild_config.set_guild_allowed_models(ctx.guild.id, allowed_models)
+        await ctx.send('Model allowed.')
+
 
     @commands.command(name="model", help="Set your currently-used model.")
     async def model(self, ctx, full_model_name: str = None):
@@ -76,6 +96,11 @@ class Model(commands.Cog):
                 await ctx.send("You do not have a model set.")
             return
 
+        allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
+        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}' not in allowed_models:
+            await ctx.send("That model is not registered for use. To make your yucky images, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
+            return
+
         if "/" not in full_model_name:
             await ctx.send("Model name must be in the format `owner/model`.")
             return
@@ -84,7 +109,7 @@ class Model(commands.Cog):
             existing = Transformers.query.filter_by(model_id=new_model_id, model_owner=new_model_owner).first()
 
         if not existing:
-            await ctx.send("That model is not registered for use. To make your horse cock porn, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
+            await ctx.send("That model is not registered for use. To make your yucky images, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
             return
 
         await ctx.send("Your model is now set to: " + str(full_model_name))
@@ -92,6 +117,10 @@ class Model(commands.Cog):
 
     @commands.command(name="model-delete", help="Delete a model. Not available to non-admins.")
     async def model_delete(self, ctx, full_model_name: str):
+        if not guild_config.is_guild_home(ctx.guild.id):
+            await ctx.send('sorey bae we are not in Kansas anymore.')
+            return
+
         # Is the user in the Image Admin role?
         app = AppConfig.flask
         is_admin = await self.is_admin(ctx)
@@ -110,6 +139,9 @@ class Model(commands.Cog):
 
     @commands.command(name="model-add", help="Add a model to the list for approval.")
     async def model_add(self, ctx, full_model_name: str, model_type: str, *, description):
+        if not guild_config.is_guild_home(ctx.guild.id):
+            await ctx.send('sorey bae we are not in Kansas anymore.')
+            return
         app = AppConfig.flask
         with app.app_context():
             existing = Transformers.query.filter_by(model_id=full_model_name).first()
@@ -120,11 +152,6 @@ class Model(commands.Cog):
         if "/" not in full_model_name:
             await ctx.send("Model name must be in the format `owner/model`.")
             return
-        # Repo id must use alphanumeric chars or '-', '', '.', '--' and '..' are forbidden, '-' and '.' cannot start or end the name, max length is 96
-        # import re
-        # if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-_]{0,94}[a-zA-Z0-9]$', full_model_name):
-        #     await ctx.send("Model name must be alphanumeric.")
-        #     return
         # Is the model type valid?
         if model_type not in ["image", "text"]:
             await ctx.send("Model type must be either `image` or `text`.")

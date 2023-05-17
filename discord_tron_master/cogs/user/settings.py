@@ -1,6 +1,7 @@
 from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.guilds import Guilds as GuildConfig
 from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.resolution import ResolutionHelper
 from discord_tron_master.classes.text_replies import return_random as random_fact
@@ -8,6 +9,7 @@ import logging
 from discord_tron_master.bot import DiscordBot
 
 config = AppConfig()
+guild_config = GuildConfig()
 resolution_helper = ResolutionHelper()
 available_resolutions = resolution_helper.list_available_resolutions()
 
@@ -17,6 +19,13 @@ class Settings(commands.Cog):
         self.config = AppConfig()
 
     # Other commands in your user_commands cog...
+    @commands.command(name="home", help="Sets the home guild for this bot.  This is where the bot will have warm and fuzzy feelings.", hidden=True)
+    async def home_guild(self, ctx):
+        if not guild_config.is_guild_home_defined():
+            guild_config.set_(ctx.guild.id)
+            await ctx.send(f"Home guild set to {ctx.guild.name} ({ctx.guild.id}).")
+        else:
+            await ctx.send(f"Are you fucking lost?")
 
     @commands.command(name="settings", help="Shows your current settings.", hidden=False)
     async def my_settings(self, ctx, *args):
