@@ -29,7 +29,7 @@ class Model(commands.Cog):
                     logging.info(f'Removing {transformer.model_owner}/{transformer.model_id} from allowed model list, as, we have allowed models set.')
                 else:
                     logging.info(f'Not removing {transformer} from allowed model list.')
-                    all_transformers = f'{transformer.model_owner}/{transformer.model_id}'.lower()
+                    all_transformers.append(transformer)
                 idx += 1
             logging.debug(f'Transformers, post-filtration: {pre_filtration_transformers}')
 
