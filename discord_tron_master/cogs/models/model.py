@@ -70,7 +70,7 @@ class Model(commands.Cog):
                     else:
                         message = "Successfully set the new description for " + str(model_id)
         await ctx.send(message)
-    @commands.command(name='model-allow', help="Allow a model from the list of available models. (Admin only)"):
+    @commands.command(name='model-allow', help="Allow a model from the list of available models. (Admin only)")
     async def model_allow(self, ctx, model_id):
         # Is the user in the Image Admin role?
         app = AppConfig.flask
