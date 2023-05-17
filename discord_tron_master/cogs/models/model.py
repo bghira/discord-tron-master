@@ -106,10 +106,6 @@ class Model(commands.Cog):
             return
 
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
-        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}'.lower() not in allowed_models:
-            await ctx.send("That model is not registered for use. To make your yucky images, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
-            return
-
         if "/" not in full_model_name:
             await ctx.send("Model name must be in the format `owner/model`.")
             return
@@ -117,8 +113,12 @@ class Model(commands.Cog):
             new_model_id, new_model_owner = full_model_name.split('/')[1], full_model_name.split('/')[0]
             existing = Transformers.query.filter_by(model_id=new_model_id, model_owner=new_model_owner).first()
 
+        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}'.lower() not in allowed_models:
+            await ctx.send("That model is not registered for use. To make your 'awesome' images, or whatever, have an admin use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
+            return
+
         if not existing:
-            await ctx.send("That model is not registered for use. To make your yucky images, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
+            await ctx.send("That model is not registered for use. To make your 'awesome' images, or whatever, have an admin use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
             return
 
         await ctx.send("Your model is now set to: " + str(full_model_name))
