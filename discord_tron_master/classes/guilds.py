@@ -36,9 +36,9 @@ class Guilds:
     def get_config_value(self, value):
         self.reload_config()
         return self.config.get(value, None)
-    def set_config_value(self, value):
+    def set_config_value(self, key, value):
         self.reload_config()
-        self.config[value] = value
+        self.config[key] = value
         with open(self.config_path, "w") as config_file:
             logging.info(f"Saving config: {self.config}")
             json.dump(self.config, config_file, indent=4)
