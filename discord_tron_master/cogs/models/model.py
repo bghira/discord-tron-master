@@ -18,19 +18,20 @@ class Model(commands.Cog):
         user_config = self.config.get_user_config(user_id=user_id)
         app = AppConfig.flask
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
+        all_transformers = []
         logging.info(f'Allowed models: {allowed_models}')
         with app.app_context():
-            all_transformers = Transformers.get_all_approved()
-            logging.debug(f'Transformers: {all_transformers}')
+            pre_filtration_transformers = Transformers.get_all_approved()
+            logging.debug(f'Transformers: {pre_filtration_transformers}')
             idx = 0
-            for transformer in all_transformers:
+            for transformer in pre_filtration_transformers:
                 if f'{transformer.model_owner}/{transformer.model_id}'.lower() not in allowed_models and allowed_models != []:
                     logging.info(f'Removing {transformer.model_owner}/{transformer.model_id} from allowed model list, as, we have allowed models set.')
-                    del all_transformers[idx]
                 else:
                     logging.info(f'Not removing {transformer} from allowed model list.')
+                    all_transformers = f'{transformer.model_owner}/{transformer.model_id}'.lower()
                 idx += 1
-            logging.debug(f'Transformers, post-filtration: {all_transformers}')
+            logging.debug(f'Transformers, post-filtration: {pre_filtration_transformers}')
 
         wrapper = "```"
         def build_transformer_output(transformer):
