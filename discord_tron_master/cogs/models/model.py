@@ -23,7 +23,10 @@ class Model(commands.Cog):
             all_transformers = Transformers.get_all_approved()
             for transformer in all_transformers:
                 if f'{transformer.model_owner}/{transformer.model_id}'.lower() not in allowed_models and allowed_models != []:
+                    logging.info(f'Removing {transformer} from allowed model list, as, we have allowed models set.')
                     all_transformers.remove(transformer)
+                else:
+                    logging.info(f'Not removing {transformer} from allowed model list.')
 
         wrapper = "```"
         def build_transformer_output(transformer):
@@ -77,7 +80,7 @@ class Model(commands.Cog):
         app = AppConfig.flask
         is_admin = await self.is_admin(ctx)
         if not is_admin:
-            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            await ctx.send("sory bae, u must be admuin 😭😭😭")
             return
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
         allowed_models.append(model_id.lower())
@@ -98,7 +101,7 @@ class Model(commands.Cog):
             return
 
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
-        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}' not in allowed_models:
+        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}'.lower() not in allowed_models:
             await ctx.send("That model is not registered for use. To make your yucky images, or whatever, use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
             return
 
@@ -126,7 +129,7 @@ class Model(commands.Cog):
         app = AppConfig.flask
         is_admin = await self.is_admin(ctx)
         if not is_admin:
-            await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
+            await ctx.send("sory bae, u must be admin 😭😭😭")
             return
         logging.info("Deleting model!")
         try:
