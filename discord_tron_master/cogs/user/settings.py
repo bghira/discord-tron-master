@@ -22,7 +22,7 @@ class Settings(commands.Cog):
     @commands.command(name="home", help="Sets the home guild for this bot.  This is where the bot will have warm and fuzzy feelings.", hidden=True)
     async def home_guild(self, ctx):
         if not guild_config.is_guild_home_defined():
-            guild_config.set_(ctx.guild.id)
+            guild_config.set_guild_home(ctx.guild.id)
             await ctx.send(f"Home guild set to {ctx.guild.name} ({ctx.guild.id}).")
         else:
             await ctx.send(f"Are you fucking lost?")
