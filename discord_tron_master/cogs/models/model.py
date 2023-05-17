@@ -22,12 +22,14 @@ class Model(commands.Cog):
         with app.app_context():
             all_transformers = Transformers.get_all_approved()
             logging.debug(f'Transformers: {all_transformers}')
+            idx = 0
             for transformer in all_transformers:
                 if f'{transformer.model_owner}/{transformer.model_id}'.lower() not in allowed_models and allowed_models != []:
                     logging.info(f'Removing {transformer.model_owner}/{transformer.model_id} from allowed model list, as, we have allowed models set.')
-                    all_transformers.remove(transformer)
+                    del all_transformers[idx]
                 else:
                     logging.info(f'Not removing {transformer} from allowed model list.')
+                idx += 1
             logging.debug(f'Transformers, post-filtration: {all_transformers}')
 
         wrapper = "```"
