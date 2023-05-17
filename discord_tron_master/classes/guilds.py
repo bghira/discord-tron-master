@@ -2,7 +2,10 @@ import json, logging, os
 from pathlib import Path
 
 DEFAULT_CONFIG = {
-    "home_guild": None
+    "home_guild": None,
+    "guilds": {
+        
+    }
 }
 DEFAULT_GUILD_CONFIG = {
 }
@@ -54,7 +57,7 @@ class Guilds:
 
     def set_guild_config(self, guild_id, guild_config):
         self.reload_config()
-        self.config[guild_id] = guild_config
+        self.config["guilds"][guild_id] = guild_config
         with open(self.config_path, "w") as config_file:
             logging.info(f"Saving config: {self.config}")
             json.dump(self.config, config_file, indent=4)
