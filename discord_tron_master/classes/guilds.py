@@ -43,13 +43,17 @@ class Guilds:
             logging.info(f"Saving config: {self.config}")
             json.dump(self.config, config_file, indent=4)
  
-    def get_guild_config(self, guild_id):
+    def get_guild_config(self, guild_id = None):
         self.reload_config()
-        guild_config = self.config.get("guilds", {}).get(str(guild_id), {})
-        return self.merge_dicts(DEFAULT_GUILD_CONFIG, guild_config)
+        guild_config = self.config.get("guilds", {})
+        if guild_id is not None:
+            guild_config = guild_config.get(str(guild_id), {})
+            return self.merge_dicts(DEFAULT_GUILD_CONFIG, guild_config)
+        return self.merge_dicts(DEFAULT_CONFIG, guild_config)
 
     def set_guild_config(self, guild_id, guild_config):
-        self.config.get("guilds", {})[str(guild_id)] = guild_config
+        current_config = self.get_guild_config()
+        current_config[guild_id] = guild_config
         with open(self.config_path, "w") as config_file:
             logging.info(f"Saving config: {self.config}")
             json.dump(self.config, config_file, indent=4)
