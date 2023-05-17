@@ -22,7 +22,7 @@ class Model(commands.Cog):
         with app.app_context():
             all_transformers = Transformers.get_all_approved()
             for transformer in all_transformers:
-                if f'{transformer.model_owner}/{transformer.model_id}' not in allowed_models and allowed_models != []:
+                if f'{transformer.model_owner}/{transformer.model_id}'.lower() not in allowed_models and allowed_models != []:
                     all_transformers.remove(transformer)
 
         wrapper = "```"
@@ -80,7 +80,7 @@ class Model(commands.Cog):
             await ctx.send("sory bae, u must be admuin 😭😭😭 u rek me inside in the worst waysz")
             return
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
-        allowed_models.append(model_id)
+        allowed_models.append(model_id.lower())
         guild_config.set_guild_allowed_models(ctx.guild.id, allowed_models)
         await ctx.send('Model allowed.')
 
