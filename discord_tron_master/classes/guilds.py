@@ -71,7 +71,9 @@ class Guilds:
         return guild_config.get(setting_key, default_value)
     
     def get_guild_allowed_models(self, guild_id):
-        return self.get_guild_setting(guild_id, "allowed_models", [])
+        allowed_models = self.get_guild_setting(guild_id, "allowed_models", [])
+        logging.info(f"Getting allowed models for {guild_id}: {allowed_models}")
+        return allowed_models
     
     def set_guild_allowed_models(self, guild_id, allowed_models):
         return self.set_guild_setting(guild_id, "allowed_models", allowed_models)

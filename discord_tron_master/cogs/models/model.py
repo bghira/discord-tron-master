@@ -18,6 +18,7 @@ class Model(commands.Cog):
         user_config = self.config.get_user_config(user_id=user_id)
         app = AppConfig.flask
         allowed_models = guild_config.get_guild_allowed_models(ctx.guild.id)
+        logging.info(f'Allowed models: {allowed_models}')
         with app.app_context():
             all_transformers = Transformers.get_all_approved()
             for transformer in all_transformers:
