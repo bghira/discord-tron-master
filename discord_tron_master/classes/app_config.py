@@ -44,7 +44,7 @@ DEFAULT_USER_CONFIG = {
     "strength": 0.5,
     "resize": 1,
     "guidance_scaling": 7.5,
-    "model": "theintuitiveye/HARDblend",
+    "model": "junglerally/digital-diffusion",
     "negative_prompt": "child- childish- out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
     "positive_prompt": "(centred in frame) (widescreen) (seamless) (non-repeating) (8k) (sharp focus) (cinematic) (epic) (bokeh) (depth-of-field) (photorealistic) (highly detailed) (masterpiece) (trending on artstation) (trending on deviantart)",
     "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",

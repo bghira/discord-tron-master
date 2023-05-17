@@ -113,8 +113,8 @@ class Model(commands.Cog):
             new_model_id, new_model_owner = full_model_name.split('/')[1], full_model_name.split('/')[0]
             existing = Transformers.query.filter_by(model_id=new_model_id, model_owner=new_model_owner).first()
 
-        if full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}'.lower() not in allowed_models:
-            await ctx.send("That model is not registered for use. To make your 'awesome' images, or whatever, have an admin use `!model-add <model> <image|text> <description>` where `image|text` determines whether it's a diffuser or language model.")
+        if existing and full_model_name and allowed_models != [] and f'{new_model_owner}/{new_model_id}'.lower() not in allowed_models:
+            await ctx.send("That model registered for use, but this server's administrator does not want it available. Admins can use `!model-allow <model>` to enable it.")
             return
 
         if not existing:
