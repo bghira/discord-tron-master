@@ -52,8 +52,8 @@ class Guilds:
         return self.merge_dicts(DEFAULT_CONFIG, guild_config)
 
     def set_guild_config(self, guild_id, guild_config):
-        current_config = self.get_guild_config()
-        current_config[guild_id] = guild_config
+        self.reload_config()
+        self.config[guild_id] = guild_config
         with open(self.config_path, "w") as config_file:
             logging.info(f"Saving config: {self.config}")
             json.dump(self.config, config_file, indent=4)
