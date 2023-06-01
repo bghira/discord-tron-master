@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-import logging, websocket, traceback
+import logging, websocket, traceback, asyncio
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.exceptions.registration import RegistrationError
@@ -82,7 +82,7 @@ class WorkerManager:
     def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
         if worker_id in self.workers:
             logging.error(f"Tried to register an already-registered worker: {worker_id}. Forcibly unregistering that worker.")
-            self.unregister_worker(worker_id)
+            asyncio.run(self.unregister_worker(worker_id))
             raise RegistrationError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
         if not worker_id or worker_id == "":
             raise RegistrationError("Cannot register worker with blank worker_id.")
