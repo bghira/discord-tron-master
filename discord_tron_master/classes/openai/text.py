@@ -42,7 +42,7 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print comma-separated descriptive keywords for an imagined image."
+        prompt = f"Print ONLY comma-separated descriptive keywords for an imagined image, without any other text."
         if theme is not None:
             prompt = prompt + '. Your theme: ' + theme
         return await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
