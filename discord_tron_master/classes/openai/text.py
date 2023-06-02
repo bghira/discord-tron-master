@@ -42,9 +42,7 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print space-separated descriptive keywords for an imagined image."
-        prompt = f"{prompt} Specific attention can be defined for a keyword using the syntax (keyword)x.yz where x.yz is a float from 0.1 to 2.0."
-        prompt = f"{prompt} Example: this is an example prompt of a (subject)1.5 chasing (another subject)0.5"
+        prompt = f"Print comma-separated descriptive keywords for an imagined image."
         if theme is not None:
             prompt = prompt + '. Your theme: ' + theme
         return await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
