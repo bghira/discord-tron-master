@@ -79,10 +79,10 @@ class WorkerManager:
             return None
         return capable_workers[0]
 
-    def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
+    async def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
         if worker_id in self.workers:
             logging.error(f"Tried to register an already-registered worker: {worker_id}. Forcibly unregistering that worker.")
-            asyncio.run(self.unregister_worker(worker_id))
+            await self.unregister_worker(worker_id)
             raise RegistrationError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
         if not worker_id or worker_id == "":
             raise RegistrationError("Cannot register worker with blank worker_id.")
@@ -155,9 +155,9 @@ class WorkerManager:
         supported_job_types = payload["supported_job_types"]
         hardware_limits = payload["hardware_limits"]
         hardware = payload["hardware"]
-        worker = self.register_worker(worker_id, supported_job_types, hardware_limits, hardware)
-        self.queue_manager.register_worker(worker_id, supported_job_types)
-        worker.set_job_queue(self.queue_manager.create_queue(worker))
+        worker = await self.register_worker(worker_id, supported_job_types, hardware_limits, hardware)
+        await self.queue_manager.register_worker(worker_id, supported_job_types)
+        await worker.set_job_queue(await self.queue_manager.create_queue(worker))
         worker.set_websocket(websocket)
         await worker.start_monitoring()  # Use 'await' to call the async 'start_monitoring' method
         return {"success": True, "result": "Worker " + str(worker_id) + " registered successfully"}

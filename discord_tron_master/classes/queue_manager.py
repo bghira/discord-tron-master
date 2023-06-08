@@ -39,7 +39,7 @@ class QueueManager:
             if job_type in worker_info["supported_job_types"]:
                 worker_info["queue"].queue.clear()
 
-    def register_worker(self, worker_id, supported_job_types: List[str]):
+    async def register_worker(self, worker_id, supported_job_types: List[str]):
         self.queues[worker_id] = {"queue": JobQueue(worker_id), "supported_job_types": supported_job_types}
 
     def worker_queue_length(self, worker: Worker):
@@ -75,9 +75,9 @@ class QueueManager:
         logging.info(f"After unregistering worker, we are left with: {self.queues}")
         del self.queues[worker_id]
 
-    def create_queue(self, worker: Worker) -> Queue:
+    async def create_queue(self, worker: Worker) -> Queue:
         if worker.worker_id not in self.queues:
-            self.register_worker(worker.worker_id, worker.supported_job_types)
+            await self.register_worker(worker.worker_id, worker.supported_job_types)
         return self.queues[worker.worker_id]["queue"]
 
     def queue_contents_by_worker(self, worker_id):
