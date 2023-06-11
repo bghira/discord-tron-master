@@ -32,8 +32,8 @@ DEFAULT_CONFIG = {
 
 DEFAULT_USER_CONFIG = {
     "seed": None,
-    "scheduler": "default",
-    "steps": 25,
+    "scheduler": "fast",
+    "steps": 15,
     "gpt_role": "You are a Discord bot.",
     "tts_voice": "en_fiery",
     "temperature": 0.9,
@@ -44,12 +44,13 @@ DEFAULT_USER_CONFIG = {
     "strength": 0.5,
     "resize": 1,
     "guidance_scaling": 7.5,
-    "model": "junglerally/digital-diffusion",
-    "negative_prompt": "child- childish- out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
-    "positive_prompt": "photograph digital art best quality",
+    "model": "ptx0/pseudo-real",
+    "negative_prompt": "out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
+    "positive_prompt": "",
     "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",
     "tile_positive": "best quality",
-    "tile_strength": 0.3,
+    "tile_strength": 0.0,
+    "hires_fix": False,
     "resolution": {
         "width": 512,
         "height": 768
