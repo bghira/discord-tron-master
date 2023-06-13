@@ -7,7 +7,7 @@ openai.api_key = config.get_openai_api_key()
 
 class GPT:
     def __init__(self):
-        self.engine = "chatgpt-3.5-turbo"
+        self.engine = "gpt-3.5-turbo-0613"
         self.temperature = 0.9
         self.max_tokens = 100
         self.discord_bot_role = "You are a Discord bot."
