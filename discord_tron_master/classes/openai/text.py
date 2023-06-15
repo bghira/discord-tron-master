@@ -45,7 +45,14 @@ class GPT:
         prompt = f"Print ONLY comma-separated descriptive keywords for an imagined image, without any other text."
         if theme is not None:
             prompt = prompt + '. Your theme: ' + theme
-        return await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
+        image_prompt_response = await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
+        prompt_pieces = ', '.split(image_prompt_response)
+        # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
+        prompt_output = "("
+        for index, prompt_piece in enumerate(prompt_pieces):
+            prompt_output = f'"{prompt_output}", '
+        prompt_output = f'{prompt_output}).and()'
+        return prompt_output
 
     async def discord_bot_response(self, prompt, ctx = None):
         user_role = self.discord_bot_role
