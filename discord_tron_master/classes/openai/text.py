@@ -50,7 +50,10 @@ class GPT:
         # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
         prompt_output = "("
         for index, prompt_piece in enumerate(prompt_pieces):
-            prompt_output = f'"{prompt_output}", '
+            if prompt_output == "(":
+                prompt_output = f'"{prompt_piece}"'
+                continue
+            prompt_output = f'{prompt_output}, "{prompt_piece}"'
         prompt_output = f'{prompt_output}).and()'
         return prompt_output
 
