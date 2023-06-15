@@ -54,7 +54,7 @@ class GPT:
         prompt_output = "("
         for index, prompt_piece in enumerate(prompt_pieces):
             if prompt_output == "(":
-                prompt_output = f'"{prompt_piece}"'
+                prompt_output = f'{prompt_output}"{prompt_piece}"'
                 continue
             prompt_output = f'{prompt_output}, "{prompt_piece}"'
         prompt_output = f'{prompt_output}).and()'
