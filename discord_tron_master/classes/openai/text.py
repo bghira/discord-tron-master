@@ -43,10 +43,16 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print ONLY comma-separated descriptive keywords for an imagined image, without any other text."
+        prompt = f"Print your prompt."
         if theme is not None:
-            prompt = prompt + '. Your theme: ' + theme
-        image_prompt_response = await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
+            prompt = prompt + '. Your theme to mix in: ' + theme
+        system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
+        system_role = f"{system_role}Your prompts look like these 3 examples:\n"
+        system_role = f"{system_role}a portrait of astonishing daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
+        system_role = f"{system_role}a camera photo of great look up a rolling wave, the ocean in full view, best quality, intricate, photography\n"
+        system_role = f"{system_role}digital artwork, feels like the first time, we went to the zoo, colourful and majestic, amazing clouds in the sky, epic\n"
+        system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
+        image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
         logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
         prompt_pieces = image_prompt_response.split(', ')
         logging.debug(f'Prompt pieces: {prompt_pieces}')
