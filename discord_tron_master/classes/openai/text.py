@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from discord_tron_master.classes.app_config import AppConfig
+import logging
 config = AppConfig()
 
 import openai
@@ -46,7 +47,9 @@ class GPT:
         if theme is not None:
             prompt = prompt + '. Your theme: ' + theme
         image_prompt_response = await self.turbo_completion("You are a Prompt Generator Bot. Respond as one would.", prompt, temperature=1.18)
+        logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
         prompt_pieces = ', '.split(image_prompt_response)
+        logging.debug(f'Prompt pieces: {prompt_pieces}')
         # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
         prompt_output = "("
         for index, prompt_piece in enumerate(prompt_pieces):
