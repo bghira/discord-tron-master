@@ -55,7 +55,7 @@ class Settings(commands.Cog):
             # Check whether the new value type is the same type as their old value.
             # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
             same_type = compare_setting_types(user_config[setting_key], setting_value)
-            if same_type is False:
+            if same_type is None:
                 await ctx.send(f"Dude, do not fuck with me. Are you trying to override {user_config[setting_key]} with {setting_value}? Seriously? They're not even the same data type. Keep it similar. Everything goes through the square hole though, right? Amateurs.")
                 return
             # Same type comes back as the cast value.
@@ -257,7 +257,10 @@ def compare_setting_types(old_value, new_value):
     # Check for a bool vs a bool string
     if isinstance(old_value, bool) and isinstance(new_value, str) and new_value.lower() in ["true", "false"]:
         # Convert the string to a bool
-        return new_value.lower() == "true" or new_value.lower() != "true"
+        if new_value.lower() == "true":
+            return True
+        elif new_value.lower() == "false":
+            return False
 
     # Check if both values are integers
     if isinstance(old_value, int) and new_value.isdigit():
@@ -284,7 +287,7 @@ def compare_setting_types(old_value, new_value):
     # Log the two types we received:
     logging.error(f"compare_setting_types: old_value: {type(old_value)} new_value: {type(new_value)}")
 
-    return False
+    return None
 
 
 def setup(bot):
