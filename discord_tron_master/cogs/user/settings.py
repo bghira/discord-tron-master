@@ -257,7 +257,7 @@ def compare_setting_types(old_value, new_value):
     # Check for a bool vs a bool string
     if isinstance(old_value, bool) and isinstance(new_value, str) and new_value.lower() in ["true", "false"]:
         # Convert the string to a bool
-        return new_value.lower() == "true"
+        return new_value.lower() == "true" or new_value.lower() == "false"
 
     # Check if both values are integers
     if isinstance(old_value, int) and new_value.isdigit():
