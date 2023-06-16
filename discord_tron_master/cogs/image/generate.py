@@ -59,7 +59,7 @@ class Generate(commands.Cog):
             user_config = self.config.get_user_config(user_id=ctx.author.id)
             has_been_warned_about_count_being_digit = user_config.get("has_been_warned_about_count_being_digit", False)
             if not has_been_warned_about_count_being_digit:
-                await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of 'fuck you'.")
+                await ctx.send("Count must be a number. I assume you meant 3 images. Here you go! You'll never see this warning again. It's a sort of, '*au revoir*'.")
                 self.config.set_user_setting(ctx.author.id, "has_been_warned_about_count_being_digit", True);
             prompt = count + " " + prompt
             count = 3
@@ -69,22 +69,28 @@ class Generate(commands.Cog):
 
     @commands.command(name="generate", help="Generates an image based on the given prompt.")
     async def generate(self, ctx, *, prompt):
-        try:
-            # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + prompt + "`")
-            self.config.reload_config()
-            job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
-            # Get the worker that will process the job.
-            worker = discord.worker_manager.find_best_fit_worker(job)
-            if worker is None:
-                await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
-                # Wait a few seconds before deleting:
-                await discord_first_message.delete(delay=10)
-                return
-            logging.info("Worker selected for job: " + str(worker.worker_id))
-            # Add it to the queue
-            await discord.queue_manager.enqueue_job(worker, job)
-        except Exception as e:
-            await ctx.send(
-                f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-            )
+        # If prompt has \n, we split:
+        if '\n' in prompt:
+            prompts = prompt.split('\n')
+        else:
+            prompts = [ prompt ]
+        for _prompt in prompts:
+            try:
+                # Generate a "Job" object that will be put into the queue.
+                discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + prompt + "`")
+                self.config.reload_config()
+                job = ImageGenerationJob((self.bot, self.config, ctx, prompt, discord_first_message))
+                # Get the worker that will process the job.
+                worker = discord.worker_manager.find_best_fit_worker(job)
+                if worker is None:
+                    await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
+                    # Wait a few seconds before deleting:
+                    await discord_first_message.delete(delay=10)
+                    return
+                logging.info("Worker selected for job: " + str(worker.worker_id))
+                # Add it to the queue
+                await discord.queue_manager.enqueue_job(worker, job)
+            except Exception as e:
+                await ctx.send(
+                    f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                )
