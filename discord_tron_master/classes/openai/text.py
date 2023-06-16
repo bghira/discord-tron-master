@@ -51,6 +51,7 @@ class GPT:
         system_role = f"{system_role}a portrait of astonishing daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
         system_role = f"{system_role}a camera photo of great look up a rolling wave, the ocean in full view, best quality, intricate, photography\n"
         system_role = f"{system_role}digital artwork, feels like the first time, we went to the zoo, colourful and majestic, amazing clouds in the sky, epic\n"
+        system_role = f"{system_role}The subject must come first, with actions coming next, and then style attributes.\n"
         system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
         image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
         logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
