@@ -43,7 +43,8 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print your prompt."
+        prompt = f"Print ONLY a random text-to-image prompt for Stable Diffusion using condensed keywords and suffixes ++ to emphasize and -- to deemphasize."
+        # prompt = f"Print your prompt."
         if theme is not None:
             prompt = prompt + '. Your theme to mix in: ' + theme
         system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
@@ -53,6 +54,7 @@ class GPT:
         system_role = f"{system_role}digital artwork, feels like the first time, we went to the zoo, colourful and majestic, amazing clouds in the sky, epic\n"
         system_role = f"{system_role}The subject must come first, with actions coming next, and then style attributes.\n"
         system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
+        system_role = "You are a Stable Diffusion Prompt Generator Bot. Respond as one would"
         image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
         logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
         prompt_pieces = image_prompt_response.split(', ')
