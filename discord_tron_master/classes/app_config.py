@@ -31,9 +31,9 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_USER_CONFIG = {
-    "seed": None,
+    "seed": -1,
     "scheduler": "fast",
-    "steps": 15,
+    "steps": 20,
     "gpt_role": "You are a Discord bot.",
     "tts_voice": "en_fiery",
     "temperature": 0.9,
@@ -44,7 +44,7 @@ DEFAULT_USER_CONFIG = {
     "strength": 0.5,
     "resize": 1,
     "guidance_scaling": 7.5,
-    "model": "ptx0/pseudo-real",
+    "model": "ptx0/pseudo-flex-base",
     "negative_prompt": "out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
     "positive_prompt": "",
     "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",
@@ -52,8 +52,8 @@ DEFAULT_USER_CONFIG = {
     "tile_strength": 0.0,
     "hires_fix": False,
     "resolution": {
-        "width": 512,
-        "height": 768
+        "width": 1024,
+        "height": 1024
     },
 }
 
