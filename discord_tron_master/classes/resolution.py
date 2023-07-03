@@ -6,44 +6,32 @@ config = AppConfig()
 class ResolutionHelper:
     resolutions = [
         # 1:1 aspect ratio
-        {"width": 128, "height": 128, "speed_factor": 100},
-        {"width": 256, "height": 256, "speed_factor": 100},
         {"width": 512, "height": 512, "speed_factor": 100},
         {"width": 768, "height": 768, "speed_factor": 30},
         {"width": 1024, "height": 1024, "speed_factor": 30, "default_max": True},
+        {"width": 1280, "height": 1280, "speed_factor": 30},
         {"width": 2048, "height": 2048, "speed_factor": 30},
-        {"width": 4096, "height": 4096, "speed_factor": 30},
+        # Add more 1:1 aspect ratios around 1 MP.
+        {"width": 1024, "height": 1024, "speed_factor": 30},
         # 2:3 aspect ratio
-        {"width": 128, "height": 192, "speed_factor": 80},
-        {"width": 256, "height": 384, "speed_factor": 60},
-        {"width": 512, "height": 768, "speed_factor": 49},
         {"width": 1024, "height": 1536, "speed_factor": 30, "default_max": True},
         {"width": 2048, "height": 3072, "speed_factor": 30},
-        {"width": 4096, "height": 6144, "speed_factor": 30},
+        # Add more 2:3 aspect ratios around 1 MP.
+        {"width": 896, "height": 1344, "speed_factor": 30},
         # 3:2 aspect ratio
-        {"width": 192, "height": 128, "speed_factor": 94},
-        {"width": 384, "height": 256, "speed_factor": 76},
-        {"width": 768, "height": 512, "speed_factor": 52},
         {"width": 1152, "height": 768, "speed_factor": 40},
         {"width": 1536, "height": 1024, "speed_factor": 30, "default_max": True},
         {"width": 3072, "height": 2048, "speed_factor": 30},
-        {"width": 6144, "height": 4096, "speed_factor": 30},
+        # Add more 3:2 aspect ratios around 1 MP.
+        {"width": 1024, "height": 682, "speed_factor": 30},
         # 16:9 aspect ratio
-        {"width": 256, "height": 144, "speed_factor": 40},
-        {"width": 512, "height": 288, "speed_factor": 40},
-
-        { "width": 480, "height": 640 },
-        { "width": 768, "height": 1024 },
-        { "width": 960, "height": 1280 },
-        { "width": 1152, "height": 1536 },
-        { "width": 1440, "height": 1920 },
-
-        {"width": 1024, "height": 576, "speed_factor": 40},
         {"width": 1280, "height": 720, "speed_factor": 30},
-        {"width": 1440, "height": 810, "speed_factor": 20},
         {"width": 1920, "height": 1080, "speed_factor": 20, "default_max": True},
-        {"width": 2160, "height": 1440, "speed_factor": 20},
         {"width": 3840, "height": 2160, "speed_factor": 20},
+        # Add more 16:9 aspect ratios around 1 MP.
+        {"width": 1184, "height": 666, "speed_factor": 30},
+        # 2.20:1 aspect ratio (Super Panavision 70, used in 2001: A Space Odyssey)
+        {"width": 1248, "height": 568, "speed_factor": 30},
     ]
 
     def is_valid_resolution(self, width, height):
