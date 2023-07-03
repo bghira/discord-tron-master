@@ -11,8 +11,6 @@ class ResolutionHelper:
         {"width": 1024, "height": 1024, "speed_factor": 30, "default_max": True},
         {"width": 1280, "height": 1280, "speed_factor": 30},
         {"width": 2048, "height": 2048, "speed_factor": 30},
-        # Add more 1:1 aspect ratios around 1 MP.
-        {"width": 1024, "height": 1024, "speed_factor": 30},
         # 2:3 aspect ratio
         {"width": 1024, "height": 1536, "speed_factor": 30, "default_max": True},
         {"width": 2048, "height": 3072, "speed_factor": 30},
@@ -23,13 +21,13 @@ class ResolutionHelper:
         {"width": 1536, "height": 1024, "speed_factor": 30, "default_max": True},
         {"width": 3072, "height": 2048, "speed_factor": 30},
         # Add more 3:2 aspect ratios around 1 MP.
-        {"width": 1024, "height": 682, "speed_factor": 30},
+        {"width": 1024, "height": 680, "speed_factor": 30},
         # 16:9 aspect ratio
         {"width": 1280, "height": 720, "speed_factor": 30},
         {"width": 1920, "height": 1080, "speed_factor": 20, "default_max": True},
         {"width": 3840, "height": 2160, "speed_factor": 20},
         # Add more 16:9 aspect ratios around 1 MP.
-        {"width": 1184, "height": 666, "speed_factor": 30},
+        {"width": 1184, "height": 664, "speed_factor": 30},
         # 2.20:1 aspect ratio (Super Panavision 70, used in 2001: A Space Odyssey)
         {"width": 1248, "height": 568, "speed_factor": 30},
     ]
