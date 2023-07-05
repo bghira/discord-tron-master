@@ -36,6 +36,11 @@ DEFAULT_USER_CONFIG = {
     "steps": 20,
     "gpt_role": "You are a Discord bot.",
     "tts_voice": "en_fiery",
+    "refiner_guidance": 7.5,
+    "refiner_strength": 0.3,
+    "aesthetic_score": 5.0,
+    "negative_aesthetic_score": 1.0,
+    "refiner_steps": 10,
     "temperature": 0.9,
     "repeat_penalty": 1.1,
     "top_p": 0.95,
@@ -51,6 +56,7 @@ DEFAULT_USER_CONFIG = {
     "tile_positive": "best quality",
     "tile_strength": 0.0,
     "hires_fix": False,
+    "latent_refiner": True,
     "resolution": {
         "width": 1024,
         "height": 1024
