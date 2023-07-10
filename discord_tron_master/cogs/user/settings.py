@@ -133,6 +133,83 @@ class Settings(commands.Cog):
         elif hasattr(ctx, "delete"):
             await ctx.delete()
         await DiscordBot.send_large_message(ctx, message)
+    @commands.command(name="defaults", help="Set defaults for all users (admin only).", hidden=False)
+    async def my_settings(self, ctx, *args):
+        user_id = ctx.author.id
+        user_config = self.config.get_user_config(user_id=user_id)
+        default_config = self.config.get_user_config(user_id='default')
+        if args:
+            setting_key = args[0]
+            setting_value = " ".join(args[1:])
+            self.config.set_user_setting('default', setting_key, setting_value)
+            if setting_value == "":
+                setting_value = "literally nothing"
+            await ctx.send(f"{ctx.author.mention} the default user setting, `{setting_key}` has been updated to `{setting_value}`.  Did you know {random_fact()}?")
+            return
+
+        user_id = 'default'
+        model_id = self.config.get_user_setting(user_id, "models")
+        steps = self.config.get_user_setting(user_id, "steps")
+        tts_voice = self.config.get_user_setting(user_id, "tts_voice")
+        strength = self.config.get_user_setting(user_id, "strength")
+        guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
+
+        seed = self.config.get_user_setting(user_id, "seed", None)
+        if seed == -1:
+            seed = "random"
+        elif seed == 0:
+            seed = None
+
+        gpt_role = self.config.get_user_setting(user_id, "gpt_role")
+        temperature = self.config.get_user_setting(user_id, "temperature")
+        max_tokens = self.config.get_user_setting(user_id, "max_tokens")
+        repeat_penalty = self.config.get_user_setting(user_id, "repeat_penalty")
+        top_p = self.config.get_user_setting(user_id, "top_p")
+        top_k = self.config.get_user_setting(user_id, "top_k")
+        top_p = self.config.get_user_setting(user_id, "top_p")
+
+        negative_prompt = self.config.get_user_setting(
+            user_id,
+            "negative_prompt",
+            "(child, baby, deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation",
+        )
+        positive_prompt = self.config.get_user_setting(
+            user_id, "positive_prompt"
+        )
+        resolution = self.config.get_user_setting(
+            user_id, "resolution"
+        )
+        if positive_prompt == "":
+            positive_prompt = "literally nothing. fly free, birdie."
+        if negative_prompt == "":
+            negative_prompt = "literally nothing. live dangerously, bucko."
+
+        message = (
+            f"{ctx.author.mention}\n"
+            f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
+            f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ None sets it to the current timestamp, 'random' or -1 set it to a more random value. Applies to all generation (img, txt).\n"
+            f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n"
+            f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ About 20 to 200 steps will produce good images.\n"
+            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
+            f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ Higher values make the img2img more random. Lower values make it deterministic.\n"
+            f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}settings negative`.\n"
+            f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of each image prompt. Set via `{self.config.get_command_prefix()}settings positive`.\n"
+            f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Set a bot persona. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
+            f"🟠 **TTS Voice:**:\n➡️  `{tts_voice}`\n❓ `!tts` voice. Use `{self.config.get_command_prefix()}tts-voices` and `{self.config.get_command_prefix()}tts-voice [new voice]`.\n"
+            f"🟠 **Temperature**: `{temperature}` **Default**: `1.0`\n❓ The higher the temperature, the more random the txt2txt becomes. Lower values become more deterministic.\n"
+            f"🟠 **Repeat penalty**: `{repeat_penalty}` **Default**: `1.1`\n❓ Penalize repeating tokens during text generation. Encourages diverse responses.\n"
+            f"🟠 **Max tokens**: `{max_tokens}` **Default**: `2048`\n❓ How many tokens to limit LLM output to. Encourages quicker replies.\n"
+            f"🟠 **top_k**: `{top_k}` **Default**: `40`\n❓ Sampling a greater number of possible tokens slows down output while possibly improving the quality, eg. 10 is faster than 40.\n"
+            f"🟠 **top_p**: `{top_p}` **Default**: `0.95`\n❓ Can be used to tune the speed vs quality of text generation. Ask GPT to explain this parameter.\n"
+        )
+        if hasattr(ctx, "message"):
+            try:
+                await ctx.message.delete()
+            except:
+                logging.warning(f"Could not delete message, it was likely deleted by another worker or a moderator.")
+        elif hasattr(ctx, "delete"):
+            await ctx.delete()
+        await DiscordBot.send_large_message(ctx, message)
 
     @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
     async def set_steps(self, ctx, steps):

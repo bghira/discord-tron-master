@@ -41,6 +41,8 @@ DEFAULT_USER_CONFIG = {
     "aesthetic_score": 5.0,
     "negative_aesthetic_score": 1.0,
     "refiner_steps": 10,
+    "first_inference_step": None,
+    "max_inference_steps": None,
     "temperature": 0.9,
     "repeat_penalty": 1.1,
     "top_p": 0.95,
