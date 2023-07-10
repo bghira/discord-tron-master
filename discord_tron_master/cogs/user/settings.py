@@ -134,7 +134,7 @@ class Settings(commands.Cog):
             await ctx.delete()
         await DiscordBot.send_large_message(ctx, message)
     @commands.command(name="defaults", help="Set defaults for all users (admin only).", hidden=False)
-    async def my_settings(self, ctx, *args):
+    async def default_settings(self, ctx, *args):
         user_id = ctx.author.id
         user_config = self.config.get_user_config(user_id=user_id)
         default_config = self.config.get_user_config(user_id='default')
