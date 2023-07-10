@@ -330,7 +330,8 @@ class Settings(commands.Cog):
 def compare_setting_types(old_value, new_value):
     # Check whether the new value type is the same type as their old value.
     # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
-
+    if old_value is None:
+        return new_value
     # Check for a bool vs a bool string
     if isinstance(old_value, bool) and isinstance(new_value, str) and new_value.lower() in ["true", "false"]:
         # Convert the string to a bool
