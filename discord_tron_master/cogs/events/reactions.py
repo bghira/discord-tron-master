@@ -53,9 +53,9 @@ class Reactions(commands.Cog):
             import json
             new_config = json.loads(img.info["user_config"])
             original_user = 69
-            if "original_user" in new_config:
-                original_user = new_config["original_user"]
-                del new_config["original_user"]
+            if "user_id" in new_config:
+                user_id = new_config["user_id"]
+                del new_config["user_id"]
             # Did load correctly?
             if new_config == {}:
                 logging.debug(f'Error loading config from image info.')
@@ -63,7 +63,7 @@ class Reactions(commands.Cog):
             
             self.config.set_user_config(user.id, new_config)
             # Send a message back to the reaction thread/channel:
-            await reaction.message.channel.send(f'Cloned settings from <@{original_user}>\'s post for {user.mention}.')
+            await reaction.message.channel.send(f'Cloned settings from <@{user_id}>\'s post for {user.mention}.')
         
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
