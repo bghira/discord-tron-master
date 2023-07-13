@@ -118,7 +118,7 @@ class API:
                 logging.error(f"Could not open image: {e}")
                 return jsonify({"error": "Malformed image was supplied", "error_class": "UnidentifiedImageError"}), 400
             buffered = BytesIO()
-            img.save(buffered, format="PNG")
+            img.save(buffered, format="PNG", pnginfo=pnginfo)
             base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
             image_url = asyncio.run(DiscordCommandProcessor.get_image_embed(base64_encoded_image, pnginfo, create_embed=False))
             return jsonify({"image_url": image_url.strip()})
