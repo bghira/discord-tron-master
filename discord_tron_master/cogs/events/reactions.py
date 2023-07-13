@@ -51,10 +51,11 @@ class Reactions(commands.Cog):
             logging.debug(f'User id: {user.id}')
             # Set the config:
             import json
-            if "original_user" in img.info["user_config"]:
-                del img.info["user_config"]["original_user"]
             new_config = json.loads(img.info["user_config"])
-            original_user = img.info["user_config"]["original_user"]
+            original_user = 69
+            if "original_user" in new_config:
+                original_user = new_config["original_user"]
+                del new_config["original_user"]
             # Did load correctly?
             if new_config == {}:
                 logging.debug(f'Error loading config from image info.')
