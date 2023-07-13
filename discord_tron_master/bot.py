@@ -202,7 +202,7 @@ class DiscordBot:
 
     async def attach_default_reactions(self, message, reactions = None):
         if reactions is None:
-            reactions = self.list_default_reactions()
+            reactions = await self.list_default_reactions()
 
         if message is not None:
             for reaction in reactions:
