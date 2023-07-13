@@ -51,7 +51,15 @@ class Reactions(commands.Cog):
             logging.debug(f'User id: {user.id}')
             # Set the config:
             import json
-            self.config.set_user_config(user.id, json.loads(img.info["user_config"]))
+            if "original_user" in img.info["user_config"]:
+                del img.info["user_config"]["original_user"]
+            new_config = json.loads(img.info["user_config"])
+            # Did load correctly?
+            if new_config == {}:
+                logging.debug(f'Error loading config from image info.')
+                return
+            
+            self.config.set_user_config(user.id, new_config)
             # Send a message back to the reaction thread/channel:
             await reaction.message.channel.send(f'Cloned settings from <@{img.info["original_user"]}>\'s post for {user.mention}.')
         
