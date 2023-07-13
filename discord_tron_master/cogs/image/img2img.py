@@ -25,6 +25,7 @@ class Img2img(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
+
     @commands.Cog.listener()
     async def on_message(self, message):
         self.config.reload_config()
