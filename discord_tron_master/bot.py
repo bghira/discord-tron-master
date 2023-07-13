@@ -168,7 +168,19 @@ class DiscordBot:
             except Exception as e:
                 logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
         return None
-
+    async def find_message_by_id(self, message_id):
+        for guild in self.bot.guilds:
+            for channel in guild.channels:
+                if isinstance(channel, discord.TextChannel):
+                    try:
+                        message = await channel.fetch_message(message_id)
+                        if message is not None:
+                            return message
+                    except discord.Forbidden:
+                        logging.info(f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})")
+                    except Exception as e:
+                        logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
+        return None
     async def set_thread_topic(self, channel_id, topic):
         channel = await self.find_channel(channel_id)
         if channel is not None:
@@ -178,6 +190,28 @@ class DiscordBot:
                 logging.info(f"Bot doesn't have permission to edit topic in {channel.name} ({channel.id})")
             except Exception as e:
                 logging.info(f"Error editing topic in {channel.name} ({channel.id}): {e}")
+
+    async def list_default_reactions(self):
+        default_searchables = [ '♻️', '👍', '👎', '©️' ]
+        # Find each of the default_searchables and form a reactions list with Discord emoji objects:
+        reactions = []
+        for emoji in default_searchables:
+            reactions.append(await self.bot.find_emoji(emoji))
+        logging.debug(f'Found {len(reactions)} default reactions: {reactions}')
+        return reactions
+
+    async def attach_default_reactions(self, message, reactions = None):
+        if reactions is None:
+            reactions = self.list_default_reactions()
+
+        if message is not None:
+            for reaction in reactions:
+                try:
+                    await message.add_reaction(reaction)
+                except discord.Forbidden:
+                    logging.info(f"Bot doesn't have permission to add reactions to {message.channel.name} ({message.channel.id})")
+                except Exception as e:
+                    logging.info(f"Error adding reactions to {message.channel.name} ({message.channel.id}): {e}")
 
     async def delete_previous_errors(self, channel_id, exclude_id = None, prefix="seems we had an error"):
         # Find any previous messages containing "seems we had an error" from this bot, and delete all except the most recent.
