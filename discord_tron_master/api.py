@@ -92,7 +92,13 @@ class API:
 
         @self.app.route("/upload_image", methods=["POST"])
         def upload_image():
-            logging.debug(f"upload_image endpoint hit with params: {request.args['image_metadata']}")
+            logging.debug(f"upload_image endpoint hit with params: {request.args}")
+            image_metadata = {}
+            if "user_config" in image_metadata:
+                import json
+                image_metadata["user_config"] = json.loads(image_metadata["user_config"])
+            if "prompt" in image_metadata:
+                image_metadata["prompt"] = image_metadata["prompt"].replace("\\n", "\n")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
             image = request.files.get("image")
@@ -102,10 +108,10 @@ class API:
             # Read the image and convert it to a base64-encoded string
             try:
                 img = Image.open(image.stream)
-                logging.debug(f'Image metadata: {img.info}')
+                logging.debug(f'Image metadata: {image_metadata}')
                 # Create pnginfo:
                 pnginfo = PngImagePlugin.PngInfo()
-                for key, value in img.info.items():
+                for key, value in image_metadata.items():
                     pnginfo.add_text(key, value, 0)
             except UnidentifiedImageError as e:
                 logging.debug(f'Malformed image was supplied: {image.stream}')
