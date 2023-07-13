@@ -83,16 +83,6 @@ class AppConfig:
     def get_flask(cls):
         return cls.flask
 
-    @staticmethod
-    def merge_dicts(dict1, dict2):
-        result = dict1.copy()
-        for key, value in dict2.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = AppConfig.merge_dicts(result[key], value)
-            else:
-                result[key] = value
-        return result
-
     def reload_config(self):
         if not os.path.exists(self.config_path):
             with open(self.example_config_path, "r") as example_file:
