@@ -22,7 +22,7 @@ class Reactions(commands.Cog):
         # Code to execute when a reaction is added
         # await reaction.message.channel.send(f'{user.name} has reacted with {reaction.emoji}!')
         logging.debug(f'{user.name} has reacted with {reaction.emoji}!')
-        no_op = [ '👎', '👍', '©️' ] # WE do nothing with these right now.
+        no_op = [ '👎', '👍' ] # WE do nothing with these right now.
         if reaction.emoji in no_op:
             logging.debug(f'Ignoring no-op reaction: {reaction.emoji}')
             return
@@ -33,6 +33,16 @@ class Reactions(commands.Cog):
             return
         for embed in reaction.message.embeds:
             logging.debug(f'Embed: {embed}, url: {embed.image.url}')
+            if reaction == "©️":
+                # We want to clone the settings of this post.
+                logging.debug(f'Would clone settings from {embed.image.url}.')
+                # Retrieve:
+                import requests
+                response = requests.get(embed.image.url)
+                # open as PIL image:
+                from PIL import Image
+                img = Image.open(response.raw)
+                logging.debug(f'Image info: {img.info}')
 
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
@@ -41,3 +51,4 @@ class Reactions(commands.Cog):
         # Code to execute when a reaction is removed
         # await reaction.message.channel.send(f'{user.name} has removed their reaction of {reaction.emoji}!')
         logging.debug(f'{user.name} has removed their reaction of {reaction.emoji}!')
+
