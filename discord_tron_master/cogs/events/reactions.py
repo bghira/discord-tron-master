@@ -48,8 +48,11 @@ class Reactions(commands.Cog):
         if reaction.emoji == "©️":
             # We want to clone the settings of this post.
             logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
-            
-            # Grab the filename from the URL:
+            logging.debug(f'User id: {user.id}')
+            # Set the config:
+            self.config.set_user_config(user.id, img.info["user_config"])
+            # Send a message back to the reaction thread/channel:
+            await reaction.message.channel.send(f'Cloned settings from {user.mention}\'s post for {reaction.user.mention}.')
         
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
