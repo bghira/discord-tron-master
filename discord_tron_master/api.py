@@ -92,7 +92,7 @@ class API:
 
         @self.app.route("/upload_image", methods=["POST"])
         def upload_image():
-            logging.debug("upload_image endpoint hit")
+            logging.debug(f"upload_image endpoint hit with params: {request.args}")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
             image = request.files.get("image")
