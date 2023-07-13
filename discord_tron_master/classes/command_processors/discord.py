@@ -183,7 +183,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 logging.debug(f"Mentioning user: {arguments['mention']}")
                 arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
             message = await thread.send(content=arguments["message"], embeds=embeds)
-            command_processor.discord.attach_default_reactions(message)
+            await command_processor.discord.attach_default_reactions(message)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logging.debug(f"Exiting create_thread")
