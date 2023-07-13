@@ -94,10 +94,10 @@ class API:
         def upload_image():
             logging.debug(f"upload_image endpoint hit with params: {request.args}")
             image_metadata = {}
-            if "user_config" in image_metadata:
+            if "user_config" in request.args:
                 import json
                 image_metadata["user_config"] = json.loads(image_metadata["user_config"])
-            if "prompt" in image_metadata:
+            if "prompt" in request.args:
                 image_metadata["prompt"] = image_metadata["prompt"].replace("\\n", "\n")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
