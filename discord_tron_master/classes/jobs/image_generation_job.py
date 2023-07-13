@@ -5,8 +5,9 @@ from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.models.schedulers import Schedulers
 flask = AppConfig.get_flask()
 class ImageGenerationJob(Job):
-    def __init__(self, payload):
+    def __init__(self, payload, extra_payload:dict = None):
         super().__init__("gpu", "image_generation", "generate_image", payload)
+        self.extra_payload = extra_payload
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
@@ -16,7 +17,10 @@ class ImageGenerationJob(Job):
         elif num_artefacts == 6:
             bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
-        user_config = config.get_user_config(user_id=ctx.author.id)
+        if "user_config" in self.extra_payload:
+            user_config = self.extra_payload["user_config"]
+        else:
+            user_config = config.get_user_config(user_id=ctx.author.id)
         with flask.app_context():
             message = {
                 "job_type": self.job_type,

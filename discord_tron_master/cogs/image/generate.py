@@ -94,3 +94,30 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
+
+    async def generate_from_user_config(self, ctx, user_config, prompt):
+        # If prompt has \n, we split:
+        if '\n' in prompt:
+            prompts = prompt.split('\n')
+        else:
+            prompts = [ prompt ]
+        for _prompt in prompts:
+            try:
+                # Generate a "Job" object that will be put into the queue.
+                discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
+                self.config.reload_config()
+                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config})
+                # Get the worker that will process the job.
+                worker = discord.worker_manager.find_best_fit_worker(job)
+                if worker is None:
+                    await discord_first_message.edit(content="No workers available. Image was **not** added to queue. 😭 aw, how sad. 😭")
+                    # Wait a few seconds before deleting:
+                    await discord_first_message.delete(delay=10)
+                    return
+                logging.info("Worker selected for job: " + str(worker.worker_id))
+                # Add it to the queue
+                await discord.queue_manager.enqueue_job(worker, job)
+            except Exception as e:
+                await ctx.send(
+                    f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                )

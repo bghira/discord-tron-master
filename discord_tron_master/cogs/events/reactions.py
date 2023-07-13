@@ -45,25 +45,33 @@ class Reactions(commands.Cog):
                 logging.debug(f'Found info, exiting loop.')
                 break
         # We have our info.
+        logging.debug(f'User id: {user.id}')
+        # Set the config:
+        import json
+        new_config = json.loads(img.info["user_config"])
+        original_user = 69
+        if "user_id" in new_config:
+            user_id = new_config["user_id"]
+            del new_config["user_id"]
+        # Did load correctly?
+        if new_config == {}:
+            logging.debug(f'Error loading config from image info.')
+            return
         if reaction.emoji == "©️":
             # We want to clone the settings of this post.
             logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
-            logging.debug(f'User id: {user.id}')
-            # Set the config:
-            import json
-            new_config = json.loads(img.info["user_config"])
-            original_user = 69
-            if "user_id" in new_config:
-                user_id = new_config["user_id"]
-                del new_config["user_id"]
-            # Did load correctly?
-            if new_config == {}:
-                logging.debug(f'Error loading config from image info.')
-                return
-            
             self.config.set_user_config(user.id, new_config)
             # Send a message back to the reaction thread/channel:
             await reaction.message.channel.send(f'Cloned settings from <@{user_id}>\'s post for {user.mention}.')
+        if reaction.emoji == "♻️":
+            # We are going to resubmit this task for the new user that requested it.
+            logging.debug(f'Would resubmit settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Generate')
+            prompt = img.info["prompt"]
+            # Now the whitespace:
+            prompt = prompt.strip()
+            await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt)
+
         
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
