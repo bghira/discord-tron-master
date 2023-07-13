@@ -47,13 +47,14 @@ class Reactions(commands.Cog):
         # We have our info.
         if reaction.emoji == "©️":
             # We want to clone the settings of this post.
-            logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}, original_user {img.info["user_config"]["original_user"]}.')
+            logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
             logging.debug(f'User id: {user.id}')
             # Set the config:
             import json
             if "original_user" in img.info["user_config"]:
                 del img.info["user_config"]["original_user"]
             new_config = json.loads(img.info["user_config"])
+            original_user = img.info["user_config"]["original_user"]
             # Did load correctly?
             if new_config == {}:
                 logging.debug(f'Error loading config from image info.')
@@ -61,7 +62,7 @@ class Reactions(commands.Cog):
             
             self.config.set_user_config(user.id, new_config)
             # Send a message back to the reaction thread/channel:
-            await reaction.message.channel.send(f'Cloned settings from <@{img.info["original_user"]}>\'s post for {user.mention}.')
+            await reaction.message.channel.send(f'Cloned settings from <@{original_user}>\'s post for {user.mention}.')
         
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
