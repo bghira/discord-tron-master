@@ -7,7 +7,7 @@ from discord_tron_master.classes.command_processors import discord as DiscordCom
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError, PngImagePlugin
 from io import BytesIO
 import io, asyncio
 from scipy.io.wavfile import read as read_wav
@@ -103,6 +103,10 @@ class API:
             try:
                 img = Image.open(image.stream)
                 logging.debug(f'Image metadata: {img.info}')
+                # Create pnginfo:
+                pnginfo = PngImagePlugin.PngInfo()
+                for key, value in img.info.items():
+                    pnginfo.add_text(key, value, 0)
             except UnidentifiedImageError as e:
                 logging.debug(f'Malformed image was supplied: {image.stream}')
                 logging.error(f"Could not open image: {e}")
@@ -110,7 +114,7 @@ class API:
             buffered = BytesIO()
             img.save(buffered, format="PNG")
             base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            image_url = asyncio.run(DiscordCommandProcessor.get_image_embed(base64_encoded_image, create_embed=False))
+            image_url = asyncio.run(DiscordCommandProcessor.get_image_embed(base64_encoded_image, pnginfo, create_embed=False))
             return jsonify({"image_url": image_url.strip()})
 
         @self.app.route("/upload_audio", methods=["POST"])

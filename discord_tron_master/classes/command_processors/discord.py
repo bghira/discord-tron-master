@@ -3,7 +3,7 @@ import websocket, discord, base64, logging, time, hashlib, gzip, os
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
-from PIL import Image
+from PIL import Image, PngImagePlugin
 from websockets import WebSocketClientProtocol
 config = AppConfig()
 from scipy.io.wavfile import write as write_wav
@@ -158,7 +158,11 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "image" in arguments:
                 logging.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
-                embed = await get_image_embed(arguments["image"])
+                pnginfo = PngImagePlugin()
+                metadata = arguments["metadata"]
+                for key, value in metadata.items():
+                    pnginfo.add_text(key, value)
+                embed = await get_image_embed(arguments["image"], pnginfo=pnginfo)
             if "image_url" in arguments:
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
@@ -202,13 +206,16 @@ async def send_message_to_thread(command_processor, arguments: Dict, data: Dict,
             logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
-async def get_image_embed(image_data, create_embed: bool = True):
+async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True):
     base64_decoded_image = base64.b64decode(image_data)
     buffer = BytesIO(base64_decoded_image)
     filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
     buffer.seek(0)
     image = Image.open(buffer)
-    image.save(f"{web_root}/{filename}")
+    if pnginfo is not None:
+        image.save(f"{web_root}/{filename}", pnginfo=pnginfo)
+    else:
+        image.save(f"{web_root}/{filename}")
     image_url = f"\n{url_base}/{filename}"
     if create_embed:
         embed = discord.Embed()
