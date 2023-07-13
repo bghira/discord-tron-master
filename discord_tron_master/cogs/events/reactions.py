@@ -3,6 +3,7 @@ from asyncio import Lock
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
 import logging, traceback
+from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.bot import clean_traceback
@@ -36,12 +37,10 @@ class Reactions(commands.Cog):
             if reaction.emoji == "©️":
                 # We want to clone the settings of this post.
                 logging.debug(f'Would clone settings from {embed.image.url}.')
-                # Retrieve:
-                import requests
-                response = requests.get(embed.image.url)
-                # open as PIL image:
-                from PIL import Image
-                img = Image.open(response.raw)
+                # Grab the filename from the URL:
+                import os
+                filename = os.path.basename(embed.image.url)
+                img = Image.open(os.path.join(self.config.get_web_root(), filename))
                 logging.debug(f'Image info: {img.info}')
 
     @commands.Cog.listener()
