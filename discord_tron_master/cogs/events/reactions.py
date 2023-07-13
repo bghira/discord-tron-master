@@ -28,6 +28,11 @@ class Reactions(commands.Cog):
             return
         # Now, we need to check if this is a reaction to a message we sent.
         logging.debug(f'Reaction: {reaction} on message content: {reaction.message.content}')
+        if reaction.message.author != self.bot.user:
+            logging.debug(f'Ignoring reaction on message not from me.')
+            return
+        for embed in reaction.message.embeds:
+            logging.debug(f'Embed: {embed}, url: {embed.image.url}')
 
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
