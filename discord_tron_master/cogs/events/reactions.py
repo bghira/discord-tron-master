@@ -47,7 +47,7 @@ class Reactions(commands.Cog):
         # We have our info.
         if reaction.emoji == "©️":
             # We want to clone the settings of this post.
-            logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}, original_user {img.info["original_user"]}.')
+            logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}, original_user {img.info["user_config"]["original_user"]}.')
             logging.debug(f'User id: {user.id}')
             # Set the config:
             import json
