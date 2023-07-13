@@ -67,7 +67,7 @@ class Reactions(commands.Cog):
             # We are going to resubmit this task for the new user that requested it.
             logging.debug(f'Would resubmit settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
             generator = self.bot.get_cog('Generate')
-            prompt = img.info["prompt"]
+            prompt = json.loads(img.info["prompt"])
             # Now the whitespace:
             prompt = prompt.strip()
             await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt)
