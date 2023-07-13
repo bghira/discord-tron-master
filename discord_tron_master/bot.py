@@ -191,18 +191,9 @@ class DiscordBot:
             except Exception as e:
                 logging.info(f"Error editing topic in {channel.name} ({channel.id}): {e}")
 
-    async def list_default_reactions(self):
-        default_searchables = [ '♻️', '👍', '👎', '©️' ]
-        # Find each of the default_searchables and form a reactions list with Discord emoji objects:
-        reactions = []
-        for emoji in default_searchables:
-            reactions.append(await self.bot.find_emoji(emoji))
-        logging.debug(f'Found {len(reactions)} default reactions: {reactions}')
-        return reactions
-
     async def attach_default_reactions(self, message, reactions = None):
         if reactions is None:
-            reactions = await self.list_default_reactions()
+            reactions = [ '♻️', '👍', '👎', '©️' ]
 
         if message is not None:
             for reaction in reactions:
