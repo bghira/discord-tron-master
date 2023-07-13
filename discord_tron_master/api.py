@@ -96,9 +96,9 @@ class API:
             image_metadata = {}
             if "user_config" in request.args:
                 import json
-                image_metadata["user_config"] = json.loads(image_metadata["user_config"])
+                image_metadata["user_config"] = json.loads(request.args["user_config"])
             if "prompt" in request.args:
-                image_metadata["prompt"] = image_metadata["prompt"].replace("\\n", "\n")
+                image_metadata["prompt"] = request.args["prompt"].replace("\\n", "\n")
             if not self.check_auth(request):
                 return jsonify({"error": "Authentication required"}), 401
             image = request.files.get("image")
