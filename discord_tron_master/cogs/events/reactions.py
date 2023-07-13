@@ -33,7 +33,7 @@ class Reactions(commands.Cog):
             return
         for embed in reaction.message.embeds:
             logging.debug(f'Embed: {embed}, url: {embed.image.url}')
-            if reaction == "©️":
+            if reaction.emoji == "©️":
                 # We want to clone the settings of this post.
                 logging.debug(f'Would clone settings from {embed.image.url}.')
                 # Retrieve:
