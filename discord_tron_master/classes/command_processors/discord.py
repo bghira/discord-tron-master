@@ -213,7 +213,8 @@ async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True)
     buffer.seek(0)
     image = Image.open(buffer)
     if pnginfo is not None:
-        image.save(f"{web_root}/{filename}", pnginfo=pnginfo)
+        logging.debug(f'Saving with pnginfo: {pnginfo}')
+        image.save(f"{web_root}/{filename}", format="PNG", pnginfo=pnginfo)
     else:
         image.save(f"{web_root}/{filename}")
     image_url = f"\n{url_base}/{filename}"
