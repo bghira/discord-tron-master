@@ -17,7 +17,7 @@ class ImageGenerationJob(Job):
         elif num_artefacts == 6:
             bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
-        if "user_config" in self.extra_payload:
+        if self.extra_payload is not None and "user_config" in self.extra_payload:
             user_config = self.extra_payload["user_config"]
         else:
             user_config = config.get_user_config(user_id=ctx.author.id)
