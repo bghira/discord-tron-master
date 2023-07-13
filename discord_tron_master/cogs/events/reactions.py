@@ -22,6 +22,12 @@ class Reactions(commands.Cog):
         # Code to execute when a reaction is added
         # await reaction.message.channel.send(f'{user.name} has reacted with {reaction.emoji}!')
         logging.debug(f'{user.name} has reacted with {reaction.emoji}!')
+        no_op = [ '👎', '👍', '©️' ] # WE do nothing with these right now.
+        if reaction.emoji in no_op:
+            logging.debug(f'Ignoring no-op reaction: {reaction.emoji}')
+            return
+        # Now, we need to check if this is a reaction to a message we sent.
+        logging.debug(f'Reaction: {reaction} on message content: {reaction.message.content}')
 
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
