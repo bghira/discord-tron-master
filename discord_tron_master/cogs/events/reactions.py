@@ -70,7 +70,7 @@ class Reactions(commands.Cog):
             prompt = json.loads(img.info["prompt"])
             # Now the whitespace:
             prompt = prompt.strip()
-            await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt)
+            await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt, user_id=user.id)
 
         
     @commands.Cog.listener()
