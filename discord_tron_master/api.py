@@ -102,6 +102,7 @@ class API:
             # Read the image and convert it to a base64-encoded string
             try:
                 img = Image.open(image.stream)
+                logging.debug(f'Image metadata: {img.info}')
             except UnidentifiedImageError as e:
                 logging.debug(f'Malformed image was supplied: {image.stream}')
                 logging.error(f"Could not open image: {e}")
