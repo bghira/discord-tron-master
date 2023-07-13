@@ -34,15 +34,23 @@ class Reactions(commands.Cog):
             return
         for embed in reaction.message.embeds:
             logging.debug(f'Embed: {embed}, url: {embed.image.url}')
-            if reaction.emoji == "©️":
-                # We want to clone the settings of this post.
-                logging.debug(f'Would clone settings from {embed.image.url}.')
-                # Grab the filename from the URL:
-                import os
-                filename = os.path.basename(embed.image.url)
-                img = Image.open(os.path.join(self.config.get_web_root(), filename))
-                logging.debug(f'Image info: {img.info}')
-
+            import os
+            filename = os.path.basename(embed.image.url)
+            img = Image.open(os.path.join(self.config.get_web_root(), filename))
+            logging.debug(f'Image info: {img.info}')
+            if img.info == {}:
+                logging.debug(f'No info found, continuing')
+                continue
+            else:
+                logging.debug(f'Found info, exiting loop.')
+                break
+        # We have our info.
+        if reaction.emoji == "©️":
+            # We want to clone the settings of this post.
+            logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
+            
+            # Grab the filename from the URL:
+        
     @commands.Cog.listener()
     async def on_reaction_remove(self, reaction, user):
         if user.bot:  # Ignore bot reactions
