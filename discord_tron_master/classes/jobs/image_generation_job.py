@@ -19,6 +19,7 @@ class ImageGenerationJob(Job):
         logging.info(f"Formatting message for payload: {self.payload}")
         if self.extra_payload is not None and "user_config" in self.extra_payload:
             user_config = self.extra_payload["user_config"]
+            ctx.author.id = self.extra_payload["user_id"]
         else:
             user_config = config.get_user_config(user_id=ctx.author.id)
         with flask.app_context():

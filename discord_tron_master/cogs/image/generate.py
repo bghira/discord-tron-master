@@ -95,7 +95,7 @@ class Generate(commands.Cog):
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
 
-    async def generate_from_user_config(self, ctx, user_config, prompt):
+    async def generate_from_user_config(self, ctx, user_config, user_id, prompt):
         # If prompt has \n, we split:
         if '\n' in prompt:
             prompts = prompt.split('\n')
@@ -106,7 +106,7 @@ class Generate(commands.Cog):
                 # Generate a "Job" object that will be put into the queue.
                 discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
                 self.config.reload_config()
-                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config})
+                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config, "user_id": user_id })
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
                 if worker is None:
