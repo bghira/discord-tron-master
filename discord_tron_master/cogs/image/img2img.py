@@ -108,9 +108,12 @@ class Img2img(commands.Cog):
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
         elif message.content != "" or prompt_override is not None:
             prompt = message.content
+            if type(attachment) == object and hasattr(attachment, "url"):
+                attachment_url = attachment.url
             if prompt_override != None:
                 prompt = prompt_override
-            job = PromptVariationJob((self.bot, self.config, message, prompt, discord_first_message, attachment.url))
+                attachment_url = attachment
+            job = PromptVariationJob((self.bot, self.config, message, prompt, discord_first_message, attachment_url))
         else:
             # Default to image variation job
             job = PromptlessVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
