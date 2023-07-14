@@ -51,6 +51,7 @@ DEFAULT_USER_CONFIG = {
     "strength": 0.5,
     "resize": 1,
     "guidance_scaling": 6,
+    "guidance_rescale": 0.0,
     "model": "ptx0/s1",
     "negative_prompt": "out of frame, lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face",
     "positive_prompt": "",

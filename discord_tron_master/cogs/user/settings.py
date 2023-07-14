@@ -26,7 +26,10 @@ class Settings(commands.Cog):
             await ctx.send(f"Home guild set to {ctx.guild.name} ({ctx.guild.id}).")
         else:
             await ctx.send(f"Are you fucking lost?")
-
+    @commands.command(name="best-of", help="Sets the best-of channel ID for this guild.  This is where the bot will forward thumbs-up images.", hidden=True)
+    async def best_of_channel(self, ctx):
+        guild_config.set_guild_setting(ctx.guild.id, 'best_of_channel_id', ctx.channel.id)
+        await ctx.send(f"This is now the channel for best-of posts in {ctx.guild.name} ({ctx.guild.id}).")
     @commands.command(name="settings", help="Shows your current settings.", hidden=False)
     async def my_settings(self, ctx, *args):
         user_id = ctx.author.id
@@ -76,6 +79,7 @@ class Settings(commands.Cog):
         tts_voice = self.config.get_user_setting(user_id, "tts_voice")
         strength = self.config.get_user_setting(user_id, "strength")
         guidance_scaling = self.config.get_user_setting(user_id, "guidance_scaling")
+        guidance_rescaling = self.config.get_user_setting(user_id, "guidance_rescaling")
 
         seed = self.config.get_user_setting(user_id, "seed", None)
         if seed == -1:
@@ -113,7 +117,8 @@ class Settings(commands.Cog):
             f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ None sets it to the current timestamp, 'random' or -1 set it to a more random value. Applies to all generation (img, txt).\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n"
             f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ About 20 to 200 steps will produce good images.\n"
-            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
+            f"🟠 **Scaling**: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
+            f"🟠 **Rescaling**: `{guidance_rescaling}` **Default**: `0.0`\n❓ Squelch deviation by capping latents, 'rescaling' its CFG value. Max 1.0, min 0.0\n"
             f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ Higher values make the img2img more random. Lower values make it deterministic.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}settings negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of each image prompt. Set via `{self.config.get_command_prefix()}settings positive`.\n"

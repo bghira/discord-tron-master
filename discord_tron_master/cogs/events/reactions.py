@@ -2,6 +2,7 @@ from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.guilds import Guilds
 import logging, traceback
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
@@ -10,7 +11,7 @@ from discord_tron_master.bot import clean_traceback
 
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
-
+guild_config = Guilds()
 class Reactions(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -71,6 +72,19 @@ class Reactions(commands.Cog):
             # Now the whitespace:
             prompt = prompt.strip()
             await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt, user_id=user.id)
+            return
+        # if reaction.emoji = "👍":
+        #     best_of_channel_id = guild_config.get_guild_setting(reaction.message.guild.id, "best_of_channel_id")
+        #     if best_of_channel_id is None:
+        #         logging.debug(f'No best of channel set for guild {reaction.message.guild.id}.')
+        #         return
+        #     best_of_channel = self.bot.get_channel(best_of_channel_id)
+        #     if best_of_channel is None:
+        #         logging.debug(f'Could not find best of channel {best_of_channel_id}.')
+        #         return
+        #     # Let's send the entire reaction.message to the best_of_channel.
+        #     await best_of_channel.send(reaction.message)
+        #     await reaction.message.delete()
 
         
     @commands.Cog.listener()
