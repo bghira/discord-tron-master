@@ -111,6 +111,33 @@ class Reactions(commands.Cog):
             prompt = json.loads(img.info["prompt"])
             await generator._handle_image_attachment(reaction.message, image_urls[0], prompt_override=prompt)
             return
+        if reaction.emoji == '2️⃣':
+            # We want to do an image variation, with the first image in the embeds.
+            current_config = self.config.get_user_config(user.id)
+            logging.debug(f'Would perform img2img variation, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Img2img')
+            # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
+            prompt = json.loads(img.info["prompt"])
+            await generator._handle_image_attachment(reaction.message, image_urls[1], prompt_override=prompt)
+            return
+        if reaction.emoji == '3️⃣':
+            # We want to do an image variation, with the first image in the embeds.
+            current_config = self.config.get_user_config(user.id)
+            logging.debug(f'Would perform img2img variation, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Img2img')
+            # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
+            prompt = json.loads(img.info["prompt"])
+            await generator._handle_image_attachment(reaction.message, image_urls[2], prompt_override=prompt)
+            return
+        if reaction.emoji == '4️⃣':
+            # We want to do an image variation, with the first image in the embeds.
+            current_config = self.config.get_user_config(user.id)
+            logging.debug(f'Would perform img2img variation, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Img2img')
+            # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
+            prompt = json.loads(img.info["prompt"])
+            await generator._handle_image_attachment(reaction.message, image_urls[3], prompt_override=prompt)
+            return
 
         # if reaction.emoji = "👍":
         #     best_of_channel_id = guild_config.get_guild_setting(reaction.message.guild.id, "best_of_channel_id")
