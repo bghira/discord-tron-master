@@ -193,7 +193,7 @@ class DiscordBot:
 
     async def attach_default_reactions(self, message, reactions = None):
         if reactions is None:
-            reactions = [ '♻️', '👍', '👎', '©️' ]
+            reactions = [ '♻️', '©️', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]  # Maybe: '👍', '👎'
 
         if message is not None:
             for reaction in reactions:

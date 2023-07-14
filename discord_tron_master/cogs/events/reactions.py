@@ -33,8 +33,10 @@ class Reactions(commands.Cog):
         if reaction.message.author != self.bot.user:
             logging.debug(f'Ignoring reaction on message not from me.')
             return
+        image_urls = []
         for embed in reaction.message.embeds:
             logging.debug(f'Embed: {embed}, url: {embed.image.url}')
+            image_urls.append(embed.image.url)
             import os
             filename = os.path.basename(embed.image.url)
             img = Image.open(os.path.join(self.config.get_web_root(), filename))
@@ -50,7 +52,7 @@ class Reactions(commands.Cog):
         # Set the config:
         import json
         new_config = json.loads(img.info["user_config"])
-        original_user = 69
+        user_id = 69
         if "user_id" in new_config:
             user_id = new_config["user_id"]
             del new_config["user_id"]
@@ -73,6 +75,43 @@ class Reactions(commands.Cog):
             prompt = prompt.strip()
             await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt, user_id=user.id)
             return
+        # reactions = [ '♻️', '©️', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]  # Maybe: '👍', '👎'
+        if reaction.emoji == '🌱':
+            # We want to copy the 'seed' from the image user_config into the requesting user's config:
+            logging.debug(f'Would copy seed: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
+            # Get the seed from the image:
+            seed = json.loads(img.info["user_config"])["seed"]
+            # Set the seed in the requesting user's config:
+            self.config.set_user_setting(user.id, "seed", seed)
+            # Send a message back to the reaction thread/channel:
+            await reaction.message.channel.send(f'Copied seed from <@{user_id}>\'s post for {user.mention}.')
+            return
+        if reaction.emoji == '📜':
+            # We want to generate a new image using just the prompt from the post, with the user's config.
+            current_config = self.config.get_user_config(user.id)
+            logging.debug(f'Would resubmit settings: user_config {current_config}, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Generate')
+            prompt = json.loads(img.info["prompt"])
+            # Now the whitespace:
+            prompt = prompt.strip()
+            await generator.generate_from_user_config(reaction.message, user_config=current_config, prompt=prompt, user_id=user.id)
+            return
+        if reaction.emoji == '❌':
+            # We want to delete the post, if the user_id is the same as the user reacting.
+            if user_id == user.id:
+                logging.debug(f'Would delete post: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
+                await reaction.message.delete()
+                return
+        if reaction.emoji == '1️⃣':
+            # We want to do an image variation, with the first image in the embeds.
+            current_config = self.config.get_user_config(user.id)
+            logging.debug(f'Would perform img2img variation, prompt {img.info["prompt"]}')
+            generator = self.bot.get_cog('Img2img')
+            # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
+            prompt = json.loads(img.info["prompt"])
+            await generator._handle_image_attachment(reaction.message, image_urls[0], prompt_override=prompt)
+            return
+
         # if reaction.emoji = "👍":
         #     best_of_channel_id = guild_config.get_guild_setting(reaction.message.guild.id, "best_of_channel_id")
         #     if best_of_channel_id is None:

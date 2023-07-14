@@ -98,7 +98,7 @@ class Img2img(commands.Cog):
                         f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
                     )
                     logging.error(f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}")
-    async def _handle_image_attachment(self, message, attachment):
+    async def _handle_image_attachment(self, message, attachment, prompt_override: str = None):
         # Generate a "Job" object that will be put into the queue.
         discord_first_message = await message.channel.send(f"{message.author.mention} Adding image to queue for processing")
         # Does message contain "!upscale"?
@@ -106,8 +106,11 @@ class Img2img(commands.Cog):
             # Remove "!upscale" from the contents:
             message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
-        elif message.content != "":
-            job = PromptVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
+        elif message.content != "" or prompt_override is not None:
+            prompt = message.content
+            if prompt_override != None:
+                prompt = prompt_override
+            job = PromptVariationJob((self.bot, self.config, message, prompt, discord_first_message, attachment.url))
         else:
             # Default to image variation job
             job = PromptlessVariationJob((self.bot, self.config, message, message.content, discord_first_message, attachment.url))
