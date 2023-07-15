@@ -44,9 +44,6 @@ class Reactions(commands.Cog):
             if img.info == {}:
                 logging.debug(f'No info found, continuing')
                 continue
-            else:
-                logging.debug(f'Found info, exiting loop.')
-                break
         # We have our info.
         logging.debug(f'User id: {user.id}')
         # Set the config:
