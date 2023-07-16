@@ -99,7 +99,12 @@ class Reactions(commands.Cog):
                 logging.debug(f'Would delete post: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
                 await reaction.message.delete()
                 return
-        extra_params = { "user_config": self.config.get_user_config(user_id), "user_id": user_id }
+        their_config = self.config.get_user_config(user_id)
+        their_aspect_ratio = their_config['resolution']['width'] / their_config['resolution']['height']
+        old_aspect_ratio = new_config['resolution']['width'] / new_config['resolution']['height']
+        if their_aspect_ratio != old_aspect_ratio:
+            their_config['resolution'] = new_config['resolution'] # img2img should have resolution overridden if the aspect isn't the same.
+        extra_params = { "user_config": their_config, "user_id": user_id }
         if reaction.emoji == '1️⃣':
             # We want to do an image variation, with the first image in the embeds.
             current_config = self.config.get_user_config(user.id)
