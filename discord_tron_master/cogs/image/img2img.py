@@ -98,7 +98,7 @@ class Img2img(commands.Cog):
                         f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
                     )
                     logging.error(f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}")
-    async def _handle_image_attachment(self, message, attachment, prompt_override: str = None):
+    async def _handle_image_attachment(self, message, attachment, prompt_override: str = None, user_config_override: dict = None):
         # Generate a "Job" object that will be put into the queue.
         discord_first_message = await message.channel.send(f"{message.author.mention} Adding image to queue for processing")
         # Does message contain "!upscale"?
