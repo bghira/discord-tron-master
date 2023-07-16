@@ -81,7 +81,7 @@ class Reactions(commands.Cog):
             # Set the seed in the requesting user's config:
             self.config.set_user_setting(user.id, "seed", seed)
             # Send a message back to the reaction thread/channel:
-            await reaction.message.channel.send(f'Copied seed from <@{user_id}>\'s post for {user.mention}.')
+            await reaction.message.channel.send(f'Copied seed {seed} from <@{user_id}>\'s post for {user.mention}.')
             return
         if reaction.emoji == '📜':
             # We want to generate a new image using just the prompt from the post, with the user's config.
