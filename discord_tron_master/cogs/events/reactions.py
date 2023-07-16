@@ -77,7 +77,7 @@ class Reactions(commands.Cog):
             # We want to copy the 'seed' from the image user_config into the requesting user's config:
             logging.debug(f'Would copy seed: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
             # Get the seed from the image:
-            seed = json.loads(img.info["user_config"])["seed"]
+            seed = int(json.loads(img.info["seed"]))
             # Set the seed in the requesting user's config:
             self.config.set_user_setting(user.id, "seed", seed)
             # Send a message back to the reaction thread/channel:
