@@ -134,7 +134,7 @@ class Img2img(commands.Cog):
         # Does message contain "!upscale"?
         extra_payload = None
         if user_config_override != None:
-            extra_payload = { "user_config": user_config_override, "user_id": message.author.id }
+            extra_payload = user_config_override
         if "!upscale" in message.content:
             # Remove "!upscale" from the contents:
             message.content = message.content.replace("!upscale", "")
