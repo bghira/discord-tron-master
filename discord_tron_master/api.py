@@ -112,6 +112,7 @@ class API:
                 # Create pnginfo:
                 pnginfo = PngImagePlugin.PngInfo()
                 for key, value in image_metadata.items():
+                    logging.debug(f'Adding {key} to pnginfo with value: {value}')
                     pnginfo.add_text(key, json.dumps(value), 0)
             except UnidentifiedImageError as e:
                 logging.debug(f'Malformed image was supplied: {image.stream}')
