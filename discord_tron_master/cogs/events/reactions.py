@@ -99,6 +99,7 @@ class Reactions(commands.Cog):
                 logging.debug(f'Would delete post: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
                 await reaction.message.delete()
                 return
+        extra_params = { "user_config": new_config, "user_id": user_id }
         if reaction.emoji == '1️⃣':
             # We want to do an image variation, with the first image in the embeds.
             current_config = self.config.get_user_config(user.id)
@@ -106,7 +107,7 @@ class Reactions(commands.Cog):
             generator = self.bot.get_cog('Img2img')
             # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
             prompt = json.loads(img.info["prompt"])
-            await generator._handle_image_attachment(reaction.message, image_urls[0], prompt_override=prompt)
+            await generator._handle_image_attachment(reaction.message, image_urls[0], prompt_override=prompt, user_config_override=extra_params)
             return
         if reaction.emoji == '2️⃣':
             # We want to do an image variation, with the first image in the embeds.
@@ -115,7 +116,7 @@ class Reactions(commands.Cog):
             generator = self.bot.get_cog('Img2img')
             # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
             prompt = json.loads(img.info["prompt"])
-            await generator._handle_image_attachment(reaction.message, image_urls[1], prompt_override=prompt)
+            await generator._handle_image_attachment(reaction.message, image_urls[1], prompt_override=prompt, user_config_override=extra_params)
             return
         if reaction.emoji == '3️⃣':
             # We want to do an image variation, with the first image in the embeds.
@@ -124,7 +125,7 @@ class Reactions(commands.Cog):
             generator = self.bot.get_cog('Img2img')
             # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
             prompt = json.loads(img.info["prompt"])
-            await generator._handle_image_attachment(reaction.message, image_urls[2], prompt_override=prompt)
+            await generator._handle_image_attachment(reaction.message, image_urls[2], prompt_override=prompt, user_config_override=extra_params)
             return
         if reaction.emoji == '4️⃣':
             # We want to do an image variation, with the first image in the embeds.
@@ -133,7 +134,7 @@ class Reactions(commands.Cog):
             generator = self.bot.get_cog('Img2img')
             # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
             prompt = json.loads(img.info["prompt"])
-            await generator._handle_image_attachment(reaction.message, image_urls[3], prompt_override=prompt)
+            await generator._handle_image_attachment(reaction.message, image_urls[3], prompt_override=prompt, user_config_override=extra_params)
             return
 
         # if reaction.emoji = "👍":
