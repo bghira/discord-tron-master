@@ -150,11 +150,11 @@ class Img2img(commands.Cog):
             )
         elif message.content != "" or prompt_override is not None:
             prompt = message.content
-            if type(attachment) == object and hasattr(attachment, "url"):
-                attachment_url = attachment.url
             if prompt_override != None:
                 prompt = prompt_override
                 attachment_url = attachment
+            else:
+                attachment_url = attachment.url
             job = PromptVariationJob(
                 (
                     self.bot,
