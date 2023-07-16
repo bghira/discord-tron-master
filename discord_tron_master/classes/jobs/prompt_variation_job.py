@@ -14,6 +14,7 @@ class PromptVariationJob(Job):
         logging.info(f"Formatting message for img2img payload")
         logging.debug(f"{self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
+        overridden_user_id = ctx.author.id
         if self.extra_payload is not None and "user_config" in self.extra_payload:
             user_config = self.extra_payload["user_config"]
             overridden_user_id = self.extra_payload["user_id"]
