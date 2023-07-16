@@ -161,7 +161,7 @@ class Img2img(commands.Cog):
                     discord_first_message,
                     attachment_url,
                 ),
-                { "user_config": user_config_override },
+                { "user_config": user_config_override, "user_id": message.author.id },
             )
         else:
             # Default to image variation job
