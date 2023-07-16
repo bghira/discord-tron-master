@@ -45,7 +45,10 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["audio_data"] is not None:
                     logging.debug(f"Incoming message had audio data. Embedding as a file.")
                     file=await get_audio_file(arguments["audio_data"])
-            await channel.send(content=arguments["message"], file=file, embeds=embeds)
+            message = await channel.send(content=arguments["message"], file=file, embeds=embeds)
+            # Add reactions
+            adding_reactions = [ '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]
+            await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
