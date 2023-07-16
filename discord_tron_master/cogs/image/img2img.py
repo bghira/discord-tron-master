@@ -132,6 +132,9 @@ class Img2img(commands.Cog):
             f"{message.author.mention} Adding image to queue for processing"
         )
         # Does message contain "!upscale"?
+        extra_payload = None
+        if user_config_override != None:
+            extra_payload = { "user_config": user_config_override, "user_id": message.author.id }
         if "!upscale" in message.content:
             # Remove "!upscale" from the contents:
             message.content = message.content.replace("!upscale", "")
@@ -161,7 +164,7 @@ class Img2img(commands.Cog):
                     discord_first_message,
                     attachment_url,
                 ),
-                { "user_config": user_config_override, "user_id": message.author.id },
+                extra_payload=extra_payload,
             )
         else:
             # Default to image variation job
