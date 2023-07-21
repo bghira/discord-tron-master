@@ -30,6 +30,8 @@ class ResolutionHelper:
         {"width": 1184, "height": 664, "speed_factor": 30},
         # 2.20:1 aspect ratio (Super Panavision 70, used in 2001: A Space Odyssey)
         {"width": 1248, "height": 568, "speed_factor": 30},
+        # 21:9
+        {"width": 1536, "height": 640, "speed_factor": 30}
     ]
 
     def is_valid_resolution(self, width, height):
