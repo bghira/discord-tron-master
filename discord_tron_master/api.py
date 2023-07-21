@@ -97,6 +97,8 @@ class API:
             if "user_config" in request.args:
                 import json
                 image_metadata["user_config"] = json.loads(request.args["user_config"])
+            if "parameters" in request.args:
+                image_metadata["parameters"] = request.args["parameters"]
             if "prompt" in request.args:
                 image_metadata["prompt"] = request.args["prompt"].replace("\\n", "\n")
             if "seed" in request.args:
