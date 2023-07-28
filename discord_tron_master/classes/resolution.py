@@ -6,33 +6,76 @@ config = AppConfig()
 class ResolutionHelper:
     resolutions = [
         # 1:1 aspect ratio
-        {"width": 512, "height": 512, "speed_factor": 100},
-        {"width": 768, "height": 768, "speed_factor": 30},
-        {"width": 1024, "height": 1024, "speed_factor": 30, "default_max": True},
-        {"width": 1280, "height": 1280, "speed_factor": 30},
-        {"width": 2048, "height": 2048, "speed_factor": 30},
+        {"width": 768, "height": 768},
+        {"width": 1024, "height": 1024, "default_max": True},
+        {"width": 1280, "height": 1280},
+        {"width": 2048, "height": 2048},
         # 2:3 aspect ratio
-        {"width": 1024, "height": 1536, "speed_factor": 30, "default_max": True},
-        {"width": 2048, "height": 3072, "speed_factor": 30},
+        {"width": 1024, "height": 1536, "default_max": True},
+        {"width": 2048, "height": 3072},
         # Add more 2:3 aspect ratios around 1 MP.
-        {"width": 896, "height": 1344, "speed_factor": 30},
+        {"width": 896, "height": 1344},
         # 3:2 aspect ratio
-        {"width": 1152, "height": 768, "speed_factor": 40},
-        {"width": 1536, "height": 1024, "speed_factor": 30, "default_max": True},
-        {"width": 3072, "height": 2048, "speed_factor": 30},
+        {"width": 1152, "height": 768},
+        {"width": 1536, "height": 1024, "default_max": True},
+        {"width": 3072, "height": 2048},
         # Add more 3:2 aspect ratios around 1 MP.
-        {"width": 1024, "height": 680, "speed_factor": 30},
+        {"width": 1024, "height": 680},
         # 16:9 aspect ratio
-        {"width": 1280, "height": 720, "speed_factor": 30},
-        {"width": 1920, "height": 1080, "speed_factor": 20, "default_max": True},
-        {"width": 3840, "height": 2160, "speed_factor": 20},
+        {"width": 1280, "height": 720},
+        {"width": 1920, "height": 1080, "default_max": True},
+        {"width": 3840, "height": 2160},
         # Add more 16:9 aspect ratios around 1 MP.
-        {"width": 1184, "height": 664, "speed_factor": 30},
+        {"width": 1184, "height": 664},
         # 2.20:1 aspect ratio (Super Panavision 70, used in 2001: A Space Odyssey)
-        {"width": 1248, "height": 568, "speed_factor": 30},
+        {"width": 1248, "height": 568},
         # 21:9
-        {"width": 1536, "height": 640, "speed_factor": 30}
+        {"width": 1536, "height": 640},
+        # SDXL Base resolution
+        {"width": 1024, "height": 1024},
+        # SDXL Resolutions, widescreen
+        {"width": 2048, "height": 512},
+        {"width": 1984, "height": 512},
+        {"width": 1920, "height": 512},
+        {"width": 1856, "height": 512},
+        {"width": 1792, "height": 576},
+        {"width": 1728, "height": 576},
+        {"width": 1664, "height": 576},
+        {"width": 1600, "height": 640},
+        {"width": 1536, "height": 640},
+        {"width": 1472, "height": 704},
+        {"width": 1408, "height": 704},
+        {"width": 1344, "height": 704},
+        {"width": 1344, "height": 768},
+        {"width": 1280, "height": 768},
+        {"width": 1216, "height": 832},
+        {"width": 1152, "height": 832},
+        {"width": 1152, "height": 896},
+        {"width": 1088, "height": 896},
+        {"width": 1088, "height": 960},
+        {"width": 1024, "height": 960},
+        # SDXL Resolutions, portrait
+        {"width": 960, "height": 1024},
+        {"width": 960, "height": 1088},
+        {"width": 896, "height": 1088},
+        {"width": 896, "height": 1152},
+        {"width": 832, "height": 1152},
+        {"width": 832, "height": 1216},
+        {"width": 768, "height": 1280},
+        {"width": 768, "height": 1344},
+        {"width": 704, "height": 1408},
+        {"width": 704, "height": 1472},
+        {"width": 640, "height": 1536},
+        {"width": 640, "height": 1600},
+        {"width": 576, "height": 1664},
+        {"width": 576, "height": 1728},
+        {"width": 576, "height": 1792},
+        {"width": 512, "height": 1856},
+        {"width": 512, "height": 1920},
+        {"width": 512, "height": 1984},
+        {"width": 512, "height": 2048},
     ]
+
 
     def is_valid_resolution(self, width, height):
         for res in ResolutionHelper.resolutions:
