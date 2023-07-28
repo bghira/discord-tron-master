@@ -10,31 +10,7 @@ class ResolutionHelper:
         {"width": 1024, "height": 1024, "default_max": True},
         {"width": 1280, "height": 1280},
         {"width": 2048, "height": 2048},
-        # 2:3 aspect ratio
-        {"width": 1024, "height": 1536, "default_max": True},
-        {"width": 2048, "height": 3072},
-        # Add more 2:3 aspect ratios around 1 MP.
-        {"width": 896, "height": 1344},
-        # 3:2 aspect ratio
-        {"width": 1152, "height": 768},
-        {"width": 1536, "height": 1024, "default_max": True},
-        {"width": 3072, "height": 2048},
-        # Add more 3:2 aspect ratios around 1 MP.
-        {"width": 1024, "height": 680},
-        # 16:9 aspect ratio
-        {"width": 1280, "height": 720},
-        {"width": 1920, "height": 1080, "default_max": True},
-        {"width": 3840, "height": 2160},
-        # Add more 16:9 aspect ratios around 1 MP.
-        {"width": 1184, "height": 664},
-        # 2.20:1 aspect ratio (Super Panavision 70, used in 2001: A Space Odyssey)
-        {"width": 1248, "height": 568},
-        # 21:9
-        {"width": 1536, "height": 640},
-        # SDXL Base resolution
-        {"width": 1024, "height": 1024},
         # SDXL Resolutions, widescreen
-        {"width": 2048, "height": 512},
         {"width": 1984, "height": 512},
         {"width": 1920, "height": 512},
         {"width": 1856, "height": 512},
@@ -73,7 +49,6 @@ class ResolutionHelper:
         {"width": 512, "height": 1856},
         {"width": 512, "height": 1920},
         {"width": 512, "height": 1984},
-        {"width": 512, "height": 2048},
     ]
 
 
