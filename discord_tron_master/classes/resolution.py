@@ -75,15 +75,20 @@ class ResolutionHelper:
         return f"```\n{resolution_table}\n```"
 
     def group_and_sort_resolutions(self, resolutions):
-        # Group resolutions by aspect ratio
-        grouped_resolutions = {}
+        # Group resolutions into three categories: Square, Landscape, and Portrait
+        grouped_resolutions = {"Square": [], "Landscape": [], "Portrait": []}
         for r in resolutions:
-            ar = self.aspect_ratio(r)
-            grouped_resolutions.setdefault(ar, []).append(r)
+            if r["width"] == r["height"]:
+                category = "Square"
+            elif r["width"] > r["height"]:
+                category = "Landscape"
+            else:
+                category = "Portrait"
+            grouped_resolutions[category].append(r)
 
         # Sort resolution groups by width and height
-        for ar, resolutions in grouped_resolutions.items():
-            grouped_resolutions[ar] = sorted(
+        for category, resolutions in grouped_resolutions.items():
+            grouped_resolutions[category] = sorted(
                 resolutions, key=lambda r: (r["width"], r["height"])
             )
 
