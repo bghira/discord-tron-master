@@ -114,13 +114,18 @@ class User(commands.Cog):
     @commands.command(name="style", help="Display or set your style template. Can be overridden with `--style` in a prompt.")
     async def manage_style(self, ctx, style_name=None):
         try:
-            current_user_stype = config.get_user_setting(ctx.author.id, "style", 'base')
+            current_user_style = config.get_user_setting(ctx.author.id, "style", 'base')
             if style_name is None:
                 await ctx.send(
-                    f"{ctx.author.mention} Your current style is {current_user_stype}. If you want to change it, use the command `!style <style name>`."
+                    f"{ctx.author.mention} Your current style is {current_user_style}. If you want to change it, use the command `!style <style name>`."
                 )
                 return
             if style_name in prompt_styles.keys():
+                if style_name == current_user_style:
+                    await ctx.send(
+                        f"{ctx.author.mention} Your style is already set to {style_name}."
+                    )
+                    return
                 config.set_user_setting(ctx.author.id, "style", style_name)
                 await ctx.send(
                     f"{ctx.author.mention} Your style has been updated to {style_name}."
