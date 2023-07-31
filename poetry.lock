@@ -441,25 +441,6 @@ test = ["pretend", "pytest (>=6.2.0)", "pytest-benchmark", "pytest-cov", "pytest
 test-randomorder = ["pytest-randomly"]
 
 [[package]]
-name = "discord-py-slash-command"
-version = "4.2.1"
-description = "Easy, simple, scalable and modular: a Python API wrapper for interactions."
-optional = false
-python-versions = ">=3.8.6"
-files = [
-    {file = "discord-py-slash-command-4.2.1.tar.gz", hash = "sha256:c7dc46c45d44635808f637c7261a5084aeb4d36122d03399c920d5692053ee0e"},
-    {file = "discord_py_slash_command-4.2.1-py3-none-any.whl", hash = "sha256:7809a99345b4699cf039b2255a49ef3dec7940c335061ca5e13f0a91b0a76194"},
-]
-
-[package.dependencies]
-aiohttp = ">=3.8.1"
-
-[package.extras]
-dev = ["Sphinx", "black", "flake8", "isort", "karma-sphinx-theme", "pre-commit", "sphinx-hoverxref"]
-lint = ["black", "flake8", "isort", "pre-commit"]
-readthedocs = ["Sphinx", "karma-sphinx-theme", "sphinx-hoverxref"]
-
-[[package]]
 name = "filelock"
 version = "3.12.2"
 description = "A platform independent file lock."
@@ -1693,4 +1674,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.9,<3.12"
-content-hash = "494b3d043f282787ee50657bdd684049ba0fb9cbf4c26a454a5b55448ebf9a2c"
+content-hash = "4bb2135f49956120230a076edc464c5ed57d9d5a505d1e55f2cb0bd9f126ebca"
