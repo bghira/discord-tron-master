@@ -15,6 +15,10 @@ import logging
 config = AppConfig()
 app = AppConfig.flask
 prompt_styles = {
+    "base": [
+      "{prompt}",  
+      "{prompt}"  
+    ],
     "enhance": [
         "breathtaking {prompt} . award-winning, professional, highly detailed",
         "ugly, deformed, noisy, blurry, distorted, grainy"
@@ -89,23 +93,6 @@ class User(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.generic_error = "The smoothbrain geriatric that writes my codebase did not correctly implement that method. I am sorry. Trying again will only lead to tears."
-
-    @cog_ext.cog_slash(
-        name="style",
-        description="Set your style.",
-        options=[
-            create_option(
-                name="style_name",
-                description="Choose your style",
-                option_type=3,  # 3 is the option type for STRING
-                required=True,
-                choices=[create_choice(name=name, value=name) for name in style_names]
-            )
-        ]
-    )
-    async def slash_style(self, ctx: SlashContext, style_name: str):
-        self.manage_style(ctx, style_name)
-
 
     @commands.command(name="clear", help="Clear your GPT conversation history and start again.")
     async def clear_history(self, ctx):
