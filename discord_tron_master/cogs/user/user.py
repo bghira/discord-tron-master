@@ -2,6 +2,14 @@ from discord.ext import commands
 from discord_tron_master.models.conversation import Conversations
 from discord_tron_master.classes.text_replies import return_random as random_fact
 from discord_tron_master.classes.app_config import AppConfig
+from discord_slash import cog_ext, SlashContext
+from discord_slash.utils.manage_commands import create_option, create_choice
+from discord_slash.model import SlashCommandOptionType
+from discord_slash.utils.manage_components import create_button, create_actionrow
+from discord_slash.model import ButtonStyle
+from discord_slash.utils.manage_components import wait_for_component
+
+
 import logging
 
 config = AppConfig()
@@ -76,10 +84,28 @@ prompt_styles = {
         "ugly, deformed, noisy, blurry"
     ]
 }
+style_names = list(prompt_styles.keys())
 class User(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.generic_error = "The smoothbrain geriatric that writes my codebase did not correctly implement that method. I am sorry. Trying again will only lead to tears."
+
+    @cog_ext.cog_slash(
+        name="style",
+        description="Set your style.",
+        options=[
+            create_option(
+                name="style_name",
+                description="Choose your style",
+                option_type=3,  # 3 is the option type for STRING
+                required=True,
+                choices=[create_choice(name=name, value=name) for name in style_names]
+            )
+        ]
+    )
+    async def slash_style(self, ctx: SlashContext, style_name: str):
+        self.manage_style(ctx, style_name)
+
 
     @commands.command(name="clear", help="Clear your GPT conversation history and start again.")
     async def clear_history(self, ctx):
