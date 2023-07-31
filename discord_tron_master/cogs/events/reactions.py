@@ -70,6 +70,8 @@ class Reactions(commands.Cog):
             prompt = json.loads(img.info["prompt"])
             # Now the whitespace:
             prompt = prompt.strip()
+            if 'style' in new_config:
+                new_config['style'] = 'base'
             await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt, user_id=user.id)
             return
         # reactions = [ '♻️', '©️', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]  # Maybe: '👍', '👎'
@@ -86,6 +88,11 @@ class Reactions(commands.Cog):
         if reaction.emoji == '📜':
             # We want to generate a new image using just the prompt from the post, with the user's config.
             current_config = self.config.get_user_config(user.id)
+            if 'style' in new_config and (
+                new_config['style'] != 'base' and new_config['style'] is not None
+                ):
+                # Override style with base, since the prompt already had one.
+                current_config['style'] = 'base'
             logging.debug(f'Would resubmit settings: user_config {current_config}, prompt {img.info["prompt"]}')
             generator = self.bot.get_cog('Generate')
             prompt = json.loads(img.info["prompt"])
