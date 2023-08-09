@@ -31,94 +31,71 @@ class Img2img(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message):
         self.config.reload_config()
+
+        # Ignore bot messages
         if message.author == self.bot.user or message.author.bot:
             logging.debug("Ignoring message from this or another bot.")
             return
-        # Threaded replies without any command prefix:
-        in_my_thread = False
-        is_in_thread = False
-        if isinstance(message.channel, discord.Thread):
-            is_in_thread = True
 
-        # Whether we're in a thread the bot started.
-        if (
-            is_in_thread
-            and message.channel.owner_id == self.bot.user.id
-            or message.author.bot
-        ):
-            in_my_thread = True
-        if is_in_thread and len(message.content) > 0 and message.content[0] == "*":
-            # Respond to * as all bots.
-            in_my_thread = True
-        # Run only if it's in the bot's thread, and has no image attachments, and, has no "!" commands.
-        if (
-            self.bot.user not in message.mentions
-            and in_my_thread
-            and not message.attachments
-            and message.content[0] != "!"
-            and message.content[0] != "+"
-        ):
-            print("Attempting to run generate command?")
-            generator = self.bot.get_cog("Generate")
-            prompt = message.content
-            # Strip the star if it's there.
-            if message.content[0] == "*":
-                prompt = message.content[1:]
-            # Now the whitespace:
-            prompt = message.content.strip()
-            await generator.generate(message, prompt=prompt)
+        if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id:
+            await self._handle_thread_message(message)
+        elif self.bot.user in message.mentions:
+            await self._handle_mentioned_message(message)
+
+    async def _handle_thread_message(self, message):
+        if message.content.startswith("!") or message.content.startswith("+"):
             return
+        # Handle * commands for all bots
+        prompt = message.content.strip("*").strip()
+        if prompt:
+            generator = self.bot.get_cog("Generate")
+            await generator.generate(message, prompt=prompt)
 
-        # Img2Img via bot @mention
-        if self.bot.user in message.mentions:
-            logging.debug("Message contains mention of self.")
-            # Strip the mention from the message:
-            message.content = message.content.replace(f"<@{self.bot.user.id}>", "")
-            message.content = message.content.replace(f"<@!{self.bot.user.id}>", "")
-            if len(message.attachments) > 0:
-                logging.debug("Message contains attachment.")
-                attachment = message.attachments[0]
-                if attachment.content_type.startswith("image/"):
-                    logging.debug("Attachment is an image.")
-                    try:
-                        return await self._handle_image_attachment(message, attachment)
-                    except Exception as e:
-                        await message.channel.send(
-                            f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-                        )
-            else:
-                # We were mentioned, but no attachments. They must want to converse.
-                logging.debug(
-                    "Message contains no attachments. Initiating conversation."
-                )
+    async def _handle_mentioned_message(self, message):
+        # Clean the message content
+        message.content = message.content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip()
+
+        # Handle image attachments
+        if message.attachments:
+            attachment = message.attachments[0]
+            if attachment.content_type.startswith("image/"):
                 try:
-                    gpt = GPT()
-                    from discord_tron_master.classes.openai.chat_ml import ChatML
-                    from discord_tron_master.models.conversation import Conversations
-
-                    app = AppConfig.flask
-                    with app.app_context():
-                        user_conversation = Conversations.create(
-                            message.author.id,
-                            self.config.get_user_setting(message.author.id, "gpt_role"),
-                            Conversations.get_new_history(),
-                        )
-                        chat_ml = ChatML(user_conversation)
-                    await chat_ml.add_user_reply(message.content)
-                    response = await gpt.discord_bot_response(
-                        prompt=await chat_ml.get_prompt(), ctx=message
-                    )
-                    await chat_ml.add_assistant_reply(response)
-                    await DiscordBot.send_large_message(
-                        message, message.author.mention + " " + ChatML.clean(response)
-                    )
+                    return await self._handle_image_attachment(message, attachment)
                 except Exception as e:
                     await message.channel.send(
-                        f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
+                        f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                     )
-                    logging.error(
-                        f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-                    )
+            return
+
+        # Handle conversation
+        try:
+            gpt = GPT()
+            from discord_tron_master.classes.openai.chat_ml import ChatML
+            from discord_tron_master.models.conversation import Conversations
+
+            app = AppConfig.flask
+            with app.app_context():
+                user_conversation = Conversations.create(
+                    message.author.id,
+                    self.config.get_user_setting(message.author.id, "gpt_role"),
+                    Conversations.get_new_history(),
+                )
+                chat_ml = ChatML(user_conversation)
+            await chat_ml.add_user_reply(message.content)
+            response = await gpt.discord_bot_response(
+                prompt=await chat_ml.get_prompt(), ctx=message
+            )
+            await chat_ml.add_assistant_reply(response)
+            await DiscordBot.send_large_message(
+                message, message.author.mention + " " + ChatML.clean(response)
+            )
+        except Exception as e:
+            await message.channel.send(
+                f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
+            )
+            logging.error(
+                f"Error generating text inference: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+            )
 
     async def _handle_image_attachment(
         self,
