@@ -29,6 +29,7 @@
         "dbname": "diffusion_master"
     },
     "web_root": "/tmp/discord",
+    "url_base": "https://localhost.foo/folder",
     "tls_key_path": "discord_tron_master/config/server_key.pem",
     "tls_pem_path": "discord_tron_master/config/server_cert.pem"
 }
