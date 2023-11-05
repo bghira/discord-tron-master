@@ -70,7 +70,7 @@ poetry install
 
 ## Configuring
 
-1. Copy `discord_tron_client/config/example.json` to `discord_tron_client/config/config.json`
+1. Copy `discord_tron_master/config/example.json` to `discord_tron_master/config/config.json`
 
 2. Create a MySQL database and user. Update the values in `config.json` accordingly.
 
