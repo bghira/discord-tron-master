@@ -49,7 +49,7 @@ class GPT:
             prompt = prompt + '. Your theme for consideration: ' + theme
         system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
         system_role = f"{system_role}Your prompts look like these 3 examples:\n"
-        system_role = f"{system_role}a portrait of astonishing daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
+        system_role = f"{system_role}a portrait of astonisng daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
         system_role = f"{system_role}a camera photo of great look up a rolling wave, the ocean in full view, best quality, intricate, photography\n"
         system_role = f"{system_role}digital artwork, feels like the first time, we went to the zoo, colourful and majestic, amazing clouds in the sky, epic\n"
         system_role = f"{system_role}The subject must come first, with actions coming next, and then style attributes.\n"
@@ -87,7 +87,7 @@ class GPT:
 
         def send_request():
             return openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4-1106-preview",
                 messages=message_log,
                 max_tokens=self.max_tokens,
                 stop=None,
