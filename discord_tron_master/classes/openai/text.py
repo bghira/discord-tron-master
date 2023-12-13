@@ -8,7 +8,7 @@ openai.api_key = config.get_openai_api_key()
 
 class GPT:
     def __init__(self):
-        self.engine = "gpt-3.5-turbo-0613"
+        self.engine = "gpt-4-1106-preview"
         self.temperature = 0.9
         self.max_tokens = 100
         self.discord_bot_role = "You are a Discord bot."
@@ -43,10 +43,10 @@ class GPT:
             return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print ONLY a random text-to-image prompt for Stable Diffusion using condensed keywords and suffixes ++ to emphasize and -- to deemphasize."
+        prompt = f"Print an image caption on a single line."
         # prompt = f"Print your prompt."
         if theme is not None:
-            prompt = prompt + '. Your theme to mix in: ' + theme
+            prompt = prompt + '. Your theme for consideration: ' + theme
         system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
         system_role = f"{system_role}Your prompts look like these 3 examples:\n"
         system_role = f"{system_role}a portrait of astonishing daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
@@ -74,7 +74,7 @@ class GPT:
         if ctx is not None:
             user_role = self.config.get_user_setting(ctx.author.id, "gpt_role", self.discord_bot_role)
             user_temperature = self.config.get_user_setting(ctx.author.id, "temperature")
-        return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=2048)
+        return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=50000)
 
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:

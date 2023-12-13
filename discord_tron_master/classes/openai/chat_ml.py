@@ -12,7 +12,7 @@ if app is None:
     raise Exception("Flask app is not initialized.")
 
 class ChatML:
-    def __init__(self, conversation: Conversations, token_limit: int = 2048):
+    def __init__(self, conversation: Conversations, token_limit: int = 50000):
         self.conversations = conversation
         self.user_id = conversation.owner
         self.history = conversation.get_history(self.user_id) or Conversations.get_new_history()
