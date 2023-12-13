@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from discord_tron_master.classes.app_config import AppConfig
 import logging
 config = AppConfig()
@@ -79,7 +80,7 @@ class GPT:
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
             self.set_values(**kwargs)
-            
+
         message_log = [
             {"role": "system", "content": role},
             {"role": "user", "content": prompt},
@@ -94,7 +95,7 @@ class GPT:
                 temperature=self.temperature,
             )
 
-        with ThreadPoolExecutor(max_workers=self.concurrent_requests) as executor:
+        with ProcessPoolExecutor(max_workers=self.concurrent_requests) as executor:
             futures = [executor.submit(send_request) for _ in range(1)]
             responses = [future.result() for future in as_completed(futures)]
 
