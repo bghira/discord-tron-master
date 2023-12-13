@@ -77,6 +77,15 @@ class GPT:
             user_temperature = self.config.get_user_setting(ctx.author.id, "temperature")
         return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=4096)
 
+    def send_request(self, message_log):
+        return openai.ChatCompletion.create(
+            model="gpt-4-1106-preview",
+            messages=message_log,
+            max_tokens=self.max_tokens,
+            stop=None,
+            temperature=self.temperature,
+        )
+
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
             self.set_values(**kwargs)
@@ -86,17 +95,8 @@ class GPT:
             {"role": "user", "content": prompt},
         ]
 
-        def send_request():
-            return openai.ChatCompletion.create(
-                model="gpt-4-1106-preview",
-                messages=message_log,
-                max_tokens=self.max_tokens,
-                stop=None,
-                temperature=self.temperature,
-            )
-
         with ProcessPoolExecutor(max_workers=self.concurrent_requests) as executor:
-            futures = [executor.submit(send_request) for _ in range(1)]
+            futures = [executor.submit(self.send_request, message_log) for _ in range(1)]
             responses = [future.result() for future in as_completed(futures)]
 
         response = responses[0]
