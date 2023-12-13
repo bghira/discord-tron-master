@@ -10,7 +10,7 @@ class GPT:
     def __init__(self):
         self.engine = "gpt-4-1106-preview"
         self.temperature = 0.9
-        self.max_tokens = 100
+        self.max_tokens = 4096
         self.discord_bot_role = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
@@ -74,7 +74,7 @@ class GPT:
         if ctx is not None:
             user_role = self.config.get_user_setting(ctx.author.id, "gpt_role", self.discord_bot_role)
             user_temperature = self.config.get_user_setting(ctx.author.id, "temperature")
-        return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=50000)
+        return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=4096)
 
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
