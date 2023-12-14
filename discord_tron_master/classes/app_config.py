@@ -61,7 +61,6 @@ DEFAULT_USER_CONFIG = {
     "resize": 1,
     "guidance_scaling": 6,
     "guidance_rescale": 0.7,
-    "model": "ptx0/terminus-xl-gamma-training",
     "negative_prompt": "washed-out low-contrast (deep fried) watermark, cropped, out-of-frame, low quality, low res, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation",
     "positive_prompt": "",
     "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",
@@ -112,7 +111,10 @@ class AppConfig:
     def get_user_config(self, user_id):
         self.reload_config()
         user_config = self.config.get("users", {}).get(str(user_id), {})
-        return self.merge_dicts(DEFAULT_USER_CONFIG, user_config)
+        merged_settings = self.merge_dicts(DEFAULT_USER_CONFIG, user_config)
+        if "model" not in merged_settings:
+            merged_settings["model"] = self.config.get("default_diffusion_model", "ptx0/terminus-xl-gamma-v2")
+        return merged_settings
 
     @staticmethod
     def merge_dicts(dict1, dict2):
@@ -181,6 +183,7 @@ class AppConfig:
         user_id = str(user_id)
         user_config = self.get_user_config(user_id)
         return user_config.get(setting_key, default_value)
+
     def get_web_root(self):
         self.reload_config()
         return self.config.get("web_root", "/")
