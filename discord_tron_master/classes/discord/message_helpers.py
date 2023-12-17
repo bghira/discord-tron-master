@@ -51,7 +51,7 @@ async def fix_onmessage_context(ctx, bot = None):
     return context
 
 async def most_recently_active_thread(channel):
-    threads = await channel.threads
+    threads = channel.threads
     if threads:
         return threads[0]
     return None
