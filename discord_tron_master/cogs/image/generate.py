@@ -2,7 +2,7 @@ from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
-import discord_tron_master.classes.message_helpers as helper
+import discord_tron_master.classes.discord.message_helpers as helper
 import logging, traceback
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
