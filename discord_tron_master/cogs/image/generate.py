@@ -2,6 +2,7 @@ from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes import message_helpers as helper
 import logging, traceback
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
@@ -94,6 +95,26 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
+
+    @commands.command(name="invite", help="Invites the user to the latest thread in the channel.")
+    async def invite_to_thread(self, ctx):
+        try:
+            channel = ctx.channel
+            thread = await helper.most_recently_active_thread(channel)
+            if thread is None:
+                await ctx.send(
+                    f"{ctx.author.mention} There are no threads in this channel. You can create one by using !generate <prompt>."
+                )
+                return
+            # Ping the user in the thread.
+            await thread.send(
+                f"{ctx.author.mention} is now in the party."
+            )
+        except Exception as e:
+            logging.error("Caught error when inviting to thread: " + str(e))
+            await ctx.send(
+                f"{ctx.author.mention} {self.generic_error}."
+            )
 
     async def generate_from_user_config(self, ctx, user_config, user_id, prompt):
         # If prompt has \n, we split:

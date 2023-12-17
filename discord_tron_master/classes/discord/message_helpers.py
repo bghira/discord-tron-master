@@ -49,3 +49,9 @@ async def fix_onmessage_context(ctx, bot = None):
     else:
         logging.debug(f"Passing through context object.")
     return context
+
+async def most_recently_active_thread(channel):
+    threads = await channel.threads()
+    if threads:
+        return threads[0]
+    return None
