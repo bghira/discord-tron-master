@@ -53,5 +53,8 @@ async def fix_onmessage_context(ctx, bot = None):
 async def most_recently_active_thread(channel):
     threads = channel.threads
     if threads:
+        if len(threads) > 1:
+            # Sort by last message id so that we grab the most recent thread.
+            threads.sort(key=lambda x: x.last_message_id, reverse=True)
         return threads[0]
     return None
