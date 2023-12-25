@@ -33,14 +33,14 @@ class Img2img(commands.Cog):
         self.config.reload_config()
 
         # Ignore bot messages
-        if message.author == self.bot.user or message.author.bot:
+        if message.author == self.bot.user or message.author.bot:   
             logging.debug("Ignoring message from this or another bot.")
             return
 
         if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
             await self._handle_thread_message(message)
         elif self.bot.user in message.mentions:
-            await self._handle_mentioned_message(message)
+            await self._handle_mentioned_me                                 ssage(message)
 
     async def _handle_thread_message(self, message):
         if message.content.startswith("!") or message.content.startswith("+"):
@@ -66,6 +66,20 @@ class Img2img(commands.Cog):
                         f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                     )
             return
+
+        # There might be URLs in the message body, grab them via regex and check if they're images:
+        import re
+        url_list = re.findall(r'(https?://[^\s]+)', message.content)
+        if len(url_list) > 0:
+            for url in url_list:
+                if url.endswith(".png") or url.endswith(".jpg") or url.endswith(".jpeg") or url.endswith(".webp"):
+                    try:
+                        return await self._handle_image_attachment(message, url)
+                    except Exception as e:
+                        await message.channel.send(
+                            f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                        )
+                    return
 
         # Handle conversation
         try:
@@ -130,8 +144,10 @@ class Img2img(commands.Cog):
             if prompt_override != None:
                 prompt = prompt_override
                 attachment_url = attachment
-            else:
+            elif hasattr(attachment, "url"):
                 attachment_url = attachment.url
+            elif "http" in attachment:
+                attachment_url = attachment
             job = PromptVariationJob(
                 (
                     self.bot,
