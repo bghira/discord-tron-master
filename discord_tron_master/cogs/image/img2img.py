@@ -37,7 +37,7 @@ class Img2img(commands.Cog):
             logging.debug("Ignoring message from this or another bot.")
             return
 
-        if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id:
+        if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
             await self._handle_thread_message(message)
         elif self.bot.user in message.mentions:
             await self._handle_mentioned_message(message)
