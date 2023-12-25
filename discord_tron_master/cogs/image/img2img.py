@@ -40,7 +40,7 @@ class Img2img(commands.Cog):
         if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
             await self._handle_thread_message(message)
         elif self.bot.user in message.mentions:
-            await self._handle_mentioned_me                                 ssage(message)
+            await self._handle_mentioned_message(message)
 
     async def _handle_thread_message(self, message):
         if message.content.startswith("!") or message.content.startswith("+"):
