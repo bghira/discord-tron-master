@@ -73,7 +73,7 @@ class Img2img(commands.Cog):
         url_list = re.findall(r'(https?://[^\s]+)', message.content)
         if len(url_list) > 0:
             # Remove the URLs from the original string:
-            message.content = re.sub(r'(https?://[^\s]+)', '', message.content)
+            message.content = re.sub(r'(https?://[^\s]+)', '', message.content).strip()
             for url in url_list:
                 if url.endswith(".png") or url.endswith(".jpg") or url.endswith(".jpeg") or url.endswith(".webp"):
                     try:
