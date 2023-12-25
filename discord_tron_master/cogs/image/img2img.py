@@ -70,7 +70,7 @@ class Img2img(commands.Cog):
 
         # There might be URLs in the message body, grab them via regex and check if they're images. The images may be surrounded by <> or () or [] or nothing.
         import re
-        url_list = re.findall(r'((?:<|[(|\[])?https?://[^\s]+(?:>|)|[)|\]]))', message.content)
+        url_list = re.findall(r'(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?', message.content)
         
         if len(url_list) > 0:
             # Remove the URLs from the original string:
