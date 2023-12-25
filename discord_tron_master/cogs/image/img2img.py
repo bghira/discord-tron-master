@@ -54,7 +54,8 @@ class Img2img(commands.Cog):
     async def _handle_mentioned_message(self, message):
         # Clean the message content
         message.content = message.content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip()
-
+        # Log the content
+        logging.debug(f"Message content: {message.content}")
         # Handle image attachments
         if message.attachments:
             attachment = message.attachments[0]
