@@ -60,7 +60,7 @@ class Reactions(commands.Cog):
             user_id = new_config["user_id"]
             del new_config["user_id"]
         # Did load correctly?
-        if new_config == {}:
+        if new_config == {} and reaction.emoji != '❌':
             logging.debug(f'Error loading config from image info.')
             return
         if reaction.emoji == "©️":
