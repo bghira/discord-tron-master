@@ -155,6 +155,10 @@ class Reactions(commands.Cog):
         # Floppy disk should send the image as an embed to the main channel the thread is in.
         if reaction.emoji == '💾':
             # Find the parent channel for the thread:
+            logging.debug(f"Reaction message: {reaction.message}")
+            logging.debug(f"Reaction channel: {reaction.message.channel}")
+            logging.debug(f"Reaction parent: {reaction.message.channel.parent}")
+            
             parent_channel = reaction.message.channel.parent
             # Send the image to the parent channel:
             await parent_channel.send(file=reaction.message.attachments[0])
