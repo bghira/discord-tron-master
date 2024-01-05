@@ -4,6 +4,7 @@ from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.guilds import Guilds
 import logging, traceback
+import discord as discord_library
 from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
@@ -165,7 +166,7 @@ class Reactions(commands.Cog):
             preservation_message = f"User {user.mention} has preserved the following images:\n{reaction.message.content}"
             for image_url in image_urls:
                 # Grab the image and turn into 
-                embed = discord.Embed(url="http://tripleback.net")
+                embed = discord_library.Embed(url="http://tripleback.net")
                 embed.set_image(url=image_url)
                 embeds.append(embed)
 
