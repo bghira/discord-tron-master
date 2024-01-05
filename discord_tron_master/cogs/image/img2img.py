@@ -125,8 +125,11 @@ class Img2img(commands.Cog):
         user_config_override: dict = None,
     ):
         # Generate a "Job" object that will be put into the queue.
+        mention_string = message.author.mention
+        if "user_id" in user_config_override:
+            mention_string = f"<@{user_config_override['user_id']}>"
         discord_first_message = await message.channel.send(
-            f"{message.author.mention} Adding image to queue for processing"
+            f"{mention_string} Adding image to queue for processing"
         )
         # Does message contain "!upscale"?
         extra_payload = None
