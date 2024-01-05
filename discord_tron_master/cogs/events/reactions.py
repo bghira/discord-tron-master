@@ -170,7 +170,7 @@ class Reactions(commands.Cog):
                 original_content = original_content.split('>', 1)[1]
                 original_content = original_content.strip()
                 # Remove 's Prompt from the beginning
-                original_content = original_content.split("'s Prompt", 1)[1]
+                original_content = f"prompt: {original_content.split("'s Prompt: ", 1)[1]}"
                 
             preservation_message = f"User {user.mention} has preserved the following image:\n{original_content}"
 
