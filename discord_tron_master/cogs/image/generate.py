@@ -72,6 +72,8 @@ class Generate(commands.Cog):
     async def generate(self, ctx, *, prompt):
         # If prompt has \n, we split:
         if '\n' in prompt and '--multiline' not in prompt and '!multiline' not in prompt:
+            # send a message signifying to the user they can use --multiline or !multiline as a flag to use the prompt as-is.
+            await ctx.send(f"{ctx.author.mention}: You can use `--multiline` or `!multiline` as a flag to use the prompt as-is. I will split your prompt into multiple images without that.")
             prompts = prompt.split('\n')
             # Remove blank prompts
             prompts = [p for p in prompts if p != '']
