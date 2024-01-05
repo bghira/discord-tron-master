@@ -111,7 +111,6 @@ class Reactions(commands.Cog):
         if reaction.emoji == '❌':
             # We want to delete the post, if the user_id is the same as the user reacting.
             if user_id == user.id or str(user.id) in reaction.message.content:
-                logging.debug(f'Would delete post: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
                 await reaction.message.delete()
                 return
         their_config = self.config.get_user_config(user_id)
