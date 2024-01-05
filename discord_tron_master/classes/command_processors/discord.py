@@ -158,6 +158,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     logging.debug(f"Entering create_thread: {arguments} {data} {websocket} {command_processor}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     logging.debug(f"Found channel? {channel}")
+    wants_variations = 0
     if channel is not None:
         try:
             # Maybe channel is already a thread.
@@ -179,14 +180,17 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 for key, value in metadata.items():
                     pnginfo.add_text(key, value)
                 embed = await get_image_embed(arguments["image"], pnginfo=pnginfo)
+                wants_variations = 1
             if "image_url" in arguments:
                 logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
                 embed.set_image(url=arguments["image_url"])
+                wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logging.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
+                    wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
                         logging.debug(f"Adding {image_url} to embed")
                         new_embed = discord.Embed(url="http://tripleback.net")
@@ -199,7 +203,20 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 logging.debug(f"Mentioning user: {arguments['mention']}")
                 arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
             message = await thread.send(content=arguments["message"], embeds=embeds)
-            await command_processor.discord.attach_default_reactions(message)
+
+            # List of number emojis
+            number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+
+            # Add reactions
+            adding_reactions = []
+
+            # Add the appropriate number of emojis based on wants_variations
+            if wants_variations > 0:
+                adding_reactions.extend(number_emojis[:wants_variations])
+
+            # Always add the '❌' reaction
+            adding_reactions.append('❌')
+            await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logging.debug(f"Exiting create_thread")
