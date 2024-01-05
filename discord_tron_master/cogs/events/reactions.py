@@ -161,18 +161,23 @@ class Reactions(commands.Cog):
             logging.debug(f"Reaction parent: {reaction.message.channel.parent}")
             
             parent_channel = reaction.message.channel.parent
-            # Send the image_urls to the parent as Embed objects so that they are stored via Discord CDN
-            embeds = []
-            preservation_message = f"User {user.mention} has preserved the following images:\n{reaction.message.content}"
-            for image_url in image_urls:
-                # Grab the image and turn into 
-                embed = discord_library.Embed(url="http://tripleback.net")
-                embed.set_image(url=image_url)
-                embeds.append(embed)
 
-            new_msg = await parent_channel.send(content=preservation_message, embeds=embeds)
-            # Add 'x' emote to the message:
-            await new_msg.add_reaction('❌')
+            # Strip the original mention from the prompt
+            original_content = reaction.message.content
+            if '<@' in original_content:
+                original_content = original_content.split('>', 1)[1]
+            preservation_message = f"User {user.mention} has preserved the following image:\n{original_content}"
+
+            for image_url in image_urls:
+                # Grab the image data from the URL:
+                import requests
+                from io import BytesIO
+                response = requests.get(image_url)
+                image_data = BytesIO(response.content)
+                file = discord_library.File(image_data, filename=image_url.split('/')[-1])
+                new_msg = await parent_channel.send(content=preservation_message, file=file)
+                # Add 'x' emote to the message:
+                await new_msg.add_reaction('❌')
 
             return
 
