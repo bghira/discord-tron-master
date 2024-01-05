@@ -160,8 +160,19 @@ class Reactions(commands.Cog):
             logging.debug(f"Reaction parent: {reaction.message.channel.parent}")
             
             parent_channel = reaction.message.channel.parent
-            # Send the image to the parent channel:
-            await parent_channel.send(file=reaction.message.attachments[0])
+            # Send the image_urls to the parent as Embed objects so that they are stored via Discord CDN
+            embeds = []
+            preservation_message = f"User {user.mention} has preserved the following images:\n{reaction.message.content}"
+            for image_url in image_urls:
+                # Grab the image and turn into 
+                embed = discord.Embed(url="http://tripleback.net")
+                embed.set_image(url=image_url)
+                embeds.append(embed)
+
+            new_msg = await parent_channel.send(content=preservation_message, embeds=embeds)
+            # Add 'x' emote to the message:
+            await new_msg.add_reaction('❌')
+
             return
 
         # if reaction.emoji = "👍":
