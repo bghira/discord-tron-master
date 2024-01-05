@@ -17,13 +17,15 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
     if channel is not None:
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
-            file=None
-            embeds=None
+            file = None
+            embeds = None
+            wants_variations = False
             if "image" in arguments:
                 if arguments["image"] is not None:
                     base64_decoded_image = base64.b64decode(arguments["image"])
                     buffer = BytesIO(base64_decoded_image)
                     file=discord.File(buffer, "image.png")
+                    wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logging.debug(f"Incoming message to send, has an image url list.")
@@ -33,6 +35,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                         embed = discord.Embed(url="http://tripleback.net")
                         embed.set_image(url=image_url)
                         embeds.append(embed)
+                    wants_variations = len(arguments["image_url_list"])
                 else:
                     logging.debug(f"Incoming message to send, has zero image url list.")
             if "audio_url" in arguments:
@@ -46,8 +49,18 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     logging.debug(f"Incoming message had audio data. Embedding as a file.")
                     file=await get_audio_file(arguments["audio_data"])
             message = await channel.send(content=arguments["message"], file=file, embeds=embeds)
+            # List of number emojis
+            number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+
             # Add reactions
-            adding_reactions = [ '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]
+            adding_reactions = []
+
+            # Add the appropriate number of emojis based on wants_variations
+            if wants_variations > 0:
+                adding_reactions.extend(number_emojis[:wants_variations])
+
+            # Always add the '❌' reaction
+            adding_reactions.append('❌')
             await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
