@@ -49,6 +49,8 @@ class Reactions(commands.Cog):
         # Set the config:
         import json
         new_config = json.loads(img.info["user_config"])
+        current_config = self.config.get_user_config(user.id)
+        
         user_id = 69
         if "user_id" in new_config:
             user_id = new_config["user_id"]
@@ -60,6 +62,8 @@ class Reactions(commands.Cog):
         if reaction.emoji == "©️":
             # We want to clone the settings of this post.
             logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
+            # Keep the user's current seed instead of setting a static one.
+            new_config['seed'] = current_config['seed']
             self.config.set_user_config(user.id, new_config)
             # Send a message back to the reaction thread/channel:
             await reaction.message.channel.send(f'Cloned settings from <@{user_id}>\'s post for {user.mention}.')
@@ -87,7 +91,6 @@ class Reactions(commands.Cog):
             return
         if reaction.emoji == '📜':
             # We want to generate a new image using just the prompt from the post, with the user's config.
-            current_config = self.config.get_user_config(user.id)
             if 'style' in new_config and (
                 new_config['style'] != 'base' and new_config['style'] is not None
                 ):
