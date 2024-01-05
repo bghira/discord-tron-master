@@ -35,6 +35,7 @@ class Reactions(commands.Cog):
             logging.debug(f'Ignoring reaction on message not from me.')
             return
         image_urls = []
+        img = None
         for embed in reaction.message.embeds:
             logging.debug(f'Embed: {embed}, url: {embed.image.url}')
             image_urls.append(embed.image.url)
@@ -48,8 +49,10 @@ class Reactions(commands.Cog):
         # We have our info.
         logging.debug(f'User id: {user.id}')
         # Set the config:
-        import json
-        new_config = json.loads(img.info["user_config"])
+        new_config = {}
+        if img is not None:
+            import json
+            new_config = json.loads(img.info["user_config"])
         current_config = self.config.get_user_config(user.id)
         
         user_id = 69
@@ -107,7 +110,7 @@ class Reactions(commands.Cog):
             return
         if reaction.emoji == '❌':
             # We want to delete the post, if the user_id is the same as the user reacting.
-            if user_id == user.id:
+            if user_id == user.id or user.id in reaction.message.content:
                 logging.debug(f'Would delete post: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
                 await reaction.message.delete()
                 return
