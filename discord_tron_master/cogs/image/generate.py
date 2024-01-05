@@ -71,7 +71,7 @@ class Generate(commands.Cog):
     @commands.command(name="generate", help="Generates an image based on the given prompt.")
     async def generate(self, ctx, *, prompt):
         # If prompt has \n, we split:
-        if '\n' in prompt:
+        if '\n' in prompt and '--multiline' not in prompt and '!multiline' not in prompt:
             prompts = prompt.split('\n')
             # Remove blank prompts
             prompts = [p for p in prompts if p != '']
