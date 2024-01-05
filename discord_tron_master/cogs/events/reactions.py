@@ -76,9 +76,10 @@ class Reactions(commands.Cog):
             prompt = prompt.strip()
             if 'style' in new_config:
                 new_config['style'] = 'base'
+            new_config['seed'] = -1
             await generator.generate_from_user_config(reaction.message, user_config=new_config, prompt=prompt, user_id=user.id)
             return
-        # reactions = [ '♻️', '©️', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]  # Maybe: '👍', '👎'
+        # reactions = [ '♻️', '©️', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌', '💾' ]  # Maybe: '👍', '👎'
         if reaction.emoji == '🌱':
             # We want to copy the 'seed' from the image user_config into the requesting user's config:
             logging.debug(f'Would copy seed: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}')
@@ -150,6 +151,13 @@ class Reactions(commands.Cog):
             # _handle_image_attachment(self, message, attachment, prompt_override: str = None)
             prompt = json.loads(img.info["prompt"])
             await generator._handle_image_attachment(reaction.message, image_urls[3], prompt_override=prompt, user_config_override=extra_params)
+            return
+        # Floppy disk should send the image as an embed to the main channel the thread is in.
+        if reaction.emoji == '💾':
+            # Find the parent channel for the thread:
+            parent_channel = reaction.message.channel.parent
+            # Send the image to the parent channel:
+            await parent_channel.send(file=reaction.message.attachments[0])
             return
 
         # if reaction.emoji = "👍":
