@@ -73,6 +73,10 @@ class Generate(commands.Cog):
         # If prompt has \n, we split:
         if '\n' in prompt:
             prompts = prompt.split('\n')
+            # Remove blank prompts
+            prompts = [p for p in prompts if p != '']
+        elif prompt == 'unconditional' or prompt == 'blank':
+            prompts = ['']
         else:
             prompts = [ prompt ]
         for _prompt in prompts:
