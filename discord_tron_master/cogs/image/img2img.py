@@ -126,7 +126,7 @@ class Img2img(commands.Cog):
     ):
         # Generate a "Job" object that will be put into the queue.
         mention_string = message.author.mention
-        if "user_id" in user_config_override:
+        if user_config_override is not None and "user_id" in user_config_override:
             mention_string = f"<@{user_config_override['user_id']}>"
         discord_first_message = await message.channel.send(
             f"{mention_string} Adding image to queue for processing"
