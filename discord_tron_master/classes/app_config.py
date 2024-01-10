@@ -68,6 +68,7 @@ DEFAULT_USER_CONFIG = {
     "tile_strength": 0.0,
     "hires_fix": False,
     "latent_refiner": False,
+    "auto_model": True,
     "resolution": {
         "width": 1024,
         "height": 1024
