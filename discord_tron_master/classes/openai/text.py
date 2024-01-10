@@ -106,7 +106,7 @@ class GPT:
                 "Output format:\n"
                 '{"model": <selected model>, "resolution": <selected resolution>}'
                 "\n\n-----------\n\n"
-                "Objective: Determine from the user prompt which model to use. The content can be better if an appropriate resolution/aspect are chosen. Keep it conservative, the more extreme aspects end up with morphed outputs."
+                "Objective: Determine from the user prompt which model to use. The content can be better if an appropriate resolution/aspect are chosen."
                 "\n\n-----------\n\n"
                 "Analyze Prompt: " + prompt
             )
