@@ -93,9 +93,10 @@ class Generate(commands.Cog):
                 if extra_payload["user_config"].get("auto_model", True):
                     # We are going to ask OpenAI which model to use for this user.
                     gpt = GPT()
-                    auto_model = await gpt.auto_model_select(_prompt)
+                    auto_resolution, auto_model = await gpt.auto_model_select(_prompt)
                     logging.info(f"Auto-model selected by GPT: {auto_model}")
                     extra_payload["user_config"]["model"] = auto_model
+                    extra_payload["user_config"]["resolution"] = auto_resolution
 
                 job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload=extra_payload)
                 # Get the worker that will process the job.

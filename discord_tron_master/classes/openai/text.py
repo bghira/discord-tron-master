@@ -73,8 +73,7 @@ class GPT:
     async def auto_model_select(self, prompt: str, query_str: str = None):
         if query_str is None:
             query_str = (
-                "We want JUST the name of the model in response. Determine which would work best for the user's prompt."
-                "Models:"
+                "\nModels:"
                 "\n -> ptx0/terminus-xl-otaku-v1"
                 "\n    -> Anime, cartoons, comics, manga, ghibli, watercolour."
                 "\n -> ptx0/terminus-xl-gamma-v2"
@@ -82,18 +81,54 @@ class GPT:
                 "\n -> ptx0/terminus-xl-gamma-training"
                 "\n    -> Cinema, photographs, images with text in them, adult content, etc. This is the default model, but if the request contains 'high quality', it should use gamma-v2 instead."
                 "\n\n-----------\n\n"
-                "Prompt: " + prompt
+                "Resolutions: "
+                "\n| Square        | Landscape    | Portrait     |"
+                "\n+---------------+--------------+--------------+"
+                "\n|               | 1024x960     | 512x1856     | "
+                "\n| 1024x1024     | 1088x896     | 512x1920     | "
+                "\n|               | 1088x960     | 512x1984     | "
+                "\n|               | 1152x832     | 576x1664     | "
+                "\n|               | 1152x896     | 576x1728     | "
+                "\n|               | 1216x832     | 576x1792     | "
+                "\n|               | 1280x768     | 640x1536     | "
+                "\n|               | 1344x704     | 640x1600     | "
+                "\n|               | 1344x768     | 704x1408     | "
+                "\n|               | 1408x704     | 704x1472     | "
+                "\n|               | 1472x704     | 768x1280     | "
+                "\n|               | 1536x640     | 768x1344     | "
+                "\n|               | 1600x640     | 832x1152     | "
+                "\n|               | 1664x576     | 832x1216     | "
+                "\n|               | 1728x576     | 896x1088     | "
+                "\n|               | 1792x576     | 896x1152     | "
+                "\n|               | 1856x512     | 960x1024     | "
+                "\n|               | 1920x512     | 960x1088     | "
+                "\n|               | 1984x512     |              | "
+                "\n\n-----------\n\n"
+                "Output format:\n"
+                '{"model": <selected model>, "resolution": <selected resolution>}'
+                "\n\n-----------\n\n"
+                "Objective: Determine from the user prompt which model to use. The content can be better if an appropriate resolution/aspect are chosen."
+                "\n\n-----------\n\n"
+                "Analyze Prompt: " + prompt
             )
 
         system_role = "You are printing JUST the name of the model in response to the inputs. Determine which would work best for the user's prompt, ignoring any other issues. If anything but the model name is returned, THE APPLICATION WILL ERROR OUT."
-        model_name = await self.turbo_completion(system_role, query_str, temperature=1.18)
+        prediction = await self.turbo_completion(system_role, query_str, temperature=1.18)
+        import json
+        try:
+            result = json.loads(prediction)
+            model_name = result["model"]
+            resolution = result["resolution"]
+        except Exception as e:
+            logging.error(f"Error parsing JSON from prediction: {prediction}")
+            raise e
         logging.debug(f'OpenAI returned the following response to the prompt: {model_name}')
         # Did it refuse?
         if "ptx0" not in model_name:
             logging.warning(f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training.")
-            return "ptx0/terminus-xl-gamma-training"
+            return ("1280x768", "ptx0/terminus-xl-gamma-training")
 
-        return model_name
+        return (resolution, model_name)
 
 
     async def discord_bot_response(self, prompt, ctx = None):
