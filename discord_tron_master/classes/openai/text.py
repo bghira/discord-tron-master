@@ -112,7 +112,7 @@ class GPT:
                 "Analyze Prompt: " + prompt
             )
 
-        system_role = "You are printing JUST the name of the model in response to the inputs. Determine which would work best for the user's prompt, ignoring any other issues. If anything but the model name is returned, THE APPLICATION WILL ERROR OUT."
+        system_role = "Print ONLY the specified JSON document. Determine which model and resolution would work best for the user's prompt, ignoring any other issues. If anything but the JSON object and the defined keys are returned, THE APPLICATION WILL ERROR OUT."
         prediction = await self.turbo_completion(system_role, query_str, temperature=1.18)
         import json
         try:
