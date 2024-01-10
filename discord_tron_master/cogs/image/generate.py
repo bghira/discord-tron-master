@@ -90,7 +90,7 @@ class Generate(commands.Cog):
                     "user_config": self.config.get_user_config(user_id=ctx.author.id),
                     "user_id": ctx.author.id
                 }
-                if extra_payload["user_config"].get("auto_model_select", True):
+                if extra_payload["user_config"].get("auto_model", True):
                     # We are going to ask OpenAI which model to use for this user.
                     gpt = GPT()
                     auto_model = await gpt.auto_model_select(_prompt)
