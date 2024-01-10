@@ -86,7 +86,18 @@ class Generate(commands.Cog):
                 # Generate a "Job" object that will be put into the queue.
                 discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
                 self.config.reload_config()
-                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message))
+                extra_payload = {
+                    "user_config": self.config.get_user_config(user_id=ctx.author.id),
+                    "user_id": ctx.author.id
+                }
+                if extra_payload["user_config"].get("auto_model_select", True):
+                    # We are going to ask OpenAI which model to use for this user.
+                    gpt = GPT()
+                    auto_model = await gpt.auto_model_select()
+                    logging.info(f"Auto-model selected by GPT: {prompt}")
+                    extra_payload["user_config"]["model"] = auto_model
+
+                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload=extra_payload)
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
                 if worker is None:

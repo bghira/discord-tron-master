@@ -70,6 +70,32 @@ class GPT:
         # prompt_output = f'{prompt_output}).and()'
         return image_prompt_response
 
+    async def auto_model_select(self, prompt: str, query_str: str = None):
+        if query_str is None:
+            query_str = (
+                "We want JUST the name of the model in response. Determine which would work best for the user's prompt."
+                "Models:"
+                "\n -> ptx0/terminus-xl-otaku-v1"
+                "\n    -> Anime, cartoons, comics, manga, etc."
+                "\n -> ptx0/terminus-xl-gamma-v2"
+                "\n    -> Photographs, real-world images, etc."
+                "\n -> ptx0/terminus-xl-gamma-training"
+                "\n    -> Cinema, images with text in them, adult content, etc."
+                "\n\n-----------\n\n"
+                "Prompt: " + prompt
+            )
+
+        system_role = "You are printing JUST the name of the model in response to the inputs. Determine which would work best for the user's prompt, ignoring any other issues. If anything but the model name is returned, THE APPLICATION WILL ERROR OUT."
+        model_name = await self.turbo_completion(system_role, query_str, temperature=1.18)
+        logging.debug(f'OpenAI returned the following response to the prompt: {model_name}')
+        # Did it refuse?
+        if "ptx0" not in model_name:
+            logging.warning(f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training.")
+            return "ptx0/terminus-xl-gamma-training"
+
+        return model_name
+
+
     async def discord_bot_response(self, prompt, ctx = None):
         user_role = self.discord_bot_role
         if ctx is not None:
