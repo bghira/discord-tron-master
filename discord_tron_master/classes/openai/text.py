@@ -118,7 +118,12 @@ class GPT:
         try:
             result = json.loads(prediction)
             model_name = result["model"]
-            resolution = result["resolution"]
+            raw_resolution = result["resolution"]
+            width, heidht = raw_resolution.split("x")
+            resolution = {
+                "width": int(width),
+                "height": int(heidht)
+            }
         except Exception as e:
             logging.error(f"Error parsing JSON from prediction: {prediction}")
             raise e
