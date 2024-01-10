@@ -76,11 +76,11 @@ class GPT:
                 "We want JUST the name of the model in response. Determine which would work best for the user's prompt."
                 "Models:"
                 "\n -> ptx0/terminus-xl-otaku-v1"
-                "\n    -> Anime, cartoons, comics, manga, etc."
+                "\n    -> Anime, cartoons, comics, manga, ghibli, watercolour."
                 "\n -> ptx0/terminus-xl-gamma-v2"
-                "\n    -> Photographs, real-world images, etc."
+                "\n    -> Requests for 'high quality' images go here."
                 "\n -> ptx0/terminus-xl-gamma-training"
-                "\n    -> Cinema, images with text in them, adult content, etc."
+                "\n    -> Cinema, photographs, images with text in them, adult content, etc. This is the default model, but if the request contains 'high quality', it should use gamma-v2 instead."
                 "\n\n-----------\n\n"
                 "Prompt: " + prompt
             )
