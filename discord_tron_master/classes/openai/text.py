@@ -125,7 +125,7 @@ class GPT:
             }
         except Exception as e:
             logging.error(f"Error parsing JSON from prediction: {prediction}")
-            raise e
+            return ("1280x768", "ptx0/terminus-xl-gamma-training")
         logging.debug(f'OpenAI returned the following response to the prompt: {model_name}')
         # Did it refuse?
         if "ptx0" not in model_name:
