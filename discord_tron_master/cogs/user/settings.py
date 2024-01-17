@@ -194,9 +194,9 @@ class Settings(commands.Cog):
             f"🟠 **Model ID**: `{model_id}`\n❓ Change using **{self.config.get_command_prefix()}model [model]**, out of the list from **{self.config.get_command_prefix()}model-list**\n"
             f"🟠 **Seed**: `{seed}` **Default**: `None`\n❓ None sets it to the current timestamp, 'random' or -1 set it to a more random value. Applies to all generation (img, txt).\n"
             f"🟠 **Resolution:** `{resolution['width']}x{resolution['height']}`\n"
-            f"🟠 **Steps**: `{steps}` **Default**: `100`\n❓ About 20 to 200 steps will produce good images.\n"
-            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply.\n"
-            f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ Higher values make the img2img more random. Lower values make it deterministic.\n"
+            f"🟠 **Steps**: `{steps}` **Default**: `25`\n❓ About 10 to 30 steps will produce good images.\n"
+            f"🟠 **Scaling**: guidance: `{guidance_scaling}` **Default**: `7.5`\n❓ How closely the image follows the prompt. Below 1 = no prompts apply. Use `{self.config.get_command_prefix()}guidance` to change.\n"
+            f"🟠 **Strength**: `{strength}` **Default**: `0.5`\n❓ Higher values make the img2img more random. Lower values make it deterministic. Use `{self.config.get_command_prefix()}strength` to change.\n"
             f"🟠 **Negative Prompt:**:\n➡️    `{negative_prompt}`\n❓ Images featuring these keywords are less likely to be generated. Set via `{self.config.get_command_prefix()}settings negative`.\n"
             f"🟠 **Positive Prompt:**:\n➡️    `{positive_prompt}`\n❓ Added to the end of each image prompt. Set via `{self.config.get_command_prefix()}settings positive`.\n"
             f"🟠 **GPT Role:**:\n➡️    `{gpt_role}`\n❓ Set a bot persona. Use `{self.config.get_command_prefix()}settings gpt_role [new role]`.\n"
@@ -216,11 +216,35 @@ class Settings(commands.Cog):
             await ctx.delete()
         await DiscordBot.send_large_message(ctx, message)
 
+    @commands.command(name="strength", help="Set the strength for the image 2 image generation process. Default is 0.7.")
+    async def set_strength(self, ctx, strength):
+        user_id = ctx.author.id
+        if not strength.is_numeric() or int(strength) < 0 or int(strength) > 1:
+            our_reply = await ctx.send(f"strength must be a number between 0.0-1.0 You gave me `{strength}`. Try again.")
+            try:
+                if hasattr(ctx, "message"):
+                    await ctx.message.delete(delay=15)
+                else:
+                    await ctx.delete(delay=15)
+                await our_reply.delete(delay=15)
+            except:
+                logging.error("Failed to delete messages.")
+            return
+        config.set_user_setting(user_id, "strength", float(strength))
+        response = await ctx.send(
+            f"{ctx.author.mention} Your strength have been updated. Thank you for flying Air Bizarre. 💪"
+        )
+        await response.delete(delay=15)
+        if hasattr(ctx, "message"):
+            await ctx.message.delete()
+        else:
+            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}")
+
     @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
     async def set_steps(self, ctx, steps):
         user_id = ctx.author.id
-        if not steps.isdigit():
-            our_reply = await ctx.send(f"Steps must be a number. You gave me `{steps}`. Try again.")
+        if not steps.isdigit() or int(steps) < 0 or int(steps) > 50:
+            our_reply = await ctx.send(f"Steps must be a number between 1-50. You gave me `{steps}`. Try again.")
             try:
                 if hasattr(ctx, "message"):
                     await ctx.message.delete(delay=15)
@@ -262,6 +286,41 @@ class Settings(commands.Cog):
         config.set_user_config(user_id, user_config)
         response = await ctx.send(
             f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_scaling}', from '{original_guidance_scaling}'. Did you know {random_fact()}?"
+        )
+        await ctx.delete()
+        await response.delete(delay=15)
+
+    @commands.command(name="guidance_rescale", help="Set your guidance_rescale parameter. It defaults to 0.7.")
+    async def set_guidance_rescale(self, ctx, guidance_rescale = None):
+        user_id = ctx.author.id
+        user_config = config.get_user_config(user_id)
+        original_guidance_rescale = config.get_user_setting(user_id, "guidance_rescale")
+        if guidance_rescale is not None and not "none" in guidance_rescale.lower():
+            try:
+                scaling_value = float(guidance_rescale)
+                if scaling_value > 1.0 or scaling_value < 0.0:
+                    our_reply = await ctx.send(f"Scaling parameter must be a number between 0.0 and 1.0. You gave me `{guidance_rescale}`. Try again.")
+                    try:
+                        await ctx.delete(delay=5)
+                        await our_reply.delete(delay=5)
+                    except:
+                        logging.error("Failed to delete messages.")
+                    return
+            except:
+                our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_rescale}`. Try again.")
+                try:
+                    await ctx.delete(delay=5)
+                    await our_reply.delete(delay=5)
+                except:
+                    logging.error("Failed to delete messages.")
+                return
+        # Allow specifying "None", "none", "NoNe" etc on the cmdline to reset to default.
+        if guidance_rescale is not None and "none" in guidance_rescale.lower():
+            guidance_rescale = 0.7
+        user_config["guidance_rescale"] = guidance_rescale
+        config.set_user_config(user_id, user_config)
+        response = await ctx.send(
+            f"{ctx.author.mention} Your guidance scaling factor has been updated to '{guidance_rescale}', from '{original_guidance_rescale}'. Did you know {random_fact()}?"
         )
         await ctx.delete()
         await response.delete(delay=15)
