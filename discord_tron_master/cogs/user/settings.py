@@ -282,7 +282,7 @@ class Settings(commands.Cog):
         # Allow specifying "None", "none", "NoNe" etc on the cmdline and map to None to enable random seeds.
         if "none" in seed.lower():
             seed = None
-        elif seed == "random":
+        elif seed.lower() == "random":
             seed = -1
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
