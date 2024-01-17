@@ -341,12 +341,12 @@ class Settings(commands.Cog):
         # Allow specifying "None", "none", "NoNe" etc on the cmdline and map to None to enable random seeds.
         if "none" in seed.lower():
             seed = None
-        elif seed.lower() == "random":
+        elif "random" in seed.lower():
             seed = -1
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
         response = await ctx.send(
-            f"{ctx.author.mention} Your generation seed has been updated to '{seed}', from '{original_seed}'.  Did you know {random_fact()}?"
+            f"{ctx.author.mention} Your generation seed has been updated to '{'random' if seed == -1 else seed}', from '{original_seed}'.  Did you know {random_fact()}?"
         )
         await response.delete(delay=15)
         if hasattr(ctx, "delete"):
