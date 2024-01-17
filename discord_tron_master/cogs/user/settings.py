@@ -346,7 +346,7 @@ class Settings(commands.Cog):
         user_config["seed"] = seed
         config.set_user_config(user_id, user_config)
         response = await ctx.send(
-            f"{ctx.author.mention} Your generation seed has been updated to '{'random' if seed == -1 else seed}', from '{original_seed}'.  Did you know {random_fact()}?"
+            f"{ctx.author.mention} Your generation seed has been updated to '{'random' if seed == -1 else seed}', from '{'random' if original_seed == -1 else original_seed}'.  Did you know {random_fact()}?"
         )
         await response.delete(delay=15)
         if hasattr(ctx, "delete"):
