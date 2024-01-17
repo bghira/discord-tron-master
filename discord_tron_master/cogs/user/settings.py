@@ -330,7 +330,7 @@ class Settings(commands.Cog):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_seed = config.get_user_setting(user_id, "seed")
-        if not seed.isdigit() and not "none" in seed.lower() and seed is not None and seed != "random":
+        if not seed.isdigit() and not "none" in seed.lower() and seed is not None and not "random" in seed.lower():
             our_reply = await ctx.send(f"Seed must be a number. You gave me `{seed}`. Try again.")
             try:
                 await ctx.delete(delay=5)
