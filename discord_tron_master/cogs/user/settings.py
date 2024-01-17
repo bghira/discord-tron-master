@@ -219,7 +219,7 @@ class Settings(commands.Cog):
     @commands.command(name="strength", help="Set the strength for the image 2 image generation process. Default is 0.7.")
     async def set_strength(self, ctx, strength):
         user_id = ctx.author.id
-        if not strength.is_numeric() or int(strength) < 0 or int(strength) > 1:
+        if not strength.isnumeric() or int(strength) < 0 or int(strength) > 1:
             our_reply = await ctx.send(f"strength must be a number between 0.0-1.0 You gave me `{strength}`. Try again.")
             try:
                 if hasattr(ctx, "message"):
