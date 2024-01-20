@@ -1,4 +1,6 @@
 # Python and virtual environment files
+multidatabackend.json
+multidatabackend_sd2x.json
 discord_tron_master/migrations/versions
 .venv
 venv
