@@ -87,9 +87,8 @@ class WorkerManager:
             if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks == 0:
+                    logging.info(f"Found empty worker: {worker_id}")
                     selected_worker = worker
-                else:
-                    logging.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
             else:
                 logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
         
