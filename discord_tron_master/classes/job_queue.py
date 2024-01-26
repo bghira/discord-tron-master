@@ -42,13 +42,15 @@ class JobQueue:
             return None
         return self.queue[0]
 
-    async def get(self) -> Job:
+    async def get(self, wait: bool = True) -> Job:
         if self.terminate:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
 
-        await self.item_added_event.wait()  # Wait for the event to be set
-        self.item_added_event.clear()  # Clear the event after it's set
+        if wait:
+            logger.debug(f"Waiting for job in queue: {self.worker_id}")
+            await self.item_added_event.wait()  # Wait for the event to be set
+            self.item_added_event.clear()  # Clear the event after it's set
 
         if self.terminate:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
