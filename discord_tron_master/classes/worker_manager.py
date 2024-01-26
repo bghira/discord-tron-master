@@ -259,52 +259,52 @@ class WorkerManager:
         We only need to reorder them if there are a string of jobs with the same author ID.
         """
         for worker_id, worker in self.workers.items():
-            if not self.does_queue_contain_multiple_users(worker=worker):
+            does_queue_contain_multiple_users = self.does_queue_contain_multiple_users(worker=worker)
+            if not does_queue_contain_multiple_users:
                 logging.info(f"(reorganize_queue_by_user_ids) Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
                 continue
-            if self.does_queue_contain_multiple_users(worker):
-                logging.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users")
-                if not self.does_queue_contain_a_block_of_user_requests(worker):
-                    logging.info(f"We lack a solid block of jobs from the same user. Not Reorganizing queue.")
-                logging.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
-                # We need to reorganize the queue.
-                jobs = worker.job_queue.view()
-                logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[job.id for job in jobs]}")
-                # We need to get the user IDs of the jobs in the queue.
-                user_ids = set()
-                for job in jobs:
-                    if job is None:
-                        continue
-                    user_ids.add(job.author_id)
-                logging.info(f"(reorganize_queue_by_user_ids) User IDs in this queue: {user_ids}")
-                # We now have a set of user IDs.
-                # We need to get the jobs for each user ID.
-                jobs_by_user_id = {}
-                for user_id in user_ids:
-                    jobs_by_user_id[user_id] = [job for job in jobs if job.author_id == user_id]
-                logging.info(f"(reorganize_queue_by_user_ids) Jobs by user ID: {jobs_by_user_id}")
-                # We now have a dictionary of jobs by user ID.
-                # We need to reorganize the queue so that the jobs are interleaved.
-                # We need to get the number of jobs for the user with the most jobs.
-                max_jobs = 0
+            logging.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users")
+            if not self.does_queue_contain_a_block_of_user_requests(worker):
+                logging.info(f"We lack a solid block of jobs from the same user. Not Reorganizing queue.")
+            logging.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
+            # We need to reorganize the queue.
+            jobs = worker.job_queue.view()
+            logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[f"author_id={job.author_id}, id={job.id}" for job in jobs]}")
+            # We need to get the user IDs of the jobs in the queue.
+            user_ids = set()
+            for job in jobs:
+                if job is None:
+                    continue
+                user_ids.add(job.author_id)
+            logging.info(f"(reorganize_queue_by_user_ids) User IDs in this queue: {user_ids}")
+            # We now have a set of user IDs.
+            # We need to get the jobs for each user ID.
+            jobs_by_user_id = {}
+            for user_id in user_ids:
+                jobs_by_user_id[user_id] = [job for job in jobs if job.author_id == user_id]
+            logging.info(f"(reorganize_queue_by_user_ids) Jobs by user ID: {jobs_by_user_id}")
+            # We now have a dictionary of jobs by user ID.
+            # We need to reorganize the queue so that the jobs are interleaved.
+            # We need to get the number of jobs for the user with the most jobs.
+            max_jobs = 0
+            for user_id, jobs in jobs_by_user_id.items():
+                if len(jobs) > max_jobs:
+                    max_jobs = len(jobs)
+            logging.info(f"(reorganize_queue_by_user_ids) Maximum number of jobs for a single user: {max_jobs}")
+            # We now have the maximum number of jobs for a single user.
+            # We need to iterate over the jobs, and add them to a new list.
+            new_jobs = []
+            for i in range(0, max_jobs):
+                logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from each user to the new queue.")
                 for user_id, jobs in jobs_by_user_id.items():
-                    if len(jobs) > max_jobs:
-                        max_jobs = len(jobs)
-                logging.info(f"(reorganize_queue_by_user_ids) Maximum number of jobs for a single user: {max_jobs}")
-                # We now have the maximum number of jobs for a single user.
-                # We need to iterate over the jobs, and add them to a new list.
-                new_jobs = []
-                for i in range(0, max_jobs):
-                    logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from each user to the new queue.")
-                    for user_id, jobs in jobs_by_user_id.items():
-                        logging.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
-                        if i < len(jobs):
-                            logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from user {user_id} to the new queue.")
-                            new_jobs.append(jobs[i])
-                # We now have a new list of jobs.
-                # We need to replace the existing list of jobs with the new list.
-                worker.job_queue.set_queue_from_list(new_jobs)
-                logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[job.id for job in new_jobs]}")
+                    logging.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
+                    if i < len(jobs):
+                        logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from user {user_id} to the new queue.")
+                        new_jobs.append(jobs[i])
+            # We now have a new list of jobs.
+            # We need to replace the existing list of jobs with the new list.
+            worker.job_queue.set_queue_from_list(new_jobs)
+            logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[f"author_id={job.author_id}, id={job.id}" for job in new_jobs]}")
 
     def check_job_queue_for_waiting_items(self):
         for worker_id, worker in self.workers.items():
