@@ -53,6 +53,8 @@ class Worker:
         return self.assigned_jobs[job_type]
 
     def can_assign_job_by_type(self, job_type: str):
+        if self.job_queue is not None and self.job_queue.in_progress is not None and len(self.job_queue.in_progress) > 0:
+            return False
         if job_type not in self.assigned_jobs:
             return True
         if len(self.assigned_jobs[job_type]) < 1:
