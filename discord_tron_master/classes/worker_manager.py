@@ -22,7 +22,7 @@ class WorkerManager:
         self.queue_manager = None
         self.worker_mon_thread = Thread(
             target=self.monitor_worker_queues,
-            name=f"worker_mon_thread_{self.id}",
+            name=f"worker_mon_thread",
             daemon=True,
         )
         self.worker_mon_thread.start()
