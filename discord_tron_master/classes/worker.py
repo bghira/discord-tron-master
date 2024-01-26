@@ -124,6 +124,7 @@ class Worker:
                     break
                 logger.info(f"(Worker.process_jobs) Processing job {job.id} for worker {self.worker_id}")
                 await job.execute()
+                logger.info(f"(Worker.process_jobs) Job executed.")
             except Exception as e:
                 import traceback
                 from discord_tron_master.bot import clean_traceback
@@ -131,13 +132,14 @@ class Worker:
                 await asyncio.sleep(1)  # Use 'await' for asynchronous sleep
 
     async def monitor_worker(self):
-        logger.debug(f"Beginning worker monitoring for worker {self.worker_id}")
+        logger.debug(f"(monitor_worker) Beginning worker monitoring for worker {self.worker_id}")
         while True:
             if self.worker_task is None or self.worker_task.done() and not self.terminate:
                 # Task completed, and worker is not set to terminate
+                logger.info(f"(monitor_worker) Worker {self.worker_id} task is done, and worker is not set to terminate. Restarting worker task.")
                 self.worker_task = asyncio.create_task(self.process_jobs())
             elif self.terminate:
-                logger.info("Worker is set to exit, and the time has come.")
+                logger.info("(monitor_worker) Worker is set to exit, and the time has come.")
                 break
             # Sleep for a while before checking again
             await asyncio.sleep(10)
