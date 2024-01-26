@@ -184,7 +184,7 @@ class WorkerManager:
         return {"success": True, "result": "Worker " + str(worker_id) + " unregistered successfully"}
 
     # A method to watch over worker queues and relocate them to a worker that's less busy, if available:
-    async def monitor_worker_queues(self):
+    def monitor_worker_queues(self):
         while True:
             for worker_id, worker in self.workers.items():
                 current_time = time.time()
@@ -209,4 +209,4 @@ class WorkerManager:
                         if new_worker.worker_id == worker_id:
                             logging.info(f"We are already on the best worker for {job.job_type} jobs. They will have to wait.")
                             continue
-            await asyncio.sleep(10)  # Sleep for 10 seconds before checking again
+            asyncio.sleep(10)  # Sleep for 10 seconds before checking again
