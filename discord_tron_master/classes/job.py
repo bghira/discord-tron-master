@@ -11,9 +11,11 @@ class Job:
         self.module_command = command_name
         self.discord_first_message = payload[4]  # Store the discord_first_message object
         self.worker = None
+        self.author_id = payload[3].author.id   # Store the author id
 
     def set_worker(self, worker):
         self.worker = worker
+
     def payload_text(self):
         dict_version = self.format_payload()
         return dict_version["prompt"] or "Unknown prompt for job: " + self.module_command
@@ -27,6 +29,7 @@ class Job:
             bot, config, ctx, prompt, discord_first_message, image = self.payload
         logging.info(f"Formatting message for payload: {self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
+        self.author_id = ctx.author.id
         message = {
             "job_type": self.job_type,
             "job_id": self.id,

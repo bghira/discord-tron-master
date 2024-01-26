@@ -205,32 +205,123 @@ class WorkerManager:
     # A method to watch over worker queues and relocate them to a worker that's less busy, if available:
     def monitor_worker_queues(self):
         while True:
-            for worker_id, worker in self.workers.items():
-                current_time = time.time()
-                if worker.job_queue is not None and worker.job_queue.qsize() > 0:
-                    logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 30 seconds.")
-                    # There are jobs in the queue.
-                    # Have any of the jobs been waiting longer than 30 seconds?
-                    # We need to retrieve them without disturbing the queue.
-                    jobs = worker.job_queue.view()
-                    logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
-                    for job in jobs:
-                        if job is None or current_time - job.date_created < 30:
-                            # This job has NOT been waiting for more than 30 seconds.
-                            # We do nothing.
-                            continue
-                        logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
-                        new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
-                        if new_worker is None:
-                            logging.info("(monitor_worker_queues) No other workers available to take this job.")
-                            continue
-                        # Is it the same worker?
-                        if new_worker.worker_id == worker_id:
-                            logging.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
-                            continue
-                        else:
-                            # Remove the job from its current worker
-                            logging.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
-                            asyncio.run(worker.job_queue.remove(job))
-                            asyncio.run(self.queue_manager.enqueue_job(new_worker, job))
+            self.check_job_queue_for_waiting_items()
+            self.reorganize_queue_by_user_ids()
             time.sleep(10)  # Sleep for 10 seconds before checking again
+
+    def does_queue_contain_multiple_users(self, worker: Worker):
+        """
+        We need to check each server's queue to determine whether they are containing more than one user's requests.
+                
+        The job has an author_id property we can use. It is their numeric Discord user id.
+        """
+        user_ids = set()
+        if worker.job_queue is None:
+            return False
+        jobs = worker.job_queue.view()
+        for job in jobs:
+            if job is None:
+                continue
+            user_ids.add(job.author_id)
+        return len(user_ids) > 1
+
+    def does_queue_contain_a_block_of_user_requests(self, worker: Worker):
+        """
+        We will check a servers' queue to determine whether they are containing more than one user's requests in sequence.
+        
+        We will assume more than 2 jobs in a row for a single user constitutes a block of jobs.
+        """
+        idx = -1
+        identical_authors = 0
+        for job in worker.job_queue.view():
+            idx += 1
+            if job is None:
+                continue
+            if idx > 0 and job.author_id == worker.job_queue.view()[idx - 1].author_id:
+                # This job is from the same user as the previous job
+                identical_authors += 1
+                if identical_authors > 2:
+                    # We have found a block of jobs from the same user.
+                    return True
+                continue
+            else:
+                # This job is from a different user.
+                return False
+        
+
+    def reorganize_queue_by_user_ids(self):
+        """
+        Sometimes, the queue gets distributed so that a multiple user has gens in order.
+        
+        We want to reorder it then, so that the user IDs of requests interpolate.
+        
+        We only need to reorder them if there are a string of jobs with the same author ID.
+        """
+        if not self.does_queue_contain_multiple_users():
+            logging.info("Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
+            return
+        logging.info("Queue contains multiple users. Reorganizing queue.")
+        for worker_id, worker in self.workers.items():
+            if self.does_queue_contain_multiple_users(worker) and self.does_queue_contain_a_block_of_user_requests(worker):
+                logging.info(f"Queue for worker {worker_id} contains multiple users and a block of jobs from the same user. Reorganizing queue.")
+                # We need to reorganize the queue.
+                jobs = worker.job_queue.view()
+                # We need to get the user IDs of the jobs in the queue.
+                user_ids = set()
+                for job in jobs:
+                    if job is None:
+                        continue
+                    user_ids.add(job.author_id)
+                # We now have a set of user IDs.
+                # We need to get the jobs for each user ID.
+                jobs_by_user_id = {}
+                for user_id in user_ids:
+                    jobs_by_user_id[user_id] = [job for job in jobs if job.author_id == user_id]
+                # We now have a dictionary of jobs by user ID.
+                # We need to reorganize the queue so that the jobs are interleaved.
+                # We need to get the number of jobs for the user with the most jobs.
+                max_jobs = 0
+                for user_id, jobs in jobs_by_user_id.items():
+                    if len(jobs) > max_jobs:
+                        max_jobs = len(jobs)
+                # We now have the maximum number of jobs for a single user.
+                # We need to iterate over the jobs, and add them to a new list.
+                new_jobs = []
+                for i in range(0, max_jobs):
+                    for user_id, jobs in jobs_by_user_id.items():
+                        if i < len(jobs):
+                            new_jobs.append(jobs[i])
+                # We now have a new list of jobs.
+                # We need to replace the existing list of jobs with the new list.
+                worker.job_queue.queue = new_jobs
+                logging.info(f"Reorganized queue for worker {worker_id} to: {new_jobs}")
+
+    def check_job_queue_for_waiting_items(self):
+        for worker_id, worker in self.workers.items():
+            current_time = time.time()
+            if worker.job_queue is not None and worker.job_queue.qsize() > 0:
+                logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 30 seconds.")
+                # There are jobs in the queue.
+                # Have any of the jobs been waiting longer than 30 seconds?
+                # We need to retrieve them without disturbing the queue.
+                jobs = worker.job_queue.view()
+                logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
+                for job in jobs:
+                    if job is None or current_time - job.date_created < 30:
+                        # This job has NOT been waiting for more than 30 seconds.
+                        # We do nothing.
+                        continue
+                    logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
+                    new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
+                    if new_worker is None:
+                        logging.info("(monitor_worker_queues) No other workers available to take this job.")
+                        continue
+                    # Is it the same worker?
+                    if new_worker.worker_id == worker_id:
+                        logging.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
+                        continue
+                    else:
+                        # Remove the job from its current worker
+                        logging.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
+                        asyncio.run(worker.job_queue.remove(job))
+                        asyncio.run(self.queue_manager.enqueue_job(new_worker, job))
