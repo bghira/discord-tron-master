@@ -188,7 +188,7 @@ class WorkerManager:
         while True:
             for worker_id, worker in self.workers.items():
                 current_time = time.time()
-                if worker.job_queue.qsize() > 0:
+                if worker.job_queue is not None and worker.job_queue.qsize() > 0:
                     logging.info(f"Checking worker {worker_id} for jobs that have been waiting for more than 1 minute.")
                     # There are jobs in the queue.
                     # Have any of the jobs been waiting longer than 1 minute?
