@@ -16,8 +16,6 @@ class WebSocketHub:
         self.queue_manager = None
         self.worker_manager = None
         self.discord = discord_bot
-        # Start the periodic broadcast:
-        asyncio.get_event_loop().create_task(self.periodic_broadcast(30))
 
     async def set_queue_manager(self, queue_manager):
         self.queue_manager = queue_manager
@@ -94,11 +92,6 @@ class WebSocketHub:
     async def broadcast(self, message):
         for client in self.connected_clients:
             await client.send(message)
-
-    async def periodic_broadcast(self, interval):
-        while True:
-            await asyncio.sleep(interval)
-            await self.broadcast(json.dumps({"type": "keep_alive"}))
 
     async def run(self, host="0.0.0.0", port=6789):
         logging.info(f"Running WebSocket Hub!")
