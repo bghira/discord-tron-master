@@ -79,11 +79,13 @@ class WorkerManager:
         
         return selected_worker
 
-    def find_worker_with_zero_queued_tasks_by_job_type(self, job_type: str):
+    def find_worker_with_zero_queued_tasks_by_job_type(self, job_type: str, exclude_worker_id: str = None):
         job_type = job_type
         # We don't want to return anything if all servers have a job.
         selected_worker = None
         for worker_id, worker in self.workers.items():
+            if exclude_worker_id is not None and worker_id == exclude_worker_id:
+                continue
             if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks == 0:
@@ -218,7 +220,7 @@ class WorkerManager:
                             # We do nothing.
                             continue
                         logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
-                        new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type)
+                        new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
                         if new_worker is None:
                             logging.info("N(monitor_worker_queues) o other workers available to take this job.")
                             continue
