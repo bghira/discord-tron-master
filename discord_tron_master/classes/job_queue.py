@@ -67,9 +67,10 @@ class JobQueue:
         return output
 
     def done(self, job_id: int):
-        if job_id in self.queue:
-            self.queue.remove(job_id)
-            logging.debug(f"Job {job.id} removed from queue")
+        for job in list(self.queue):
+            if job_id == job.id:
+                self.queue.remove(job)
+                logging.debug(f"Job {job.id} removed from queue")
         if job_id in self.in_progress:
             del self.in_progress[job_id]
             logging.debug(f"Job {job_id} marked as done, removed from in progress")
