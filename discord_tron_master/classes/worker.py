@@ -53,13 +53,17 @@ class Worker:
         return self.assigned_jobs[job_type]
 
     def can_assign_job_by_type(self, job_type: str):
-        if self.job_queue is not None and self.job_queue.in_progress is not None and len(self.job_queue.in_progress) > 0:
+        if (
+            self.job_queue is not None
+            and self.job_queue.in_progress is not None
+            and len(self.job_queue.in_progress) > 0
+            ):
+            logger.debug(f"Worker {self.worker_id} is busy, in_progress has {len(self.job_queue.in_progress)} items in-flight.")
             return False
-        if job_type not in self.assigned_jobs:
-            return True
-        if len(self.assigned_jobs[job_type]) < 1:
-            return True
-        return False
+        if len(self.assigned_jobs.get(job_type, [])) > 1:
+            logger.debug(f"Instead of in progress, we detected assigned jobs in Worker: {self.worker_id} for job type {job_type}: {self.assigned_jobs.get(job_type, [])}")
+            return False
+        return True
 
     async def set_job_queue(self, job_queue: Queue):
         if str(self.worker_id) == "":
