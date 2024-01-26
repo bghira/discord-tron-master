@@ -107,6 +107,10 @@ class Worker:
         while not self.terminate:
             try:
                 test_job = await self.job_queue.preview()  # Use 'await' instead of synchronous call
+                if not None:
+                    logger.debug(f"(Worker.process_jobs) No job to process for worker {self.worker_id}")
+                    await asyncio.sleep(1)
+                    continue
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
