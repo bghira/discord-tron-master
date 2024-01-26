@@ -69,14 +69,16 @@ class JobQueue:
         return output
 
     def done(self, job_id: int):
+        logger.info(f"(JobQueue.done) received job_id: {job_id}. We have {len(self.in_progress)} jobs in progress.")
         for job in list(self.queue):
-            logger.info(f"Looking for job {job_id} in queue: {job.id}")
+            logger.info(f"(JobQueue.done) Looking for job {job_id} in queue: {job.id}")
             if job_id == job.id:
                 self.queue.remove(job)
-                logger.debug(f"Job {job.id} removed from queue")
+                logger.debug(f"(JobQueue.done) Job {job.id} removed from queue")
+        logger.info(f"(JobQueue.done) Looking for job id {job_id} in in_progress: {self.in_progress}")
         if job_id in self.in_progress:
             del self.in_progress[job_id]
-            logger.debug(f"Job {job_id} marked as done, removed from in progress")
+            logger.debug(f"(JobQueue.done) Job {job_id} marked as done, removed from in progress")
 
     def qsize(self) -> int:
         return len(self.queue) + len(self.in_progress)

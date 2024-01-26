@@ -106,12 +106,12 @@ class Worker:
                 else:
                     # Wait async until we can assign
                     while not self.can_assign_job_by_type(job_type=job.job_type):
-                        logger.info(f"Worker {self.worker_id} is busy. Waiting for job to be assigned.")
+                        logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         await asyncio.sleep(1)
                 if job is None:
-                    logger.info("Empty job submitted to worker!?")
+                    logger.info("(Worker.process_jobs) Empty job submitted to worker!?")
                     break
-                logger.info(f"Processing job {job.id} for worker {self.worker_id}")
+                logger.info(f"(Worker.process_jobs) Processing job {job.id} for worker {self.worker_id}")
                 await job.execute()
             except Exception as e:
                 import traceback
