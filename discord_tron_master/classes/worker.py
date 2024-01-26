@@ -1,5 +1,4 @@
 import threading, logging, time, json
-logging.basicConfig(level=logger.INFO)
 from typing import Callable, Dict, Any, List
 from asyncio import Queue
 import asyncio
