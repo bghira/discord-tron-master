@@ -38,6 +38,9 @@ class JobQueue:
             return None
 
         logging.debug(f"Got job! Queue size: {len(self.queue)}")
+        if len(self.queue) == 0:
+            logging.debug("Queue is empty, returning None")
+            return None
         job = self.queue.popleft()
         self.in_progress[job.id] = job
         logging.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
