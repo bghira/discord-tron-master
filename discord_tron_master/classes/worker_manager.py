@@ -262,8 +262,11 @@ class WorkerManager:
             if not self.does_queue_contain_multiple_users(worker=worker):
                 logging.info(f"(reorganize_queue_by_user_ids) Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
                 continue
-            if self.does_queue_contain_multiple_users(worker) and self.does_queue_contain_a_block_of_user_requests(worker):
-                logging.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users and a block of jobs from the same user. Reorganizing queue.")
+            if self.does_queue_contain_multiple_users(worker):
+                logging.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users")
+                if not self.does_queue_contain_a_block_of_user_requests(worker):
+                    logging.info(f"We lack a solid block of jobs from the same user. Not Reorganizing queue.")
+                logging.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
                 # We need to reorganize the queue.
                 jobs = worker.job_queue.view()
                 logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {jobs}")
