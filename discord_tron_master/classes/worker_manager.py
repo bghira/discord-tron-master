@@ -209,4 +209,4 @@ class WorkerManager:
                         if new_worker.worker_id == worker_id:
                             logging.info(f"We are already on the best worker for {job.job_type} jobs. They will have to wait.")
                             continue
-            asyncio.sleep(10)  # Sleep for 10 seconds before checking again
+            time.sleep(10)  # Sleep for 10 seconds before checking again
