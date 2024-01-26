@@ -134,7 +134,7 @@ class Worker:
     async def monitor_worker(self):
         logger.debug(f"(monitor_worker) Beginning worker monitoring for worker {self.worker_id}")
         while True:
-            if self.worker_task is None or self.worker_task.done() and not self.terminate:
+            if (self.worker_task is None or self.worker_task.done()) and not self.terminate:
                 # Task completed, and worker is not set to terminate
                 logger.info(f"(monitor_worker) Worker {self.worker_id} task is done, and worker is not set to terminate. Restarting worker task.")
                 self.worker_task = asyncio.create_task(self.process_jobs())
