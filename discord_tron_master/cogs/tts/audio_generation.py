@@ -59,7 +59,7 @@ class Audio_generation(commands.Cog):
 
             self.config.reload_config()
 
-            job = BarkTtsJob((self.bot, self.config, ctx, prompt, discord_first_message))
+            job = BarkTtsJob(ctx.author.id, (self.bot, self.config, ctx, prompt, discord_first_message))
             # Get the worker that will process the job.
             worker = discord.worker_manager.find_best_fit_worker(job)
             if worker is None:

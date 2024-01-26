@@ -1,7 +1,7 @@
 import uuid, logging, json
 from typing import Dict, Any
 class Job:
-    def __init__(self, job_type: str, module_name: str, command_name: str, payload: Dict[str, Any]):
+    def __init__(self, job_type: str, module_name: str, command_name: str, author_id: str, payload: Dict[str, Any]):
         self.id = str(uuid.uuid4())
         self.job_id = self.id
         self.job_type = job_type
@@ -11,7 +11,7 @@ class Job:
         self.module_command = command_name
         self.discord_first_message = payload[4]  # Store the discord_first_message object
         self.worker = None
-        self.author_id = payload[3].author.id   # Store the author id
+        self.author_id = author_id   # Store the author id
 
     def set_worker(self, worker):
         self.worker = worker

@@ -3,8 +3,8 @@ from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.app_config import AppConfig
 
 class BarkTtsJob(Job):
-    def __init__(self, payload):
-        super().__init__("tts_bark", "tts_bark", "generate", payload)
+    def __init__(self, author_id: str, payload):
+        super().__init__("tts_bark", "tts_bark", "generate", author_id, payload)
         self.date_created = time.time()
 
     async def format_payload(self):

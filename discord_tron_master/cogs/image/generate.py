@@ -98,7 +98,7 @@ class Generate(commands.Cog):
                     extra_payload["user_config"]["model"] = auto_model
                     extra_payload["user_config"]["resolution"] = auto_resolution
 
-                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload=extra_payload)
+                job = ImageGenerationJob(ctx.author.id, (self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload=extra_payload)
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
                 if worker is None:
@@ -145,7 +145,7 @@ class Generate(commands.Cog):
                 # Generate a "Job" object that will be put into the queue.
                 discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
                 self.config.reload_config()
-                job = ImageGenerationJob((self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config, "user_id": user_id })
+                job = ImageGenerationJob(user_id, (self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config, "user_id": user_id })
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
                 if worker is None:

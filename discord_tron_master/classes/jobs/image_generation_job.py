@@ -6,8 +6,8 @@ from discord_tron_master.models.schedulers import Schedulers
 import time
 flask = AppConfig.get_flask()
 class ImageGenerationJob(Job):
-    def __init__(self, payload, extra_payload:dict = None):
-        super().__init__("gpu", "image_generation", "generate_image", payload)
+    def __init__(self, author_id: str, payload, extra_payload:dict = None):
+        super().__init__("gpu", "image_generation", "generate_image", author_id, payload)
         self.extra_payload = extra_payload
         self.date_created = time.time()
 

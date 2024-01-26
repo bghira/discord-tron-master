@@ -126,8 +126,10 @@ class Img2img(commands.Cog):
     ):
         # Generate a "Job" object that will be put into the queue.
         mention_string = message.author.mention
+        author_id = message.author.id
         if user_config_override is not None and "user_id" in user_config_override:
             mention_string = f"<@{user_config_override['user_id']}>"
+            author_id = user_config_override["user_id"]
         discord_first_message = await message.channel.send(
             f"{mention_string} Adding image to queue for processing"
         )
@@ -139,6 +141,7 @@ class Img2img(commands.Cog):
             # Remove "!upscale" from the contents:
             message.content = message.content.replace("!upscale", "")
             job = ImageUpscalingJob(
+                author_id,
                 (
                     self.bot,
                     self.config,
@@ -158,6 +161,7 @@ class Img2img(commands.Cog):
             elif "http" in attachment:
                 attachment_url = attachment
             job = PromptVariationJob(
+                author_id,
                 (
                     self.bot,
                     self.config,
@@ -171,6 +175,7 @@ class Img2img(commands.Cog):
         else:
             # Default to image variation job
             job = PromptlessVariationJob(
+                author_id,
                 (
                     self.bot,
                     self.config,

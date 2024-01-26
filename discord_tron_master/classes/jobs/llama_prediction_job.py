@@ -3,8 +3,8 @@ from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.app_config import AppConfig
 
 class LlamaPredictionJob(Job):
-    def __init__(self, payload):
-        super().__init__("llama", "llama", "predict", payload)
+    def __init__(self, author_id: str, payload):
+        super().__init__("llama", "llama", "predict", author_id, payload)
         self.date_created = time.time()
 
     async def format_payload(self):
