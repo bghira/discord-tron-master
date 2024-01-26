@@ -319,7 +319,7 @@ class WorkerManager:
                 jobs = worker.job_queue.view()
                 logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                 for job in jobs:
-                    if job is None or current_time - job.date_created < 30:
+                    if job is None or job.is_migrated() or current_time - job.date_created < 30:
                         # This job has NOT been waiting for more than 30 seconds.
                         # We do nothing.
                         continue

@@ -1,4 +1,4 @@
-import uuid, logging, json
+import uuid, logging, json, time
 from typing import Dict, Any
 class Job:
     def __init__(self, job_type: str, module_name: str, command_name: str, author_id: str, payload: Dict[str, Any]):
@@ -12,6 +12,17 @@ class Job:
         self.discord_first_message = payload[4]  # Store the discord_first_message object
         self.worker = None
         self.author_id = author_id   # Store the author id
+        self.migrated = False
+        self.migrated_date = None
+        self.migrated_target = None
+
+    def is_migrated(self):
+        return (self.migrated, self.migrated_date, self.migrated_target)
+    
+    def migrate(self, target_worker: str):
+        self.migrated = True
+        self.migrated_date = time.time()
+        self.migrated_target = target_worker
 
     def set_worker(self, worker):
         self.worker = worker
