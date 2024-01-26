@@ -205,18 +205,18 @@ class WorkerManager:
             for worker_id, worker in self.workers.items():
                 current_time = time.time()
                 if worker.job_queue is not None and worker.job_queue.qsize() > 0:
-                    logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 1 minute.")
+                    logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 30 seconds.")
                     # There are jobs in the queue.
-                    # Have any of the jobs been waiting longer than 1 minute?
+                    # Have any of the jobs been waiting longer than 30 seconds?
                     # We need to retrieve them without disturbing the queue.
                     jobs = worker.job_queue.view()
                     logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                     for job in jobs:
-                        if job is None or current_time - job.date_created < 60:
-                            # This job has NOT been waiting for more than 1 minute.
+                        if job is None or current_time - job.date_created < 30:
+                            # This job has NOT been waiting for more than 30 seconds.
                             # We do nothing.
                             continue
-                        logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 1 minute. Checking for a less busy worker.")
+                        logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
                         new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type)
                         if new_worker is None:
                             logging.info("N(monitor_worker_queues) o other workers available to take this job.")
