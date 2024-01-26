@@ -103,6 +103,8 @@ class Job:
             raise e
 
     async def execute(self):
+        if self.has_executed:
+            logging.warning(f"Job {self.job_id} has already been executed. Ignoring.")
         self.has_executed = True
         websocket = self.worker.websocket
         message = await self.format_payload()
