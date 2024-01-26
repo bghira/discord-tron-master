@@ -27,6 +27,21 @@ class JobQueue:
     async def stop(self):
         self.terminate = True
 
+    async def preview(self) -> Job:
+        """
+        Like get(), but we don't mark it in progress or pop it. We simply show what WOULD come with get().
+        
+        Returns None if the queue is empty.
+        Returns the job if the queue is not empty.
+        """
+        if self.terminate:
+            logger.debug(f"Job Queue Terminating: {self.worker_id}")
+            return None
+        if self.queue is None or len(self.queue) == 0:
+            logger.debug("Queue is empty, returning None")
+            return None
+        return self.queue[0]
+
     async def get(self) -> Job:
         if self.terminate:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")

@@ -106,12 +106,13 @@ class Worker:
     async def process_jobs(self):
         while not self.terminate:
             try:
-                job = await self.job_queue.get()  # Use 'await' instead of synchronous call
-                if self.can_assign_job_by_type(job_type=job.job_type):
+                test_job = await self.job_queue.preview()  # Use 'await' instead of synchronous call
+                if self.can_assign_job_by_type(job_type=test_job.job_type):
+                    job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
                 else:
                     # Wait async until we can assign
-                    while not self.can_assign_job_by_type(job_type=job.job_type):
+                    while not self.can_assign_job_by_type(job_type=test_job.job_type):
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         await asyncio.sleep(1)
                 if job is None:
