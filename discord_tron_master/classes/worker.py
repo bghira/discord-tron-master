@@ -54,6 +54,8 @@ class Worker:
     def can_assign_job_by_type(self, job_type: str):
         if job_type not in self.assigned_jobs:
             return True
+        if len(self.assigned_jobs[job_type]) < 1:
+            return True
         return False
 
     async def set_job_queue(self, job_queue: Queue):
