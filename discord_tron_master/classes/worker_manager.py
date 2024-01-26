@@ -223,7 +223,7 @@ class WorkerManager:
             if job is None:
                 continue
             user_ids.add(job.author_id)
-        logging.debug(f"Worker {worker.id} has {len(user_ids)} different users.")
+        logging.debug(f"Worker {worker} has {len(user_ids)} different users.")
         return len(user_ids) > 1
 
     def does_queue_contain_a_block_of_user_requests(self, worker: Worker):
