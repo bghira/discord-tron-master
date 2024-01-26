@@ -31,7 +31,7 @@ class WorkerManager:
 
     def finish_job_for_worker(self, worker_id: str, job: Job):
         worker = self.get_worker(worker_id)
-        worker.job_queue.done(job.job_id)
+        worker.complete_job(job=job)
 
     async def finish_payload(self, command_processor, arguments: Dict, data: Dict, websocket):
         worker_id = arguments["worker_id"]
