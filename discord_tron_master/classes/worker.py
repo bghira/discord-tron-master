@@ -21,8 +21,39 @@ class Worker:
         self.worker_thread = None
         self.monitor_thread = None
         self.worker_task = None
+        # Jobs to assign
         self.job_queue = None
+        # Jobs we have assigned (by job type)
+        self.assigned_jobs = {}
         self.websocket = None
+
+    def assign_job(self, job: Job):
+        if job.job_type not in self.assigned_jobs:
+            self.assigned_jobs[job.job_type] = []
+        self.assigned_jobs[job.job_type].append(job)
+
+    def complete_job(self, job: Job):
+        if job.job_type not in self.assigned_jobs:
+            return
+        self.assigned_jobs[job.job_type].remove(job)
+
+    def complete_job_by_id(self, job_id: str):
+        for job_type, jobs in self.assigned_jobs.items():
+            for job in jobs:
+                if job.id == job_id:
+                    self.assigned_jobs[job_type].remove(job)
+                    self.job_queue.done(job_id)
+                    return
+
+    def list_assigned_jobs_by_type(self, job_type: str):
+        if job_type not in self.assigned_jobs:
+            return []
+        return self.assigned_jobs[job_type]
+
+    def can_assign_job_by_type(self, job_type: str):
+        if job_type not in self.assigned_jobs:
+            return True
+        return False
 
     async def set_job_queue(self, job_queue: Queue):
         if str(self.worker_id) == "":
@@ -66,6 +97,13 @@ class Worker:
         while not self.terminate:
             try:
                 job = await self.job_queue.get()  # Use 'await' instead of synchronous call
+                if self.can_assign_job_by_type(job_type=job.job_type):
+                    self.assign_job(job)
+                else:
+                    # Wait async until we can assign
+                    while not self.can_assign_job_by_type(job_type=job.job_type):
+                        logging.info(f"Worker {self.worker_id} is busy. Waiting for job to be assigned.")
+                        await asyncio.sleep(1)
                 if job is None:
                     logging.info("Empty job submitted to worker!?")
                     break
