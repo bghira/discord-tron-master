@@ -222,7 +222,7 @@ class WorkerManager:
                         logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
                         new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
                         if new_worker is None:
-                            logging.info("N(monitor_worker_queues) o other workers available to take this job.")
+                            logging.info("(monitor_worker_queues) No other workers available to take this job.")
                             continue
                         # Is it the same worker?
                         if new_worker.worker_id == worker_id:

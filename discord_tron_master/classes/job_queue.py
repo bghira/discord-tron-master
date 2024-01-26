@@ -43,7 +43,7 @@ class JobQueue:
         if job in self.queue:
             self.queue.remove(job)
             logging.debug(f"Job {job.id} removed from queue")
-        elif job.id in self.in_progress:
+        if job.id in self.in_progress:
             del self.in_progress[job.id]
             logging.debug(f"Job {job.id} removed from in progress")
 
