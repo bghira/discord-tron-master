@@ -42,6 +42,7 @@ class ImageGenerationJob(Job):
             }
         return message
     async def execute(self):
+        self.has_executed = True
         websocket = self.worker.websocket
         message = await self.format_payload()
         try:

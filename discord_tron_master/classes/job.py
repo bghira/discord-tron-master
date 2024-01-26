@@ -15,6 +15,7 @@ class Job:
         self.migrated = False
         self.migrated_date = None
         self.migrated_target = None
+        self.has_executed = False
 
     def is_migrated(self):
         return (self.migrated, self.migrated_date, self.migrated_target)
@@ -102,6 +103,7 @@ class Job:
             raise e
 
     async def execute(self):
+        self.has_executed = True
         websocket = self.worker.websocket
         message = await self.format_payload()
         try:
