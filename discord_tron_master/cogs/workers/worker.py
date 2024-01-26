@@ -80,15 +80,15 @@ class Worker(commands.Cog):
                 worker = all_workers[worker_id]
                 message = message + f"Worker {worker_id}:\n"
                 message = message + f"- {await worker.job_queue.view_payload_prompts()}\n"
-        try:
-            if hasattr(ctx, "message"):
-                await ctx.message.delete()
-            else:
-                await ctx.delete()
-        except Exception as e:
-            import traceback, logging
-            logging.error(f"Could not delete or send a message: {e}, traceback: {traceback.format_exc()}")
-        await DiscordBot.send_large_message(ctx, message, delete_delay=15)
+        # try:
+        #     if hasattr(ctx, "message"):
+        #         await ctx.message.delete()
+        #     else:
+        #         await ctx.delete()
+        # except Exception as e:
+        #     import traceback, logging
+        #     logging.error(f"Could not delete or send a message: {e}, traceback: {traceback.format_exc()}")
+        await DiscordBot.send_large_message(ctx, message) #, delete_delay=15)
 
 def setup(bot):
     bot.add_cog(Worker(bot))

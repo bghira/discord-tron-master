@@ -114,6 +114,7 @@ class Worker:
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
+                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job {job.id}.")
                 elif test_job in self.assigned_jobs.get(test_job.job_type, []):
                     # Job is already assigned. Wait for it to complete.
                     logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is already processing job {test_job.id}.")
@@ -130,6 +131,7 @@ class Worker:
                 logger.info(f"(Worker.process_jobs) Processing job {job.id} for worker {self.worker_id}")
                 await job.execute()
                 logger.info(f"(Worker.process_jobs) Job executed.")
+                await asyncio.sleep(0.001)  # Use 'await' for asynchronous sleep
             except Exception as e:
                 import traceback
                 from discord_tron_master.bot import clean_traceback
