@@ -257,7 +257,6 @@ class WorkerManager:
         
         We only need to reorder them if there are a string of jobs with the same author ID.
         """
-        logging.info(f"(reorganize_queue_by_user_ids) Queue contains multiple users. Reorganizing queue.")
         for worker_id, worker in self.workers.items():
             if not self.does_queue_contain_multiple_users(worker=worker):
                 logging.info(f"(reorganize_queue_by_user_ids) Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
