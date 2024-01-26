@@ -302,6 +302,7 @@ class WorkerManager:
                     logger.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
                     if i < len(jobs) and jobs[i].id not in added_job_ids:
                         logger.info(f"(reorganize_queue_by_user_ids) Adding job {i} (id={jobs[i].id}) from user {user_id} to the new queue.")
+                        jobs[i].migrate()
                         new_jobs.append(jobs[i])
                         added_job_ids.add(jobs[i].id)
             # We now have a new list of jobs.
@@ -320,7 +321,7 @@ class WorkerManager:
                 jobs = worker.job_queue.view()
                 logger.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                 for job in jobs:
-                    if job is None or job.is_migrated() or current_time - job.date_created < 30:
+                    if job is None or (job.is_migrated() and current_time - job.migrated_date < 300) or current_time - job.date_created < 30:
                         # This job has NOT been waiting for more than 30 seconds.
                         # We do nothing.
                         continue

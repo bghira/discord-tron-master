@@ -20,10 +20,9 @@ class Job:
     def is_migrated(self):
         return (self.migrated, self.migrated_date, self.migrated_target)
     
-    def migrate(self, target_worker: str):
+    def migrate(self):
         self.migrated = True
         self.migrated_date = time.time()
-        self.migrated_target = target_worker
 
     def set_worker(self, worker):
         self.worker = worker
