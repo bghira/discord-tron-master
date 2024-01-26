@@ -38,7 +38,7 @@ class WorkerManager:
         job_id = arguments["job_id"]
         if worker_id and job_id:
             worker = self.get_worker(worker_id)
-            worker.job_queue.done(job_id)
+            worker.complete_job_by_id(job_id)
             logging.info("Finished job for worker " + worker_id)
             return {"status": "successfully finished job"}
         else:
