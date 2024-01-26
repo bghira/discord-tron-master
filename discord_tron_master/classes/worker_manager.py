@@ -303,7 +303,7 @@ class WorkerManager:
                         new_jobs.append(jobs[i])
             # We now have a new list of jobs.
             # We need to replace the existing list of jobs with the new list.
-            worker.job_queue.set_queue_from_list(new_jobs)
+            asyncio.run(worker.job_queue.set_queue_from_list(new_jobs))
             logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[f'author_id={job.author_id}, id={job.id}' for job in new_jobs]}")
 
     def check_job_queue_for_waiting_items(self):
