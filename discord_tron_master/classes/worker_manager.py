@@ -87,8 +87,10 @@ class WorkerManager:
             if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks == 0:
-                    logging.info(f"Found empty worker: {worker_id}")
+                    logging.info(f"(monitor_worker_queues) Found empty worker: {worker_id}")
                     selected_worker = worker
+                else:
+                    logging.info(f"(monitor_worker_queues) Worker {worker_id} has {queued_tasks} queued tasks.")
             else:
                 logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
         
