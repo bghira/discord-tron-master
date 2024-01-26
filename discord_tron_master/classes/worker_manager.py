@@ -206,7 +206,7 @@ class WorkerManager:
     def monitor_worker_queues(self):
         while True:
             self.check_job_queue_for_waiting_items()
-            self.reorganize_queue_by_user_ids()
+            # self.reorganize_queue_by_user_ids()
             time.sleep(10)  # Sleep for 10 seconds before checking again
 
     def does_queue_contain_multiple_users(self, worker: Worker):
@@ -300,7 +300,7 @@ class WorkerManager:
                 for user_id, jobs in jobs_by_user_id.items():
                     logging.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
                     if i < len(jobs) and jobs[i].id not in added_job_ids:
-                        logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from user {user_id} to the new queue.")
+                        logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} (id={jobs[i].id}) from user {user_id} to the new queue.")
                         new_jobs.append(jobs[i])
                         added_job_ids.add(jobs[i].id)
             # We now have a new list of jobs.
