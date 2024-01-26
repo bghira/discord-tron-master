@@ -43,6 +43,7 @@ class JobQueue:
         return self.queue[0]
 
     async def get(self, wait: bool = True) -> Job:
+        logger.debug(f"Getting job from queue: {self.worker_id}, wait: {wait}")
         if self.terminate:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None

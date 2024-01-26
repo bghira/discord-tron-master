@@ -1,4 +1,4 @@
-import logging
+import logging, os
 from colorama import Fore, Back, Style, init
 from discord_tron_master.classes.app_config import AppConfig
 config = AppConfig()
@@ -23,9 +23,15 @@ init(autoreset=True)
 
 # Set up logging with the custom formatter
 logger = logging.getLogger()
-logger.setLevel(config.get_log_level())
-
-handler = logging.StreamHandler()
-handler.setFormatter(ColorizedFormatter("%(asctime)s [%(levelname)s] %(message)s"))
-
-logger.addHandler(handler)
+logger.setLevel(os.environ.get("SIMPLETUNER_LOG_LEVEL", "INFO"))
+accel_logger = logging.getLogger("DeepSpeed")
+accel_logger.setLevel(logging.WARNING)
+new_handler = logging.StreamHandler()
+new_handler.setFormatter(
+    ColorizedFormatter("%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
+)
+# Remove existing handlers
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+if not logger.handlers:
+    logger.addHandler(new_handler)

@@ -115,7 +115,7 @@ class Worker:
                     continue
                 logger.debug(f"(Worker.process_jobs) Preview task: {test_job}")
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
-                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} can assign job {test_job.id}.")
+                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} can assign job {test_job.id}. Queue type: {type(self.job_queue)}")
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
                     logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job {job.id}.")
