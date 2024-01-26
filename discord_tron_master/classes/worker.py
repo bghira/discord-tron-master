@@ -115,6 +115,7 @@ class Worker:
                     continue
                 logger.debug(f"(Worker.process_jobs) Preview task: {test_job}")
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
+                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} can assign job {test_job.id}.")
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
                     logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job {job.id}.")
@@ -129,7 +130,7 @@ class Worker:
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {self.assigned_jobs}")
                         for job in self.assigned_jobs.get(test_job.job_type, []):
-                            logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job: {job.id}, has_executed: {job.has_executed}")
+                            logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, has_executed: {job.has_executed}")
                         await asyncio.sleep(1)
                 if job is None:
                     logger.info("(Worker.process_jobs) Empty job submitted to worker!?")
