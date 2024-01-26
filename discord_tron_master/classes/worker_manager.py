@@ -269,7 +269,7 @@ class WorkerManager:
                 logging.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
                 # We need to reorganize the queue.
                 jobs = worker.job_queue.view()
-                logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {jobs}")
+                logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[job.id for job in jobs]}")
                 # We need to get the user IDs of the jobs in the queue.
                 user_ids = set()
                 for job in jobs:
@@ -304,7 +304,7 @@ class WorkerManager:
                 # We now have a new list of jobs.
                 # We need to replace the existing list of jobs with the new list.
                 worker.job_queue.set_queue_from_list(new_jobs)
-                logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {new_jobs}")
+                logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[job.id for job in new_jobs]}")
 
     def check_job_queue_for_waiting_items(self):
         for worker_id, worker in self.workers.items():
