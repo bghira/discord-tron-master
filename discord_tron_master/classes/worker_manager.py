@@ -239,7 +239,7 @@ class WorkerManager:
             idx += 1
             if job is None:
                 continue
-            if idx > 0 and job.author_id == worker.job_queue.view()[idx - 1].author_id:
+            if idx > 0 and job.author_id == worker.job_queue.view()[idx - 1].author_id and not job.is_migrated()[0]:
                 # This job is from the same user as the previous job
                 identical_authors += 1
                 if identical_authors > 2:
