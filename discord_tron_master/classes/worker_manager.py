@@ -226,4 +226,9 @@ class WorkerManager:
                         if new_worker.worker_id == worker_id:
                             logging.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
                             continue
+                        else:
+                            # Remove the job from its current worker
+                            logging.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
+                            worker.job_queue.remove(job)
+                            asyncio.run(self.queue_manager.enqueue_job(new_worker, job))
             time.sleep(10)  # Sleep for 10 seconds before checking again
