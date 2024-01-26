@@ -294,13 +294,15 @@ class WorkerManager:
             # We now have the maximum number of jobs for a single user.
             # We need to iterate over the jobs, and add them to a new list.
             new_jobs = []
+            added_job_ids = set()
             for i in range(0, max_jobs):
                 logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from each user to the new queue.")
                 for user_id, jobs in jobs_by_user_id.items():
                     logging.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
-                    if i < len(jobs):
+                    if i < len(jobs) and jobs[i].id not in added_job_ids:
                         logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from user {user_id} to the new queue.")
                         new_jobs.append(jobs[i])
+                        added_job_ids.add(jobs[i].id)
             # We now have a new list of jobs.
             # We need to replace the existing list of jobs with the new list.
             asyncio.run(worker.job_queue.set_queue_from_list(new_jobs))
