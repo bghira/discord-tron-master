@@ -5,7 +5,8 @@ from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.exceptions.registration import RegistrationError
 from discord_tron_master.classes.job import Job
 from threading import Thread
-
+logger = logging.getLogger('WorkerManager')
+logger.setLevel('DEBUG')
 class WorkerManager:
     def __init__(self):
         self.workers = {}  # {"worker_id": <Worker>, ...}
@@ -32,7 +33,7 @@ class WorkerManager:
 
     def get_worker(self, worker_id: str):
         if not worker_id or worker_id not in self.workers or not isinstance(self.workers[worker_id], Worker):
-            logging.error(f"Tried accessing invalid worker {self.workers[worker_id]}, traceback: {traceback.format_exc()}")
+            logger.error(f"Tried accessing invalid worker {self.workers[worker_id]}, traceback: {traceback.format_exc()}")
             raise ValueError(f"Worker '{worker_id}' is not registered. Cannot retrieve details.")
         return self.workers[worker_id]
 
@@ -46,10 +47,10 @@ class WorkerManager:
         if worker_id and job_id:
             worker = self.get_worker(worker_id)
             worker.complete_job_by_id(job_id)
-            logging.info("Finished job for worker " + worker_id)
+            logger.info("Finished job for worker " + worker_id)
             return {"status": "successfully finished job"}
         else:
-            logging.error(f"Invalid data received: {data}")
+            logger.error(f"Invalid data received: {data}")
             raise ValueError("Invalid payload received by finish_payload handler. We expect job_id and worker_id.")
 
     def find_worker_with_fewest_queued_tasks(self, job: Job):
@@ -61,21 +62,21 @@ class WorkerManager:
         selected_worker = self.find_first_worker(job_type)
         for worker_id, worker in self.workers.items():
             if exclude_worker_id and worker_id == exclude_worker_id:
-                logging.debug(f"Skipping worker {worker_id} because it is the excluded worker.")
+                logger.debug(f"Skipping worker {worker_id} because it is the excluded worker.")
                 selected_worker = None
                 continue
-            logging.debug(f"worker_id: {worker_id}, worker: {worker}")
+            logger.debug(f"worker_id: {worker_id}, worker: {worker}")
             if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
-                logging.info(f"Found valid worker for {job_type} job")
+                logger.info(f"Found valid worker for {job_type} job")
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks < min_queued_tasks:
-                    logging.debug(f"Found worker with fewer queued tasks: {queued_tasks} < {min_queued_tasks}")
+                    logger.debug(f"Found worker with fewer queued tasks: {queued_tasks} < {min_queued_tasks}")
                     min_queued_tasks = queued_tasks
                     selected_worker = worker
                 else:
-                    logging.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
+                    logger.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
             else:
-                logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
+                logger.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
         
         return selected_worker
 
@@ -89,30 +90,30 @@ class WorkerManager:
             if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
                 queued_tasks = self.queue_manager.worker_queue_length(worker)
                 if queued_tasks == 0:
-                    logging.info(f"(monitor_worker_queues) Found empty worker: {worker_id}")
+                    logger.info(f"(monitor_worker_queues) Found empty worker: {worker_id}")
                     selected_worker = worker
                 else:
-                    logging.info(f"(monitor_worker_queues) Worker {worker_id} has {queued_tasks} queued tasks.")
+                    logger.info(f"(monitor_worker_queues) Worker {worker_id} has {queued_tasks} queued tasks.")
             else:
-                logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
+                logger.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
         
         return selected_worker
 
     def find_first_worker(self, job_type: str) -> Worker:
         capable_workers = self.workers_by_capability.get(job_type)
         if not capable_workers:
-            logging.error(f"No workers capable of handling job type {job_type}")
+            logger.error(f"No workers capable of handling job type {job_type}")
             return None
         return capable_workers[0]
 
     async def register_worker(self, worker_id: str, supported_job_types: List[str], hardware_limits: Dict[str, Any], hardware: Dict[str, Any]) -> Worker:
         if worker_id in self.workers:
-            logging.error(f"Tried to register an already-registered worker: {worker_id}. Forcibly unregistering that worker.")
+            logger.error(f"Tried to register an already-registered worker: {worker_id}. Forcibly unregistering that worker.")
             await self.unregister_worker(worker_id)
             raise RegistrationError(f"Worker '{worker_id}' is already registered. Cannot register again. Wait a bit, and then try again.")
         if not worker_id or worker_id == "":
             raise RegistrationError("Cannot register worker with blank worker_id.")
-        logging.info(f"Registering a new worker, {worker_id}!")
+        logger.info(f"Registering a new worker, {worker_id}!")
         worker = Worker(worker_id, supported_job_types, hardware_limits, hardware, hardware["hostname"])
         self.workers[worker_id] = worker
         for job_type in supported_job_types:
@@ -129,7 +130,7 @@ class WorkerManager:
                 self.workers_by_capability[job_type] = [w for w in self.workers_by_capability[job_type] if w.worker_id != worker_id]
                 
             await worker.stop()
-        logging.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
+        logger.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
 
 
     def get_worker_supported_job_types(self, worker_id: str) -> List[str]:
@@ -169,14 +170,14 @@ class WorkerManager:
         self.queue_manager = queue_manager
 
     async def register(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
-        logging.debug("Registering worker via WebSocket")
+        logger.debug("Registering worker via WebSocket")
         try:
             if "worker_id" in payload:
                 worker_id = payload["worker_id"]
             elif "worker_id" in payload["arguments"]:
                 worker_id = payload["arguments"]["worker_id"]
         except KeyError:
-            logging.error(f"Worker ID not provided in payload: {payload}")
+            logger.error(f"Worker ID not provided in payload: {payload}")
             return {"error": "Worker ID not provided in payload"}
         supported_job_types = payload["supported_job_types"]
         hardware_limits = payload["hardware_limits"]
@@ -189,17 +190,17 @@ class WorkerManager:
         return {"success": True, "result": "Worker " + str(worker_id) + " registered successfully"}
 
     async def unregister(self, command_processor, payload: Dict[str, Any], data: Dict, websocket: websocket) -> Dict:
-        logging.info("Unregistering worker for queued jobs")
+        logger.info("Unregistering worker for queued jobs")
         try:
             worker_id = payload["worker_id"]
         except KeyError:
-            logging.error("Worker ID not provided in payload")
+            logger.error("Worker ID not provided in payload")
             return {"error": "Worker ID not provided in payload"}
         worker = self.workers.get(worker_id)
         worker.stop()
         await self.unregister_worker(worker_id)
         await self.queue_manager.unregister_worker(worker_id)
-        logging.info("Successfully unregistered worker from queue manager.")
+        logger.info("Successfully unregistered worker from queue manager.")
         return {"success": True, "result": "Worker " + str(worker_id) + " unregistered successfully"}
 
     # A method to watch over worker queues and relocate them to a worker that's less busy, if available:
@@ -223,7 +224,7 @@ class WorkerManager:
             if job is None:
                 continue
             user_ids.add(job.author_id)
-        logging.debug(f"Worker {worker} has {len(user_ids)} different users.")
+        logger.debug(f"Worker {worker} has {len(user_ids)} different users.")
         return len(user_ids) > 1
 
     def does_queue_contain_a_block_of_user_requests(self, worker: Worker):
@@ -261,28 +262,28 @@ class WorkerManager:
         for worker_id, worker in self.workers.items():
             does_queue_contain_multiple_users = self.does_queue_contain_multiple_users(worker=worker)
             if not does_queue_contain_multiple_users:
-                logging.info(f"(reorganize_queue_by_user_ids) Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
+                logger.info(f"(reorganize_queue_by_user_ids) Queue only contains zero or more entries for a single or zero users. No need to reorganize.")
                 continue
-            logging.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users")
+            logger.info(f"(reorganize_queue_by_user_ids) Queue for worker {worker_id} contains multiple users")
             if not self.does_queue_contain_a_block_of_user_requests(worker):
-                logging.info(f"We lack a solid block of jobs from the same user. Not Reorganizing queue.")
-            logging.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
+                logger.info(f"We lack a solid block of jobs from the same user. Not Reorganizing queue.")
+            logger.info(f"We found a solid block of jobs from the same user. Not Reorganizing queue.")
             # We need to reorganize the queue.
             jobs = worker.job_queue.view()
-            logging.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[f'author_id={job.author_id}, id={job.id}' for job in jobs]}")
+            logger.info(f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[f'author_id={job.author_id}, id={job.id}' for job in jobs]}")
             # We need to get the user IDs of the jobs in the queue.
             user_ids = set()
             for job in jobs:
                 if job is None:
                     continue
                 user_ids.add(job.author_id)
-            logging.info(f"(reorganize_queue_by_user_ids) User IDs in this queue: {user_ids}")
+            logger.info(f"(reorganize_queue_by_user_ids) User IDs in this queue: {user_ids}")
             # We now have a set of user IDs.
             # We need to get the jobs for each user ID.
             jobs_by_user_id = {}
             for user_id in user_ids:
                 jobs_by_user_id[user_id] = [job for job in jobs if job.author_id == user_id]
-            logging.info(f"(reorganize_queue_by_user_ids) Jobs by user ID: {jobs_by_user_id}")
+            logger.info(f"(reorganize_queue_by_user_ids) Jobs by user ID: {jobs_by_user_id}")
             # We now have a dictionary of jobs by user ID.
             # We need to reorganize the queue so that the jobs are interleaved.
             # We need to get the number of jobs for the user with the most jobs.
@@ -290,50 +291,50 @@ class WorkerManager:
             for user_id, jobs in jobs_by_user_id.items():
                 if len(jobs) > max_jobs:
                     max_jobs = len(jobs)
-            logging.info(f"(reorganize_queue_by_user_ids) Maximum number of jobs for a single user: {max_jobs}")
+            logger.info(f"(reorganize_queue_by_user_ids) Maximum number of jobs for a single user: {max_jobs}")
             # We now have the maximum number of jobs for a single user.
             # We need to iterate over the jobs, and add them to a new list.
             new_jobs = []
             added_job_ids = set()
             for i in range(0, max_jobs):
-                logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} from each user to the new queue.")
+                logger.info(f"(reorganize_queue_by_user_ids) Adding job {i} from each user to the new queue.")
                 for user_id, jobs in jobs_by_user_id.items():
-                    logging.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
+                    logger.info(f"(reorganize_queue_by_user_ids) Checking if {i} < {len(jobs)}")
                     if i < len(jobs) and jobs[i].id not in added_job_ids:
-                        logging.info(f"(reorganize_queue_by_user_ids) Adding job {i} (id={jobs[i].id}) from user {user_id} to the new queue.")
+                        logger.info(f"(reorganize_queue_by_user_ids) Adding job {i} (id={jobs[i].id}) from user {user_id} to the new queue.")
                         new_jobs.append(jobs[i])
                         added_job_ids.add(jobs[i].id)
             # We now have a new list of jobs.
             # We need to replace the existing list of jobs with the new list.
             asyncio.run(worker.job_queue.set_queue_from_list(new_jobs))
-            logging.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[f'author_id={job.author_id}, id={job.id}' for job in new_jobs]}")
+            logger.info(f"(reorganize_queue_by_user_ids) Reorganized queue for worker {worker_id} to: {[f'author_id={job.author_id}, id={job.id}' for job in new_jobs]}")
 
     def check_job_queue_for_waiting_items(self):
         for worker_id, worker in self.workers.items():
             current_time = time.time()
             if worker.job_queue is not None and worker.job_queue.qsize() > 0:
-                logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 30 seconds.")
+                logger.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 30 seconds.")
                 # There are jobs in the queue.
                 # Have any of the jobs been waiting longer than 30 seconds?
                 # We need to retrieve them without disturbing the queue.
                 jobs = worker.job_queue.view()
-                logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
+                logger.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                 for job in jobs:
                     if job is None or job.is_migrated() or current_time - job.date_created < 30:
                         # This job has NOT been waiting for more than 30 seconds.
                         # We do nothing.
                         continue
-                    logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
+                    logger.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 30 seconds. Checking for a less busy worker.")
                     new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
                     if new_worker is None:
-                        logging.info("(monitor_worker_queues) No other workers available to take this job.")
+                        logger.info("(monitor_worker_queues) No other workers available to take this job.")
                         continue
                     # Is it the same worker?
                     if new_worker.worker_id == worker_id:
-                        logging.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
+                        logger.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
                         continue
                     else:
                         # Remove the job from its current worker
-                        logging.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
+                        logger.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
                         asyncio.run(worker.job_queue.remove(job))
                         asyncio.run(self.queue_manager.enqueue_job(new_worker, job))

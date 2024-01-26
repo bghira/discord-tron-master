@@ -1,11 +1,13 @@
 import asyncio, logging
 from asyncio import Queue
-logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, List
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.job_queue import JobQueue
+
+logger = logging.getLogger('QueueManager')
+logger.setLevel('DEBUG')
 
 class QueueManager:
     def __init__(self, worker_manager: WorkerManager):
@@ -48,31 +50,31 @@ class QueueManager:
             return self.queues[worker_id]["queue"].qsize()
         except Exception as e:
             import traceback
-            logging.error(f"Error retrieving the queue length for worker '" + str(worker_id) + f"': {e} traceback: {traceback.format_exc()}")
+            logger.error(f"Error retrieving the queue length for worker '" + str(worker_id) + f"': {e} traceback: {traceback.format_exc()}")
             return -1
 
     async def unregister_worker(self, worker_id):
         if worker_id not in self.queues:
             return
         worker_data = self.queues[worker_id]
-        logging.info(f"Found {worker_data} worker data.?")
+        logger.info(f"Found {worker_data} worker data.?")
         if worker_data:
             # Get the jobs from the worker's queue.
             queued_jobs = self.queue_contents_by_worker(worker_id)
-            logging.info(f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}")
+            logger.info(f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}")
             # Re-queue the jobs to another worker.
             for job in queued_jobs:
                 job_type = job.job_type
-                logging.warn(f"Departing worker has active {job_type} job: {job}")
+                logger.warn(f"Departing worker has active {job_type} job: {job}")
                 new_worker = self.worker_manager.find_worker_with_fewest_queued_tasks_by_job_type(job_type, exclude_worker_id=worker_id)
                 if new_worker:
                     await self.enqueue_job(new_worker, job)
-                    logging.info(f"Re-queued job {job.job_id} from departing worker {worker_id} to worker {new_worker.worker_id}")
+                    logger.info(f"Re-queued job {job.job_id} from departing worker {worker_id} to worker {new_worker.worker_id}")
                 else:
-                    logging.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
+                    logger.error(f"No available workers found for job type {job_type}. Job {job.job_id} is lost. Oh well, I guess.")
                     job_lost_report = await job.job_lost()
-                    logging.error(f"Job lost report: {job_lost_report}")
-        logging.info(f"After unregistering worker, we are left with: {self.queues}")
+                    logger.error(f"Job lost report: {job_lost_report}")
+        logger.info(f"After unregistering worker, we are left with: {self.queues}")
         del self.queues[worker_id]
 
     async def create_queue(self, worker: Worker) -> Queue:

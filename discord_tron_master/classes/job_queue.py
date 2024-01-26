@@ -4,6 +4,8 @@ from discord_tron_master.classes.job import Job
 from typing import List
 import logging
 
+logger = logging.getLogger('JobQueue')
+logger.setLevel('DEBUG')
 class JobQueue:
     def __init__(self, worker_id: str):
         self.queue = deque()
@@ -11,39 +13,39 @@ class JobQueue:
         self.worker_id = worker_id
         self.terminate = False
         self.item_added_event = asyncio.Event()  # Added an asyncio.Event
-        logging.debug("JobQueue initialized")
+        logger.debug("JobQueue initialized")
 
     async def set_queue_from_list(self, job_list: List[Job]):
         self.queue = deque(job_list)
-        logging.debug(f"JobQueue set from list, queue size: {len(self.queue)}")
+        logger.debug(f"JobQueue set from list, queue size: {len(self.queue)}")
 
     async def put(self, job: Job):
         self.queue.append(job)
         self.item_added_event.set()  # Set the event when an item is added
-        logging.debug(f"Job {job.id} added to queue, queue size: {len(self.queue)}")
+        logger.debug(f"Job {job.id} added to queue, queue size: {len(self.queue)}")
 
     async def stop(self):
         self.terminate = True
 
     async def get(self) -> Job:
         if self.terminate:
-            logging.debug(f"Job Queue Terminating: {self.worker_id}")
+            logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
 
         await self.item_added_event.wait()  # Wait for the event to be set
         self.item_added_event.clear()  # Clear the event after it's set
 
         if self.terminate:
-            logging.debug(f"Job Queue Terminating: {self.worker_id}")
+            logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
 
-        logging.debug(f"Got job! Queue size: {len(self.queue)}")
+        logger.debug(f"Got job! Queue size: {len(self.queue)}")
         if len(self.queue) == 0:
-            logging.debug("Queue is empty, returning None")
+            logger.debug("Queue is empty, returning None")
             return None
         job = self.queue.popleft()
         self.in_progress[job.id] = job
-        logging.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
+        logger.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
         return job
 
     async def remove(self, job: Job):
@@ -68,12 +70,13 @@ class JobQueue:
 
     def done(self, job_id: int):
         for job in list(self.queue):
+            logger.info(f"Looking for job {job_id} in queue: {job.id}")
             if job_id == job.id:
                 self.queue.remove(job)
-                logging.debug(f"Job {job.id} removed from queue")
+                logger.debug(f"Job {job.id} removed from queue")
         if job_id in self.in_progress:
             del self.in_progress[job_id]
-            logging.debug(f"Job {job_id} marked as done, removed from in progress")
+            logger.debug(f"Job {job_id} marked as done, removed from in progress")
 
     def qsize(self) -> int:
         return len(self.queue) + len(self.in_progress)
