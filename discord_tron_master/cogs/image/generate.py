@@ -83,8 +83,6 @@ class Generate(commands.Cog):
             prompts = [ prompt ]
         for _prompt in prompts:
             try:
-                # Generate a "Job" object that will be put into the queue.
-                discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
                 self.config.reload_config()
                 extra_payload = {
                     "user_config": self.config.get_user_config(user_id=ctx.author.id),
@@ -97,7 +95,7 @@ class Generate(commands.Cog):
                     logging.info(f"Auto-model selected by GPT: {auto_model}")
                     extra_payload["user_config"]["model"] = auto_model
                     extra_payload["user_config"]["resolution"] = auto_resolution
-
+                discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text=f"Job queuing: `" + _prompt + "`")
                 job = ImageGenerationJob(ctx.author.id, (self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload=extra_payload)
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
@@ -106,6 +104,8 @@ class Generate(commands.Cog):
                     # Wait a few seconds before deleting:
                     await discord_first_message.delete(delay=10)
                     return
+                # Generate a "Job" object that will be put into the queue.
+                await discord_first_message.edit(content=f"Job {job.id} queued on {worker.worker_id}: `" + _prompt + "`")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
                 # Add it to the queue
                 await discord.queue_manager.enqueue_job(worker, job)
