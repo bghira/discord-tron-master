@@ -14,11 +14,10 @@ class Job:
         self.author_id = author_id   # Store the author id
         self.migrated = False
         self.migrated_date = None
-        self.migrated_target = None
         self.has_executed = False
 
     def is_migrated(self):
-        return (self.migrated, self.migrated_date, self.migrated_target)
+        return (self.migrated, self.migrated_date)
     
     def migrate(self):
         self.migrated = True
