@@ -13,6 +13,10 @@ class JobQueue:
         self.item_added_event = asyncio.Event()  # Added an asyncio.Event
         logging.debug("JobQueue initialized")
 
+    async def set_queue_from_list(self, job_list: List[Job]):
+        self.queue = deque(job_list)
+        logging.debug(f"JobQueue set from list, queue size: {len(self.queue)}")
+
     async def put(self, job: Job):
         self.queue.append(job)
         self.item_added_event.set()  # Set the event when an item is added
