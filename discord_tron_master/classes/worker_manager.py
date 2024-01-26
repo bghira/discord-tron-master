@@ -207,7 +207,7 @@ class WorkerManager:
     def monitor_worker_queues(self):
         while True:
             self.check_job_queue_for_waiting_items()
-            # self.reorganize_queue_by_user_ids()
+            self.reorganize_queue_by_user_ids()
             time.sleep(10)  # Sleep for 10 seconds before checking again
 
     def does_queue_contain_multiple_users(self, worker: Worker):
