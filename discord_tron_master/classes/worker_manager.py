@@ -79,6 +79,22 @@ class WorkerManager:
         
         return selected_worker
 
+    def find_worker_with_zero_queued_tasks_by_job_type(self, job_type: str):
+        job_type = job_type
+        # We don't want to return anything if all servers have a job.
+        selected_worker = None
+        for worker_id, worker in self.workers.items():
+            if job_type in worker.supported_job_types and worker.supported_job_types[job_type] is True:
+                queued_tasks = self.queue_manager.worker_queue_length(worker)
+                if queued_tasks == 0:
+                    selected_worker = worker
+                else:
+                    logging.debug(f"Worker {worker_id} has more or same queued tasks than current best: {queued_tasks} >= {min_queued_tasks}")                    
+            else:
+                logging.warn(f"Worker {worker_id} does not support job type {job_type}: {worker.supported_job_types}")
+        
+        return selected_worker
+
     def find_first_worker(self, job_type: str) -> Worker:
         capable_workers = self.workers_by_capability.get(job_type)
         if not capable_workers:
@@ -189,24 +205,24 @@ class WorkerManager:
             for worker_id, worker in self.workers.items():
                 current_time = time.time()
                 if worker.job_queue is not None and worker.job_queue.qsize() > 0:
-                    logging.info(f"Checking worker {worker_id} for jobs that have been waiting for more than 1 minute.")
+                    logging.info(f"(monitor_worker_queues) Checking worker {worker_id} for jobs that have been waiting for more than 1 minute.")
                     # There are jobs in the queue.
                     # Have any of the jobs been waiting longer than 1 minute?
                     # We need to retrieve them without disturbing the queue.
                     jobs = worker.job_queue.view()
-                    logging.info(f"Discovered jobs: {jobs}")
+                    logging.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                     for job in jobs:
                         if job is None or current_time - job.date_created < 60:
                             # This job has NOT been waiting for more than 1 minute.
                             # We do nothing.
                             continue
-                        logging.info(f"Job {job.id} has been waiting for more than 1 minute. Checking for a less busy worker.")
-                        new_worker = self.find_worker_with_fewest_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
+                        logging.info(f"(monitor_worker_queues) Job {job.id} has been waiting for more than 1 minute. Checking for a less busy worker.")
+                        new_worker = self.find_worker_with_zero_queued_tasks_by_job_type(job.job_type)
                         if new_worker is None:
-                            logging.info("No other workers available to take this job.")
+                            logging.info("N(monitor_worker_queues) o other workers available to take this job.")
                             continue
                         # Is it the same worker?
                         if new_worker.worker_id == worker_id:
-                            logging.info(f"We are already on the best worker for {job.job_type} jobs. They will have to wait.")
+                            logging.info(f"(monitor_worker_queues) We are already on the best worker for {job.job_type} jobs. They will have to wait.")
                             continue
             time.sleep(10)  # Sleep for 10 seconds before checking again
