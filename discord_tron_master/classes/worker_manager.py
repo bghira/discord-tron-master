@@ -4,6 +4,7 @@ from discord_tron_master.classes.worker import Worker
 from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.exceptions.registration import RegistrationError
 from discord_tron_master.classes.job import Job
+from threading import Thread
 
 class WorkerManager:
     def __init__(self):
@@ -19,8 +20,12 @@ class WorkerManager:
             "tts_bark": [],
         }
         self.queue_manager = None
-        # Start the worker queue monitor without getting sys:1: RuntimeWarning: coroutine 'WorkerManager.monitor_worker_queues' was never awaited
-        asyncio.get_event_loop().create_task(self.monitor_worker_queues())
+        self.worker_mon_thread = Thread(
+            target=self.monitor_worker_queues,
+            name=f"worker_mon_thread_{self.id}",
+            daemon=True,
+        )
+        self.worker_mon_thread.start()
 
     def get_all_workers(self):
         return self.workers
