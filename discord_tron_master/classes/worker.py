@@ -142,6 +142,7 @@ class Worker:
                 logger.info("(monitor_worker) Worker is set to exit, and the time has come.")
                 break
             # Sleep for a while before checking again
+            logger.info(f"(monitor_worker) Worker {self.worker_id} task is not running, we will wait.")
             await asyncio.sleep(10)
 
     async def start_monitoring(self):
