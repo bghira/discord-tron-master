@@ -107,7 +107,7 @@ class Worker:
         while not self.terminate:
             try:
                 test_job = await self.job_queue.preview()  # Use 'await' instead of synchronous call
-                if test_job is not None:
+                if test_job is None:
                     logger.debug(f"(Worker.process_jobs) No job to process for worker {self.worker_id}")
                     await asyncio.sleep(1)
                     continue
