@@ -47,12 +47,7 @@ class JobQueue:
         return job
 
     async def remove(self, job: Job):
-        if job in self.queue:
-            self.queue.remove(job)
-            logging.debug(f"Job {job.id} removed from queue")
-        if job.id in self.in_progress:
-            del self.in_progress[job.id]
-            logging.debug(f"Job {job.id} removed from in progress")
+        return self.done(job.id)
 
     # A function to view the current jobs in the queue, without removing them from the queue:
     def view(self) -> List[Job]:
@@ -72,6 +67,9 @@ class JobQueue:
         return output
 
     def done(self, job_id: int):
+        if job_id in self.queue:
+            self.queue.remove(job_id)
+            logging.debug(f"Job {job.id} removed from queue")
         if job_id in self.in_progress:
             del self.in_progress[job_id]
             logging.debug(f"Job {job_id} marked as done, removed from in progress")
