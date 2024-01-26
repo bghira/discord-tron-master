@@ -114,6 +114,11 @@ class Worker:
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
+                elif test_job in self.assigned_jobs.get(test_job.job_type, []):
+                    # Job is already assigned. Wait for it to complete.
+                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is already processing job {test_job.id}.")
+                    await asyncio.sleep(1)
+                    continue
                 else:
                     # Wait async until we can assign
                     while not self.can_assign_job_by_type(job_type=test_job.job_type):
