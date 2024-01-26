@@ -19,8 +19,8 @@ class WorkerManager:
             "tts_bark": [],
         }
         self.queue_manager = None
-        # Start the worker queue monitor
-        asyncio.create_task(self.monitor_worker_queues())
+        # Start the worker queue monitor without getting sys:1: RuntimeWarning: coroutine 'WorkerManager.monitor_worker_queues' was never awaited
+        asyncio.get_event_loop().create_task(self.monitor_worker_queues())
 
     def get_all_workers(self):
         return self.workers
