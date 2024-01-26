@@ -48,19 +48,19 @@ class JobQueue:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
 
-        if wait:
-            logger.debug(f"Waiting for job in queue: {self.worker_id}")
-            await self.item_added_event.wait()  # Wait for the event to be set
-            self.item_added_event.clear()  # Clear the event after it's set
+        # if wait:
+        #     logger.debug(f"Waiting for job in queue: {self.worker_id}")
+        #     await self.item_added_event.wait()  # Wait for the event to be set
+        #     self.item_added_event.clear()  # Clear the event after it's set
 
         if self.terminate:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
 
-        logger.debug(f"Got job! Queue size: {len(self.queue)}")
         if len(self.queue) == 0:
             logger.debug("Queue is empty, returning None")
             return None
+        logger.debug(f"Got job! Queue size: {len(self.queue)}")
         job = self.queue.popleft()
         self.in_progress[job.id] = job
         logger.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
