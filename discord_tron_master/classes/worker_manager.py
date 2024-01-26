@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-import logging, websocket, traceback, asyncio
+import logging, websocket, traceback, asyncio, time
 from discord_tron_master.classes.worker import Worker
 from discord_tron_master.exceptions.auth import AuthError
 from discord_tron_master.exceptions.registration import RegistrationError
@@ -19,6 +19,8 @@ class WorkerManager:
             "tts_bark": [],
         }
         self.queue_manager = None
+        # Start the worker queue monitor
+        asyncio.create_task(self.monitor_worker_queues())
 
     def get_all_workers(self):
         return self.workers
@@ -175,3 +177,31 @@ class WorkerManager:
         await self.queue_manager.unregister_worker(worker_id)
         logging.info("Successfully unregistered worker from queue manager.")
         return {"success": True, "result": "Worker " + str(worker_id) + " unregistered successfully"}
+
+    # A method to watch over worker queues and relocate them to a worker that's less busy, if available:
+    async def monitor_worker_queues(self):
+        while True:
+            for worker_id, worker in self.workers.items():
+                current_time = time.time()
+                if worker.job_queue.qsize() > 0:
+                    logging.info(f"Checking worker {worker_id} for jobs that have been waiting for more than 1 minute.")
+                    # There are jobs in the queue.
+                    # Have any of the jobs been waiting longer than 1 minute?
+                    # We need to retrieve them without disturbing the queue.
+                    jobs = worker.job_queue.view()
+                    logging.info(f"Discovered jobs: {jobs}")
+                    for job in jobs:
+                        if job is None or current_time - job.date_created < 60:
+                            # This job has NOT been waiting for more than 1 minute.
+                            # We do nothing.
+                            continue
+                        logging.info(f"Job {job.id} has been waiting for more than 1 minute. Checking for a less busy worker.")
+                        new_worker = self.find_worker_with_fewest_queued_tasks_by_job_type(job.job_type, exclude_worker_id=worker_id)
+                        if new_worker is None:
+                            logging.info("No other workers available to take this job.")
+                            continue
+                        # Is it the same worker?
+                        if new_worker.worker_id == worker_id:
+                            logging.info(f"We are already on the best worker for {job.job_type} jobs. They will have to wait.")
+                            continue
+            await asyncio.sleep(10)  # Sleep for 10 seconds before checking again

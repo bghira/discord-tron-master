@@ -3,11 +3,13 @@ import logging, json
 from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.models.schedulers import Schedulers
+import time
 flask = AppConfig.get_flask()
 class ImageGenerationJob(Job):
     def __init__(self, payload, extra_payload:dict = None):
         super().__init__("gpu", "image_generation", "generate_image", payload)
         self.extra_payload = extra_payload
+        self.date_created = time.time()
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.

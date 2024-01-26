@@ -1,11 +1,12 @@
 from discord_tron_master.classes.job import Job
-import logging, base64
+import logging, base64, time
 from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
 
 class ImageUpscalingJob(Job):
     def __init__(self, payload):
         super().__init__("gpu", "image_upscaling", "upscale", payload)
+        self.date_created = time.time()
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.

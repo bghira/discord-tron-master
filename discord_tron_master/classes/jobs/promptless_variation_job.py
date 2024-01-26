@@ -1,11 +1,12 @@
 from discord_tron_master.classes.job import Job
 from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
-import logging, base64
+import logging, base64, time
 
 class PromptlessVariationJob(Job):
     def __init__(self, payload):
         super().__init__("variation", "image_variation", "promptless_variation", payload)
+        self.date_created = time.time()
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.

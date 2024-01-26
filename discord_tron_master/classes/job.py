@@ -5,6 +5,7 @@ class Job:
         self.id = str(uuid.uuid4())
         self.job_id = self.id
         self.job_type = job_type
+        self.date_created = None
         self.payload = payload
         self.module_name = module_name
         self.module_command = command_name

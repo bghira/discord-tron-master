@@ -1,12 +1,13 @@
 from discord_tron_master.classes.job import Job
 from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
-import logging, base64
+import logging, base64, time
 
 class PromptVariationJob(Job):
     def __init__(self, payload, extra_payload:dict = None):
         super().__init__("gpu", "image_variation", "prompt_variation", payload)
         self.extra_payload = extra_payload
+        self.date_created = time.time()
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
