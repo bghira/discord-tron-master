@@ -59,9 +59,13 @@ class WorkerManager:
         if worker_id and job_id:
             worker = self.get_worker(worker_id)
             if worker.job_queue is not None:
-                await worker.acknowledge_job(job_id)
-            logger.info("acknowledged job for worker " + worker_id)
-            return {"status": "successfully acknowledged job"}
+                result = await worker.acknowledge_job(job_id)
+            if result:
+                logger.info("acknowledged job for worker " + worker_id)
+                return {"status": "successfully acknowledged job"}
+            else:
+                logger.warning("acknowledgement failed for worker " + worker_id + " and job_id " + job_id)
+                return {"status": "failed to acknowledge job"}
         else:
             logger.error(f"Invalid data received: {data}")
             raise ValueError("Invalid payload received by finish_payload handler. We expect job_id and worker_id.")
