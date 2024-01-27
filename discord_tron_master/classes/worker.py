@@ -81,6 +81,14 @@ class Worker:
             return False
         return True
 
+    def are_jobs_acknowledged(self):
+        """
+        Determine whether all of the in_progress jobs have been acknowledge()d.
+        
+        Returns True if all jobs are acknowledged, False if not.
+        """
+        return all([job.is_acknowledged()[0] for job in self.job_queue.in_progress.values()])
+
     async def set_job_queue(self, job_queue: Queue):
         if str(self.worker_id) == "":
             raise RegistrationError("RegistrationError: Worker ID must be a string.")
@@ -145,6 +153,11 @@ class Worker:
                     while not self.can_assign_job_by_type(job_type=test_job.job_type):
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {self.assigned_jobs}")
+                        if self.are_jobs_acknowledged():
+                            logger.debug(f"All jobs have been acknowledged. Waiting cleanly.")
+                            await asyncio.sleep(1)
+                            continue
+                        logger.debug(f"Not all jobs have been acknowledged: {[job.id for job in self.job_queue.in_progress.values() if not job.is_acknowledged()[0]]}")
                         for job in self.assigned_jobs.get(test_job.job_type, []):
                             logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, executed: {job.executed}")
                         await asyncio.sleep(1)
