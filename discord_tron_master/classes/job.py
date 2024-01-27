@@ -14,7 +14,8 @@ class Job:
         self.author_id = author_id   # Store the author id
         self.migrated = False
         self.migrated_date = None
-        self.has_executed = False
+        self.executed = False
+        self.executed_date = None
         # Has the remote side ack'd the thing?
         self.acknowledged = False
         self.acknowledged_date = None
@@ -111,10 +112,11 @@ class Job:
             raise e
 
     async def execute(self):
-        if self.has_executed:
+        if self.executed:
             logging.warning(f"Job {self.job_id} has already been executed. Ignoring.")
             return
-        self.has_executed = True
+        self.executed = True
+        self.executed_date = time.time()
         websocket = self.worker.websocket
         message = await self.format_payload()
         try:

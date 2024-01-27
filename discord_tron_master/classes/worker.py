@@ -146,7 +146,7 @@ class Worker:
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {self.assigned_jobs}")
                         for job in self.assigned_jobs.get(test_job.job_type, []):
-                            logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, has_executed: {job.has_executed}")
+                            logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, executed: {job.executed}")
                         await asyncio.sleep(1)
                 if job is None:
                     logger.info("(Worker.process_jobs) Empty job submitted to worker!?")
