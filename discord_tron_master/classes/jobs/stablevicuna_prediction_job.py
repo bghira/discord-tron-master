@@ -4,7 +4,7 @@ from discord_tron_master.classes.app_config import AppConfig
 
 class StableVicunaPredictionJob(Job):
     def __init__(self, author_id: str, payload):
-        super().__init__("stablevicuna", "stablevicuna", "predict", author_id: str, payload)
+        super().__init__("stablevicuna", "stablevicuna", "predict", author_id, payload)
         self.date_created = time.time()
 
     async def format_payload(self):
