@@ -34,6 +34,14 @@ class Job:
     def is_acknowledged(self):
         return (self.acknowledged, self.acknowledged_date)
 
+    def needs_resubmission(self):
+        """
+        If the job isn't acknowledged within 15 seconds, we need to resubmit it.
+        """
+        if not all(self.is_acknowledged()) and self.executed:
+            if (time.time() - self.executed_date) > 15:
+                return True
+
     def set_worker(self, worker):
         self.worker = worker
 
@@ -112,7 +120,7 @@ class Job:
             raise e
 
     async def execute(self):
-        if self.executed:
+        if self.executed and not self.needs_resubmission():
             logging.warning(f"Job {self.job_id} has already been executed. Ignoring.")
             return
         self.executed = True
