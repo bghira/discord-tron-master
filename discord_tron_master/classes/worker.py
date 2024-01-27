@@ -33,11 +33,11 @@ class Worker:
             self.assigned_jobs[job.job_type] = []
         self.assigned_jobs[job.job_type].append(job)
 
-    def acknowledge_job(self, job_id: str) -> Job:
+    async def acknowledge_job(self, job_id: str) -> Job:
         if self.job_queue is None:
             logger.warning("Job queue not initialised yet. Can not acknowledge job.")
             return False
-        job = asyncio.run(self.job_queue.get_job_by_id(job_id))
+        job = await self.job_queue.get_job_by_id(job_id)
         if job is None:
             logger.warning("Job did not exist. Can not acknowledge job.")
             return False

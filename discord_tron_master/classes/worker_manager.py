@@ -59,7 +59,7 @@ class WorkerManager:
         if worker_id and job_id:
             worker = self.get_worker(worker_id)
             if worker.job_queue is not None:
-                worker.acknowledge_job(job_id)
+                await worker.acknowledge_job(job_id)
             logger.info("acknowledged job for worker " + worker_id)
             return {"status": "successfully acknowledged job"}
         else:
