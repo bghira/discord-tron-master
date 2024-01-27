@@ -63,7 +63,7 @@ class Worker:
                     self.job_queue.done(job_id)
                     return
 
-    def get_assigned_job_by_id(self, job_id: str) -> Job:
+    async def get_assigned_job_by_id(self, job_id: str) -> Job:
         for job_type, jobs in self.assigned_jobs.items():
             for job in jobs:
                 if job.id == job_id:
