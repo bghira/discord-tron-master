@@ -40,6 +40,8 @@ class Job:
         """
         if not all(self.is_acknowledged()) and self.executed:
             if (time.time() - self.executed_date) > 15:
+                self.executed = False
+                self.executed_date = None
                 return True
 
     def set_worker(self, worker):
