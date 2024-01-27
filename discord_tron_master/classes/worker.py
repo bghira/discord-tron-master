@@ -196,14 +196,21 @@ class Worker:
             await asyncio.sleep(10)
 
     async def monitor_for_unacknowledged_jobs(self):
+        logger.debug(f"(monitor_for_unacknowledged_jobs) Beginning monitoring for unacknowledged jobs for worker {self.worker_id}"
         while True:
             if self.terminate:
                 logger.info("(monitor_for_unacknowledged_jobs) Worker is set to exit, and the time has come.")
                 break
+            if self.job_queue is None:
+                logger.warning("(monitor_for_unacknowledged_jobs) Job queue not initialised yet.")
+                await asyncio.sleep(1)
+                continue
             for job in self.job_queue.in_progress.values():
                 if not job.is_acknowledged()[0] and job.needs_resubmission():
                     logger.info(f"Job {job.id} has not been acknowledged. Sending message to worker again.")
                     await job.execute()
+            # Sleep for a while before checking again
+            await asyncio.sleep(10)
 
     async def start_monitoring(self):
         # Use 'asyncio.create_task' to run the 'process_jobs' and 'monitor_worker' coroutines
