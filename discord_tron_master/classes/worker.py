@@ -37,7 +37,7 @@ class Worker:
         if self.job_queue is None:
             logger.warning("Job queue not initialised yet. Can not acknowledge job.")
             return False
-        job = self.job_queue.get_job_by_id(job_id)
+        job = asyncio.run(self.job_queue.get_job_by_id(job_id))
         if job is None:
             logger.warning("Job did not exist. Can not acknowledge job.")
             return False
