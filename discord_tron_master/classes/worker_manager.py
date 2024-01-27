@@ -53,6 +53,19 @@ class WorkerManager:
             logger.error(f"Invalid data received: {data}")
             raise ValueError("Invalid payload received by finish_payload handler. We expect job_id and worker_id.")
 
+    async def acknowledge_payload(self, command_processor, arguments: Dict, data: Dict, websocket):
+        worker_id = arguments["worker_id"]
+        job_id = arguments["job_id"]
+        if worker_id and job_id:
+            worker = self.get_worker(worker_id)
+            if worker.job_queue is not None:
+                worker.acknowledge_job(job_id)
+            logger.info("acknowledged job for worker " + worker_id)
+            return {"status": "successfully acknowledged job"}
+        else:
+            logger.error(f"Invalid data received: {data}")
+            raise ValueError("Invalid payload received by finish_payload handler. We expect job_id and worker_id.")
+
     def find_worker_with_fewest_queued_tasks(self, job: Job):
         return self.find_worker_with_fewest_queued_tasks_by_job_type(job.job_type)
 

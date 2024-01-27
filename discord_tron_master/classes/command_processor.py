@@ -32,6 +32,7 @@ class CommandProcessor:
             },
             "job_queue": {
                 "finish": self.worker_manager.finish_payload,
+                "acknowledge": self.worker_manager.acknowledge_payload,
             }
             # Add more command handlers as needed
         }

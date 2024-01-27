@@ -15,6 +15,9 @@ class Job:
         self.migrated = False
         self.migrated_date = None
         self.has_executed = False
+        # Has the remote side ack'd the thing?
+        self.acknowledged = False
+        self.acknowledged_date = None
 
     def is_migrated(self):
         return (self.migrated, self.migrated_date)
@@ -22,6 +25,13 @@ class Job:
     def migrate(self):
         self.migrated = True
         self.migrated_date = time.time()
+
+    def acknowledge(self):
+        self.acknowledged = True
+        self.acknowledged_date = time.time()
+
+    def is_acknowledged(self):
+        return (self.acknowledged, self.acknowledged_date)
 
     def set_worker(self, worker):
         self.worker = worker
