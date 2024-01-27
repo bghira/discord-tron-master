@@ -37,7 +37,7 @@ class Worker:
         if self.job_queue is None:
             logger.warning("Job queue not initialised yet. Can not acknowledge job.")
             return False
-        job = await self.job_queue.get_job_by_id(job_id) or await self.in_progress.get(job_id, None)
+        job = await self.get_assigned_job_by_id(job_id)
         if job is None:
             logger.warning("Job did not exist. Can not acknowledge job.")
             return False
@@ -62,6 +62,13 @@ class Worker:
                     self.assigned_jobs[job_type].remove(job)
                     self.job_queue.done(job_id)
                     return
+
+    def get_assigned_job_by_id(self, job_id: str) -> Job:
+        for job_type, jobs in self.assigned_jobs.items():
+            for job in jobs:
+                if job.id == job_id:
+                    return job
+        return None
 
     def list_assigned_jobs_by_type(self, job_type: str):
         if job_type not in self.assigned_jobs:
