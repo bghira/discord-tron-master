@@ -196,7 +196,7 @@ class Worker:
             await asyncio.sleep(10)
 
     async def monitor_for_unacknowledged_jobs(self):
-        logger.debug(f"(monitor_for_unacknowledged_jobs) Beginning monitoring for unacknowledged jobs for worker {self.worker_id}"
+        logger.debug(f"(monitor_for_unacknowledged_jobs) Beginning monitoring for unacknowledged jobs for worker {self.worker_id}")
         while True:
             if self.terminate:
                 logger.info("(monitor_for_unacknowledged_jobs) Worker is set to exit, and the time has come.")
