@@ -163,13 +163,16 @@ class Generate(commands.Cog):
                     sentiment_analysis = await gpt.sentiment_analysis(UserHistory.get_user_most_common_prompts(user=user_id, limit=1000))
                 except:
                     pass
-                await ctx.send(
-                    f"{ctx.author.mention}"
-                    f"\n -> Total generations: {total_generations}"
-                    f"\n -> Unique prompts: {unique_generations}"
-                    f"\n -> {frequent_prompts}"
-                    f"\n -> {common_terms}"
-                    f"\n {sentiment_analysis}"
+                await DiscordBot.send_large_message(
+                    ctx,
+                    text=(
+                        f"{ctx.author.mention}"
+                        f"\n -> Total generations: {total_generations}"
+                        f"\n -> Unique prompts: {unique_generations}"
+                        f"\n -> {frequent_prompts}"
+                        f"\n -> {common_terms}"
+                        f"\n {sentiment_analysis}"
+                    )
                 )
         except Exception as e:
             logger.error("Caught error when getting user history: " + str(e))
