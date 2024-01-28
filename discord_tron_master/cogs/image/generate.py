@@ -25,7 +25,7 @@ class Generate(commands.Cog):
 
     @commands.command(name="generate-random-x", help="Generates images based on a random prompt, x number of times at once.")
     async def generate_range_random(self, ctx, arg_count = None, *, theme = None):
-        if guild_config.is_channel_banned(ctx.channel.id):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
         worker = discord.worker_manager.find_first_worker("gpu")
         if worker is None:
@@ -65,7 +65,7 @@ class Generate(commands.Cog):
 
     @commands.command(name="generate-x", help="Generates an image based on the given prompt, x number of times at once.")
     async def generate_range(self, ctx, count, *, prompt):
-        if guild_config.is_channel_banned(ctx.channel.id):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
         if not count.isdigit():
             user_config = self.config.get_user_config(user_id=ctx.author.id)
@@ -81,7 +81,7 @@ class Generate(commands.Cog):
 
     @commands.command(name="generate", help="Generates an image based on the given prompt.")
     async def generate(self, ctx, *, prompt):
-        if guild_config.is_channel_banned(ctx.channel.id):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
         # If prompt has \n, we split:
         if '\n' in prompt and '--multiline' not in prompt and '!multiline' not in prompt:
@@ -200,7 +200,7 @@ class Generate(commands.Cog):
 
     @commands.command(name="invite", help="Invites the user to the latest thread in the channel.")
     async def invite_to_thread(self, ctx):
-        if guild_config.is_channel_banned(ctx.channel.id):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
         try:
             channel = ctx.channel
@@ -221,8 +221,6 @@ class Generate(commands.Cog):
             )
 
     async def generate_from_user_config(self, ctx, user_config, user_id, prompt):
-        if guild_config.is_channel_banned(ctx.channel.id):
-            return
         # If prompt has \n, we split:
         if '\n' in prompt:
             prompts = prompt.split('\n')

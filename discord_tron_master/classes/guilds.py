@@ -87,11 +87,11 @@ class Guilds:
         allowed_models.append(model)
         return self.set_guild_allowed_models(guild_id, allowed_models)
 
-    def is_channel_banned(self, channel_id):
+    def is_channel_banned(self, guild_id, channel_id):
         """
         Check if a channel is banned from generating images.
         """
-        banned_channels = self.get_config_value("banned_channels")
+        banned_channels = self.get_guild_setting(guild_id, "banned_channels")
         if banned_channels and channel_id in banned_channels:
             return True
         return False
