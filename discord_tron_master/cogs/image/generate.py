@@ -157,6 +157,33 @@ class Generate(commands.Cog):
             await ctx.send(
                 f"{ctx.author.mention} Statistics are not currently available at this time, try again later."
             )
+            
+    @commands.command(name='search', help='Search for a prompt in your history. Returns up to 15 prompts.')
+    async def search_prompts(self, ctx, search_string: str):
+        try:
+            app = AppConfig.flask
+            with app.app_context():
+                discovered_prompts = UserHistory.search_all_prompts(search_string)
+                # Shuffle the list:
+                import random
+                random.shuffle(discovered_prompts)
+                if not discovered_prompts:
+                    # We didn't discover any prompts. Let the user know their search was bonkers.
+                    await ctx.send(
+                        f"{ctx.author.mention} I couldn't find any prompts matching that search."
+                    )
+                found_string = "a prompt"
+                if len(discovered_prompts) > 1:
+                    found_string = f"{len(discovered_prompts)} prompts"
+                output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
+                for prompt in discovered_prompts:
+                    output_string = f"\n- `{prompt}`"
+                await ctx.send(output_string)
+        except Exception as e:
+            logging.error("Caught error when searching prompts: " + str(e))
+            await ctx.send(
+                f"{ctx.author.mention} Search is not currently available at this time, try again later."
+            )
 
     @commands.command(name="invite", help="Invites the user to the latest thread in the channel.")
     async def invite_to_thread(self, ctx):

@@ -25,6 +25,10 @@ class UserHistory(db.Model):
         return UserHistory.query.with_entities(UserHistory.prompt).distinct().all()
 
     @staticmethod
+    def search_all_prompts(prompt: str) -> list:
+        return UserHistory.query.filter(UserHistory.prompt.like(f"%{prompt}%")).with_entities(UserHistory.prompt).distinct().all()
+
+    @staticmethod
     def get_all_user_prompts(user: str):
         return UserHistory.query.with_entities(UserHistory.prompt).filter_by(user=user).distinct().all()
 
