@@ -50,10 +50,10 @@ class Worker:
         return True
 
     def complete_job(self, job: Job):
-        if job.job_type not in self.assigned_jobs:
-            return
-        self.assigned_jobs[job.job_type].remove(job)
-        self.job_queue.done(job.id)
+        if job.job_type in self.assigned_jobs:
+            self.assigned_jobs[job.job_type].remove(job)
+        if self.job_queue is not None:
+            self.job_queue.done(job.id)
 
     def complete_job_by_id(self, job_id: str):
         for job_type, jobs in self.assigned_jobs.items():

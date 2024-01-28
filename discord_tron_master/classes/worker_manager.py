@@ -339,7 +339,7 @@ class WorkerManager:
                 logger.info(f"(monitor_worker_queues) Discovered jobs: {jobs}")
                 for job in jobs:
                     is_migrated, migrated_date = job.is_migrated()
-                    if job is None or ((is_migrated and current_time - migrated_date < 300) and current_time - job.date_created < 30):
+                    if job is None or (not is_migrated and current_time - job.date_created < 30):
                         # This job has NOT been waiting for more than 30 seconds.
                         # We do nothing.
                         continue
@@ -355,5 +355,5 @@ class WorkerManager:
                     else:
                         # Remove the job from its current worker
                         logger.info(f"(monitor_worker_queues) Found a less busy worker {new_worker.worker_id} for job {job.id}.")
-                        asyncio.run(worker.job_queue.remove(job))
+                        asyncio.run(worker.complete_job(job))
                         asyncio.run(self.queue_manager.enqueue_job(new_worker, job))
