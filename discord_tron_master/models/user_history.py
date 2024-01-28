@@ -119,14 +119,9 @@ class UserHistory(db.Model):
                 terms[term] += 1
         # Sort terms by count:
         sorted_terms = sorted(terms.items(), key=lambda x: x[1], reverse=True)
-        output = "Ten most frequently used terms are "
+        output = "Ten most frequently used terms are:\n"
         for term, count in sorted_terms[:term_limit]:
-            if "uses" in output:
-                output = f"{output}, "
-            # If we're the last check, add "and" before:
-            if term_limit - 1 in sorted_terms and term == sorted_terms[term_limit - 1][0]:
-                output = f"{output}and "
-            output = f"{output}**{term}** with _*{count}*_ uses"
+            output = f"{output}- **{term}** with _*{count}*_ uses\n"
         return output
 
     def to_dict(self):
