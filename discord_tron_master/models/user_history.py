@@ -121,6 +121,7 @@ class UserHistory(db.Model):
                 terms[term] += 1
         # Sort terms by count:
         sorted_terms = sorted(terms.items(), key=lambda x: x[1], reverse=True)
+        logger.debug(f"Sorted terms: {sorted_terms}")
         output = f"{len(sorted_terms[:term_limit])} most frequently used terms are:\n"
         for term, count in sorted_terms[:term_limit]:
             output = f"{output}- **{term}** with _*{count}*_ uses\n"
