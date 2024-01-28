@@ -160,7 +160,7 @@ class Generate(commands.Cog):
                 f"{ctx.author.mention} Statistics are not currently available at this time, try again later."
             )
             
-    @commands.command(name='search', help='Search for a prompt in your history. Returns up to 15 prompts.')
+    @commands.command(name='search', help='Search for a prompt in your history. Returns up to 10 prompts.')
     async def search_prompts(self, ctx, search_string: str):
         try:
             app = AppConfig.flask
@@ -179,7 +179,7 @@ class Generate(commands.Cog):
                 if len(discovered_prompts) > 1:
                     found_string = f"{len(discovered_prompts)} prompts"
                 output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
-                for prompt in discovered_prompts[:15]:
+                for prompt in discovered_prompts[:10]:
                     output_string = f"{output_string}\n- `{prompt[0]}`"
                 await ctx.send(output_string)
         except Exception as e:
