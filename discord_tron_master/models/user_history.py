@@ -126,7 +126,7 @@ class UserHistory(db.Model):
             # If we're the last check, add "and" before:
             if term_limit - 1 in sorted_terms and term == sorted_terms[term_limit - 1][0]:
                 output = f"{output}and "
-            output = f"{output}{term} with *{count}* uses"
+            output = f"{output}**{term}** with _*{count}*_ uses"
         return output
 
     def to_dict(self):
