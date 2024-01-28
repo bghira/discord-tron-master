@@ -124,7 +124,7 @@ class UserHistory(db.Model):
             if "uses" in output:
                 output = f", "
             # If we're the last check, add "and" before:
-            if term == sorted_terms[term_limit - 1][0]:
+            if term_limit - 1 in sorted_terms and term == sorted_terms[term_limit - 1][0]:
                 output = f"{output}and "
             output = f"{output}{term} with *{count}* uses"
         return output
