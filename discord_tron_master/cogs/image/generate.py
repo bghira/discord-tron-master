@@ -142,12 +142,14 @@ class Generate(commands.Cog):
                     total_generations = user_statistics.get("total", 0)
                     unique_generations = user_statistics.get("unique", 0)
                     common_terms = user_statistics.get("common_terms", None)
+                    frequent_prompts = user_statistics.get("frequent_prompts", None)
                     if not common_terms:
                         common_terms = "None"
                 await ctx.send(
                     f"{ctx.author.mention}"
                     f"\n -> Total generations: {total_generations}"
                     f"\n -> Unique prompts: {unique_generations}"
+                    f"\n -> {frequent_prompts}"
                     f"\n -> {common_terms}"
                 )
         except Exception as e:

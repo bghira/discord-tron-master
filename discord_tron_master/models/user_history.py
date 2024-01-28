@@ -21,6 +21,14 @@ class UserHistory(db.Model):
         return UserHistory.query.all()
 
     @staticmethod
+    def get_all_prompts():
+        return UserHistory.query.with_entities(UserHistory.prompt).distinct().all()
+
+    @staticmethod
+    def get_all_user_prompts(user: str):
+        return UserHistory.query.with_entities(UserHistory.prompt).filter_by(user=user).distinct().all()
+
+    @staticmethod
     def get_by_user(user, return_all:bool = False):
         if not return_all:
             results = UserHistory.query.filter_by(user=user).first()
@@ -84,8 +92,32 @@ class UserHistory(db.Model):
             "total": len(user_history),
             "unique": len(set([entry.prompt for entry in user_history])),
             "history": [entry.to_dict() for entry in user_history],
-            "common_terms": UserHistory.get_user_most_common_terms(user_history)
+            "common_terms": UserHistory.get_user_most_common_terms(user_history),
+            "frequent_prompts": UserHistory.get_user_most_common_prompts(user, limit=3)
         }
+
+    @staticmethod
+    def get_user_most_common_prompts(user: str, limit: int = 10):
+        """
+        Return a dict of the limit number of most common prompts for a user.
+        
+        Sort by most to least frequent.
+        """
+        user_history = UserHistory.get_by_user(user, return_all=True)
+        if not user_history or user_history is None:
+            raise RuntimeError(f"Could not find results for {user} in database")
+        prompts = {}
+        for entry in user_history:
+            if entry.prompt not in prompts:
+                prompts[entry.prompt] = 0
+            prompts[entry.prompt] += 1
+        # Sort prompts by count:
+        sorted_prompts = sorted(prompts.items(), key=lambda x: x[1], reverse=True)
+        logger.debug(f"Sorted prompts: {sorted_prompts}")
+        output = f"{len(sorted_prompts[:limit])} most frequently used prompts are:\n"
+        for prompt, count in sorted_prompts[:limit]:
+            output = f"{output}- **{prompt}** with _*{count}*_ uses\n"
+        return output
 
     @staticmethod
     def get_user_most_common_terms(user_history, term_limit: int = 10, search_limit: int = 10000) -> dict:
