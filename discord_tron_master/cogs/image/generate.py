@@ -135,8 +135,18 @@ class Generate(commands.Cog):
                     )
                     return
                 user_statistics = UserHistory.get_user_statistics(user_id)
+                output_string = "I have no stats available for that user."
+                if user_statistics is not None:
+                    total_generations = user_statistics.get("total", 0)
+                    unique_generations = user_statistics.get("unique", 0)
+                    common_terms = user_statistics.get("common_terms", None)
+                    if not common_terms:
+                        common_terms = "None"
                 await ctx.send(
-                    f"{ctx.author.mention} Here are the stats for that user:\n\n{user_statistics}"
+                    f"{ctx.author.mention}"
+                    f"\n -> Total generations: {total_generations}"
+                    f"\n -> Unique generations: {unique_generations}"
+                    f"\n -> Common terms: {common_terms}"
                 )
         except Exception as e:
             logging.error("Caught error when getting user history: " + str(e))
