@@ -108,7 +108,7 @@ class Generate(commands.Cog):
                 app = AppConfig.flask
                 with app.app_context():
                     try:
-                        user_history = UserHistory.add_entry(user=ctx.author.id, message=ctx.message.id, prompt=_prompt, config_blob=extra_payload["user_config"])
+                        user_history = UserHistory.add_entry(user=ctx.author.id, message=ctx.id, prompt=_prompt, config_blob=extra_payload["user_config"])
                     except Exception as e:
                         logging.warning(f"Had trouble adding the user history entry: {user_history}")
                 # Generate a "Job" object that will be put into the queue.

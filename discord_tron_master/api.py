@@ -22,6 +22,7 @@ class API:
         AppConfig.set_flask(self.app)
         database_handler = DatabaseHandler(self.app, self.config)
         self.db = database_handler.db
+        from discord_tron_master.models.user_history import UserHistory
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
         from discord_tron_master.models.schedulers import Schedulers
