@@ -112,7 +112,7 @@ class UserHistory(db.Model):
                 logging.warning(f"Entry {entry} had no prompt. Not including in statistics.")
                 continue
             # Split prompt into terms by whitespace:
-            prompt_terms = entry.prompt.split(" ")
+            prompt_terms = entry.prompt.lower().split(" ")
             # Remove punctuation from the prompt:
             prompt_terms = [term.strip("():.,?!") for term in prompt_terms]
             for term in prompt_terms:
