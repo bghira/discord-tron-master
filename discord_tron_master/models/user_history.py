@@ -67,10 +67,6 @@ class UserHistory(db.Model):
 
     @staticmethod
     def add_entry(user: str, message: str, prompt: str, config_blob: dict = {}):
-        existing_entry = UserHistory.get_by_message(message)
-        if existing_entry:
-            logger.warn(f"User history entry already exists for message {message}, ignoring.")
-            return
         result = UserHistory.create(user, message, prompt, config_blob=json.dumps(config_blob))
         
         return result
