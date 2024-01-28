@@ -91,8 +91,8 @@ class Guilds:
         """
         Check if a channel is banned from generating images.
         """
-        banned_channels = self.get_config_value("banned_channels", [])
-        if channel_id in banned_channels:
+        banned_channels = self.get_config_value("banned_channels")
+        if banned_channels and channel_id in banned_channels:
             return True
         return False
 
