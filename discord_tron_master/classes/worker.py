@@ -84,7 +84,17 @@ class Worker:
             logger.debug(f"Worker {self.worker_id} is busy, in_progress has {len(self.job_queue.in_progress)} items in-flight.")
             return False
         if len(self.assigned_jobs.get(job_type, [])) > 1:
-            logger.debug(f"Instead of in progress, we detected assigned jobs in Worker: {self.worker_id} for job type {job_type}: {self.assigned_jobs.get(job_type, [])}")
+            assigned_jobs_output = [
+            {
+                "id": job.id,
+                "executed": job.executed,
+                "executed_date": job.executed_date,
+                "migrated": job.migrated,
+                "migrated_date": job.migrated_date,
+                "acknowledged": job.acknowledged,
+                "acknowledged_date": job.acknowledged_date
+            } for job in self.assigned_jobs.get(job_type, [])]
+            logger.debug(f"Instead of in progress, we detected assigned jobs in Worker: {self.worker_id} for job type {job_type}: {assigned_jobs_output}")
             return False
         return True
 
