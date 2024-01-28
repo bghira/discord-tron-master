@@ -114,7 +114,7 @@ class UserHistory(db.Model):
             # Split prompt into terms by whitespace:
             prompt_terms = entry.prompt.split(" ")
             for term in prompt_terms:
-                if term in stop_words:
+                if term in stop_words or term == '':
                     continue
                 if term not in terms:
                     terms[term] = 0
