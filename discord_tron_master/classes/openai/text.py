@@ -22,7 +22,7 @@ class GPT:
 
     async def sentiment_analysis(self, prompts):
         prompt = f"As a playful exercise, analyse the user who provided the following text: {prompts}"
-        system_role = "You are a sentiment analysis bot. Provide ONLY a single paragraph explaining the averages. Do not explain what a sentiment analysis is. Just provide the paragraph. You can use Discord formatting or average percent values to describe trends, but keep it succinct."
+        system_role = "You are a sentiment analysis bot. Provide ONLY up to two paragraphs explaining the averages. Do not use run-on sentences or make a wall of text. Do not explain what a sentiment analysis is. Just provide the paragraph. You can use Discord formatting or average percent values to describe trends, but keep it succinct."
         return await self.turbo_completion(system_role, prompt, temperature=1.18)
 
     async def updated_setting_response(self, name, value):
