@@ -18,6 +18,30 @@ class Settings(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
+    @commands.command(name="disallow", help="Bans a channel from generating.", hidden=True)
+    async def disallow_channel(self, ctx):
+        is_channel_banned = guild_config.is_channel_banned(ctx.channel.id)
+        if is_channel_banned:
+            await ctx.send(f"This channel is already banned from generating.")
+            return
+        # Are they admin?
+        if not await self.is_admin(ctx):
+            await ctx.send(f"You are not an admin.")
+            return
+        result = guild_config.set_guild_banned_channel(ctx.guild.id, ctx.channel.id)
+        if result:
+            await ctx.send(f"This channel has been banned from generating.")
+        else:
+            await ctx.send(f"Something went wrong.")
+        
+    async def is_admin(self, ctx):
+        # Was the user in the "Image Admin" group?
+        user_roles = ctx.author.roles
+        for role in user_roles:
+            if role.name == "Image Admin":
+                return True
+        return False
+
     # Other commands in your user_commands cog...
     @commands.command(name="home", help="Sets the home guild for this bot.  This is where the bot will have warm and fuzzy feelings.", hidden=True)
     async def home_guild(self, ctx):
@@ -26,10 +50,12 @@ class Settings(commands.Cog):
             await ctx.send(f"Home guild set to {ctx.guild.name} ({ctx.guild.id}).")
         else:
             await ctx.send(f"Are you fucking lost?")
+
     @commands.command(name="best-of", help="Sets the best-of channel ID for this guild.  This is where the bot will forward thumbs-up images.", hidden=True)
     async def best_of_channel(self, ctx):
         guild_config.set_guild_setting(ctx.guild.id, 'best_of_channel_id', ctx.channel.id)
         await ctx.send(f"This is now the channel for best-of posts in {ctx.guild.name} ({ctx.guild.id}).")
+
     @commands.command(name="settings", help="Shows your current settings.", hidden=False)
     async def my_settings(self, ctx, *args):
         user_id = ctx.author.id
