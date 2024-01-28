@@ -170,7 +170,7 @@ class Generate(commands.Cog):
                 logging.info(f"Discovered prompts: {discovered_prompts}")
                 if not discovered_prompts:
                     # We didn't discover any prompts. Let the user know their search was bonkers.
-                    await ctx.send(
+                    return await ctx.send(
                         f"{ctx.author.mention} I couldn't find any prompts matching that search."
                     )
                 found_string = "a prompt"
@@ -178,7 +178,7 @@ class Generate(commands.Cog):
                     found_string = f"{len(discovered_prompts)} prompts"
                 output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
                 for prompt in discovered_prompts:
-                    output_string = f"\n- `{prompt}`"
+                    output_string = f"{output_string}\n- `{prompt[0]}`"
                 await ctx.send(output_string)
         except Exception as e:
             logging.error("Caught error when searching prompts: " + str(e))
