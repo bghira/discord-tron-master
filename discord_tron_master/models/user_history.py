@@ -12,7 +12,7 @@ class UserHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user = db.Column(db.String(255), unique=False, nullable=False, index=True)
     message = db.Column(db.String(255), unique=False, nullable=False, index=True)
-    prompt = db.Column(db.String(255), nullable=False)
+    prompt = db.Column(db.String(768), nullable=False)
     date_created = db.Column(db.Integer, nullable=False)
     config_blob = db.Column(db.Text(), nullable=True)
 

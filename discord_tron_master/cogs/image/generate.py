@@ -153,7 +153,7 @@ class Generate(commands.Cog):
         except Exception as e:
             logging.error("Caught error when getting user history: " + str(e))
             await ctx.send(
-                f"{ctx.author.mention} {self.generic_error}."
+                f"{ctx.author.mention} Statistics are not currently available at this time, try again later."
             )
 
     @commands.command(name="invite", help="Invites the user to the latest thread in the channel.")
