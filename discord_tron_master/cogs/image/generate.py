@@ -121,6 +121,29 @@ class Generate(commands.Cog):
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
 
+    @commands.command(name="stats", help="View user generation statistics.")
+    async def get_statistics(self, ctx, user_id = None):
+        if user_id is None:
+            user_id = ctx.author.id
+        try:
+            app = AppConfig.flask
+            with app.app_context():
+                user_history = UserHistory.get_user_history(user_id)
+                if user_history is None:
+                    await ctx.send(
+                        f"{ctx.author.mention} I have no history for that user."
+                    )
+                    return
+                user_statistics = UserHistory.get_user_statistics(user_id)
+                await ctx.send(
+                    f"{ctx.author.mention} Here are the stats for that user:\n\n{user_statistics}"
+                )
+        except Exception as e:
+            logging.error("Caught error when getting user history: " + str(e))
+            await ctx.send(
+                f"{ctx.author.mention} {self.generic_error}."
+            )
+
     @commands.command(name="invite", help="Invites the user to the latest thread in the channel.")
     async def invite_to_thread(self, ctx):
         try:

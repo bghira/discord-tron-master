@@ -80,6 +80,44 @@ class UserHistory(db.Model):
         return result
         
 
+    @staticmethod
+    def get_user_statistics(user: str) -> dict:
+        """
+        Return a dict of statistics for a user.
+        """
+        user_history = UserHistory.get_by_user(user, return_all=True)
+        if not user_history or user_history is None:
+            raise RuntimeError(f"Could not find results for {user} in database")
+        return {
+            "total": len(user_history),
+            "unique": len(set([entry.prompt for entry in user_history])),
+            "history": [entry.to_dict() for entry in user_history],
+            "common_terms": UserHistory.get_user_most_common_terms(user_history)
+        }
+
+    @staticmethod
+    def get_user_most_common_terms(user_history, term_limit: int = 10, search_limit: int = 10000) -> dict:
+        """
+        Return a dict of the term_limit number of most common terms in the most recent 'search_limit' number of history entries.
+        
+        Sort by most to least frequent.
+        """
+        terms = {} # Will be a key-indexed dict of counts for each term.
+        counter = 0
+        for entry in user_history:
+            counter += 1
+            if counter > search_limit:
+                break
+            if not entry.prompt:
+                logging.warning(f"Entry {entry} had no prompt. Not including in statistics.")
+                continue
+            # Split prompt into terms by whitespace:
+            prompt_terms = entry.prompt.split(" ")
+            for term in prompt_terms:
+                if term not in terms:
+                    terms[term] = 0
+                terms[term] += 1
+
     def to_dict(self):
         return {
             "user": self.user,
