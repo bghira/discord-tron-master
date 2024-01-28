@@ -110,7 +110,7 @@ class Generate(commands.Cog):
                     try:
                         user_history = UserHistory.add_entry(user=ctx.author.id, message=ctx.id, prompt=_prompt, config_blob=extra_payload["user_config"])
                     except Exception as e:
-                        logging.warning(f"Had trouble adding the user history entry: {user_history}")
+                        logging.warning(f"Had trouble adding the user history entry: {e}")
                 # Generate a "Job" object that will be put into the queue.
                 await discord_first_message.edit(content=f"Job {job.id} queued on {worker.worker_id}: `" + _prompt + "`")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
