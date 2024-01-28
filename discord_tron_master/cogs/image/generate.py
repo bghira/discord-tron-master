@@ -167,6 +167,7 @@ class Generate(commands.Cog):
                 # Shuffle the list:
                 import random
                 random.shuffle(discovered_prompts)
+                logging.info(f"Discovered prompts: {discovered_prompts}")
                 if not discovered_prompts:
                     # We didn't discover any prompts. Let the user know their search was bonkers.
                     await ctx.send(
