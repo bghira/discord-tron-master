@@ -11,7 +11,7 @@ class UserHistory(db.Model):
     __tablename__ = 'user_history'
     id = db.Column(db.Integer, primary_key=True)
     user = db.Column(db.String(255), unique=False, nullable=False, index=True)
-    message = db.Column(db.String(255), unique=False, nullable=False)
+    message = db.Column(db.String(255), unique=False, nullable=False, index=True)
     prompt = db.Column(db.String(255), nullable=False)
     date_created = db.Column(db.Integer, nullable=False)
     config_blob = db.Column(db.Text(), nullable=True)
@@ -58,10 +58,6 @@ class UserHistory(db.Model):
 
     @staticmethod
     def create(user: str, message: str, prompt: str, config_blob: dict = {}):
-        existing_definition = UserHistory.get_by_message(message)
-        if existing_definition is not None:
-            logger.warning(f"User history entry already exists for message {message}, ignoring.")
-            return
         import time
         user_history = UserHistory(user=user, message=message, prompt=prompt, config_blob=json.dumps(config_blob), date_created=int(time.time()))
         db.session.add(user_history)
