@@ -183,6 +183,7 @@ class Generate(commands.Cog):
             prompts = prompt.split('\n')
         else:
             prompts = [ prompt ]
+        idx = 0
         for _prompt in prompts:
             try:
                 # Generate a "Job" object that will be put into the queue.
@@ -199,7 +200,7 @@ class Generate(commands.Cog):
                 app = AppConfig.flask
                 with app.app_context():
                     try:
-                        user_history = UserHistory.add_entry(user=user_id, message=ctx.id, prompt=_prompt, config_blob=user_config)
+                        user_history = UserHistory.add_entry(user=user_id, message=int(f"{ctx.id}{idx}"), prompt=_prompt, config_blob=user_config)
                     except Exception as e:
                         logging.warning(f"Had trouble adding the user history entry: {e}")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
@@ -209,3 +210,5 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
+            finally:
+                idx += 1
