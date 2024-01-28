@@ -2,6 +2,7 @@ from discord.ext import commands
 from asyncio import Lock
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.models.user_history import UserHistory
 import discord_tron_master.classes.discord.message_helpers as helper
 import logging, traceback
 from discord_tron_master.bot import DiscordBot
@@ -104,6 +105,12 @@ class Generate(commands.Cog):
                     # Wait a few seconds before deleting:
                     await discord_first_message.delete(delay=10)
                     return
+                app = AppConfig.flask
+                with app.app_context():
+                    try:
+                        user_history = UserHistory.add_entry(user=ctx.author.id, message=ctx.message.id, prompt=_prompt, config_blob=extra_payload["user_config"])
+                    except Exception as e:
+                        logging.warning(f"Had trouble adding the user history entry: {user_history}")
                 # Generate a "Job" object that will be put into the queue.
                 await discord_first_message.edit(content=f"Job {job.id} queued on {worker.worker_id}: `" + _prompt + "`")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
