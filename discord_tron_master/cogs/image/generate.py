@@ -110,6 +110,7 @@ class Generate(commands.Cog):
                 with app.app_context():
                     try:
                         user_history = UserHistory.add_entry(user=ctx.author.id, message=int(f"{ctx.id if hasattr(ctx, 'id') else ctx.message.id}{idx}"), prompt=_prompt, config_blob=extra_payload["user_config"])
+                        idx += 1
                     except Exception as e:
                         logging.warning(f"Had trouble adding the user history entry: {e}")
                 # Generate a "Job" object that will be put into the queue.
@@ -121,8 +122,6 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
-            finally:
-                idx += 1
 
     @commands.command(name="stats", help="View user generation statistics.")
     async def get_statistics(self, ctx, user_id = None):
@@ -201,6 +200,7 @@ class Generate(commands.Cog):
                 with app.app_context():
                     try:
                         user_history = UserHistory.add_entry(user=user_id, message=int(f"{ctx.id if hasattr(ctx, 'id') else ctx.message.id}{idx}"), prompt=_prompt, config_blob=user_config)
+                        idx += 1
                     except Exception as e:
                         logging.warning(f"Had trouble adding the user history entry: {e}")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
@@ -210,5 +210,3 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
-            finally:
-                idx += 1
