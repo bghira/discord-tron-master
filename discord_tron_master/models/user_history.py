@@ -63,7 +63,7 @@ class UserHistory(db.Model):
             logger.warning(f"User history entry already exists for message {message}, ignoring.")
             return
         import time
-        user_history = UserHistory(user=user, message=message, prompt=prompt, user_history=user_history, config_blob=json.dumps(config_blob), date_created=int(time.time()))
+        user_history = UserHistory(user=user, message=message, prompt=prompt, config_blob=json.dumps(config_blob), date_created=int(time.time()))
         db.session.add(user_history)
         db.session.commit()
         return user_history
