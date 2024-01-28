@@ -146,7 +146,7 @@ class Generate(commands.Cog):
                     f"{ctx.author.mention}"
                     f"\n -> Total generations: {total_generations}"
                     f"\n -> Unique prompts: {unique_generations}"
-                    f"\n -> Common terms: {common_terms}"
+                    f"\n -> {common_terms}"
                 )
         except Exception as e:
             logging.error("Caught error when getting user history: " + str(e))
