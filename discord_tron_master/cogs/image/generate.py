@@ -145,7 +145,7 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"{ctx.author.mention}"
                     f"\n -> Total generations: {total_generations}"
-                    f"\n -> Unique generations: {unique_generations}"
+                    f"\n -> Unique prompts: {unique_generations}"
                     f"\n -> Common terms: {common_terms}"
                 )
         except Exception as e:

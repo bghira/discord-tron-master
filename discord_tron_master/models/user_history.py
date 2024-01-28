@@ -117,6 +117,9 @@ class UserHistory(db.Model):
                 if term not in terms:
                     terms[term] = 0
                 terms[term] += 1
+        # Sort terms by count:
+        sorted_terms = sorted(terms.items(), key=lambda x: x[1], reverse=True)
+        return sorted_terms[:term_limit]
 
     def to_dict(self):
         return {
