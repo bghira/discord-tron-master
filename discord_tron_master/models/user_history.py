@@ -154,6 +154,8 @@ class UserHistory(db.Model):
             for term in prompt_terms:
                 if term in stop_words or term == '':
                     continue
+                if len(term) < 4:
+                    continue
                 if term not in terms:
                     terms[term] = 0
                 terms[term] += 1
