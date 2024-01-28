@@ -82,6 +82,7 @@ class Generate(commands.Cog):
             prompts = ['']
         else:
             prompts = [ prompt ]
+        idx = 0
         for _prompt in prompts:
             try:
                 self.config.reload_config()
@@ -108,7 +109,7 @@ class Generate(commands.Cog):
                 app = AppConfig.flask
                 with app.app_context():
                     try:
-                        user_history = UserHistory.add_entry(user=ctx.author.id, message=ctx.id, prompt=_prompt, config_blob=extra_payload["user_config"])
+                        user_history = UserHistory.add_entry(user=ctx.author.id, message=int(f"{ctx.id}{idx}"), prompt=_prompt, config_blob=extra_payload["user_config"])
                     except Exception as e:
                         logging.warning(f"Had trouble adding the user history entry: {e}")
                 # Generate a "Job" object that will be put into the queue.
@@ -120,6 +121,8 @@ class Generate(commands.Cog):
                 await ctx.send(
                     f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                 )
+            finally:
+                idx += 1
 
     @commands.command(name="stats", help="View user generation statistics.")
     async def get_statistics(self, ctx, user_id = None):

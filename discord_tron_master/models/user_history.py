@@ -11,7 +11,7 @@ class UserHistory(db.Model):
     __tablename__ = 'user_history'
     id = db.Column(db.Integer, primary_key=True)
     user = db.Column(db.String(255), unique=False, nullable=False, index=True)
-    message = db.Column(db.String(255), unique=True, nullable=False)
+    message = db.Column(db.String(255), unique=False, nullable=False)
     prompt = db.Column(db.String(255), nullable=False)
     date_created = db.Column(db.Integer, nullable=False)
     config_blob = db.Column(db.Text(), nullable=True)
