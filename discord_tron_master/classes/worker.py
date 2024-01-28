@@ -163,7 +163,7 @@ class Worker:
                             assigned_jobs_output = [
                             {
                                 "id": job.id,
-                                "has_executed": job.has_executed,
+                                "executed": job.executed,
                                 "executed_date": job.executed_date,
                                 "migrated": job.migrated,
                                 "migrated_date": job.migrated_date,
