@@ -157,12 +157,19 @@ class Generate(commands.Cog):
                     frequent_prompts = user_statistics.get("frequent_prompts", None)
                     if not common_terms:
                         common_terms = "None"
+                sentiment_analysis = "No sentiment analysis was available."
+                try:
+                    gpt = GPT()
+                    sentiment_analysis = await gpt.sentiment_analysis(UserHistory.get_user_most_common_prompts(user=user_id, limit=1000))
+                except:
+                    pass
                 await ctx.send(
                     f"{ctx.author.mention}"
                     f"\n -> Total generations: {total_generations}"
                     f"\n -> Unique prompts: {unique_generations}"
                     f"\n -> {frequent_prompts}"
                     f"\n -> {common_terms}"
+                    f"\n {sentiment_analysis}"
                 )
         except Exception as e:
             logger.error("Caught error when getting user history: " + str(e))

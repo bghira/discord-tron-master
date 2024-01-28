@@ -20,6 +20,11 @@ class GPT:
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    async def sentiment_analysis(self, prompts):
+        prompt = f"As a playful exercise, analyse the user who provided the following text: {prompts}"
+        system_role = "You are a sentiment analysis bot."
+        return await self.turbo_completion(system_role, prompt, temperature=1.18)
+
     async def updated_setting_response(self, name, value):
         prompt = f"Please provide a message to the user. They have updated setting '{name}' to be set to '{value}'"
         return await self.turbo_completion(self.discord_bot_role, prompt)
