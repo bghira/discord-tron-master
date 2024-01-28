@@ -95,6 +95,14 @@ class UserHistory(db.Model):
         Sort by most to least frequent.
         """
         terms = {} # Will be a key-indexed dict of counts for each term.
+        stop_words = [
+            "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "could", "do",
+            "does", "doing", "done", "for", "from", "had", "has", "have", "he", "her",
+            "here", "hers", "his", "i", "in", "is", "it", "its", "may", "me", "might",
+            "must", "my", "no", "not", "of", "on", "or", "our", "shall", "she", "should",
+            "that", "the", "their", "them", "there", "they", "this", "to", "us", "was",
+            "we", "were", "where", "when", "will", "with", "would", "yes", "you", "your"
+        ]
         counter = 0
         for entry in user_history:
             counter += 1
@@ -106,6 +114,8 @@ class UserHistory(db.Model):
             # Split prompt into terms by whitespace:
             prompt_terms = entry.prompt.split(" ")
             for term in prompt_terms:
+                if term in stop_words:
+                    continue
                 if term not in terms:
                     terms[term] = 0
                 terms[term] += 1
