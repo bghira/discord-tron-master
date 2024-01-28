@@ -113,6 +113,8 @@ class UserHistory(db.Model):
                 continue
             # Split prompt into terms by whitespace:
             prompt_terms = entry.prompt.split(" ")
+            # Remove punctuation from the prompt:
+            prompt_terms = [term.strip("():.,?!") for term in prompt_terms]
             for term in prompt_terms:
                 if term in stop_words or term == '':
                     continue
