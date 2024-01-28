@@ -128,7 +128,7 @@ class Generate(commands.Cog):
         try:
             app = AppConfig.flask
             with app.app_context():
-                user_history = UserHistory.get_user_history(user_id)
+                user_history = UserHistory.get_by_user(user_id)
                 if user_history is None:
                     await ctx.send(
                         f"{ctx.author.mention} I have no history for that user."
