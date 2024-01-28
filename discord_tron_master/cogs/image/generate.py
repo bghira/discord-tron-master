@@ -193,6 +193,12 @@ class Generate(commands.Cog):
                     # Wait a few seconds before deleting:
                     await discord_first_message.delete(delay=10)
                     return
+                app = AppConfig.flask
+                with app.app_context():
+                    try:
+                        user_history = UserHistory.add_entry(user=user_id, message=ctx.id, prompt=_prompt, config_blob=user_config)
+                    except Exception as e:
+                        logging.warning(f"Had trouble adding the user history entry: {e}")
                 logging.info("Worker selected for job: " + str(worker.worker_id))
                 # Add it to the queue
                 await discord.queue_manager.enqueue_job(worker, job)
