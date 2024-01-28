@@ -60,13 +60,13 @@ class Guilds:
         self.config["guilds"][guild_id] = guild_config
         with open(self.config_path, "w") as config_file:
             logging.info(f"Saving config: {self.config}")
-            json.dump(self.config, config_file, indent=4)
+            return json.dump(self.config, config_file, indent=4)
 
     def set_guild_setting(self, guild_id, setting_key, value):
         guild_id = str(guild_id)
         guild_config = self.get_guild_config(guild_id)
         guild_config[setting_key] = value
-        self.set_guild_config(guild_id, guild_config)
+        return self.set_guild_config(guild_id, guild_config)
 
     def get_guild_setting(self, guild_id, setting_key, default_value=None):
         self.reload_config()
