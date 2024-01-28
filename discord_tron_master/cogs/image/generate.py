@@ -179,7 +179,7 @@ class Generate(commands.Cog):
                 if len(discovered_prompts) > 1:
                     found_string = f"{len(discovered_prompts)} prompts"
                 output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
-                for prompt in discovered_prompts:
+                for prompt in discovered_prompts[:15]:
                     output_string = f"{output_string}\n- `{prompt[0]}`"
                 await ctx.send(output_string)
         except Exception as e:
