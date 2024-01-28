@@ -122,7 +122,7 @@ class UserHistory(db.Model):
         output = "Ten most frequently used terms are "
         for term, count in sorted_terms[:term_limit]:
             if "uses" in output:
-                output = f", "
+                output = f"{output}, "
             # If we're the last check, add "and" before:
             if term_limit - 1 in sorted_terms and term == sorted_terms[term_limit - 1][0]:
                 output = f"{output}and "
