@@ -159,7 +159,18 @@ class Worker:
                     # Wait async until we can assign
                     while not self.can_assign_job_by_type(job_type=test_job.job_type):
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
-                        logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {self.assigned_jobs}")
+                        for job_type, jobs in self.assigned_jobs.items():
+                            assigned_jobs_output = [
+                            {
+                                "id": job.id,
+                                "has_executed": job.has_executed,
+                                "executed_date": job.executed_date,
+                                "migrated": job.migrated,
+                                "migrated_date": job.migrated_date,
+                                "acknowledged": job.acknowledged,
+                                "acknowledged_date": job.acknowledged_date
+                            } for job in jobs]
+                        logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {assigned_jobs_output}")
                         if self.are_jobs_acknowledged():
                             logger.debug(f"All jobs have been acknowledged. Waiting cleanly.")
                             await asyncio.sleep(1)
