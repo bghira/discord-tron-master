@@ -181,7 +181,7 @@ class Generate(commands.Cog):
             )
             
     @commands.command(name='search', help='Search for a prompt in your history. Returns up to 10 prompts.')
-    async def search_prompts(self, ctx, search_string: str):
+    async def search_prompts(self, ctx, *, search_string: str):
         try:
             app = AppConfig.flask
             with app.app_context():
