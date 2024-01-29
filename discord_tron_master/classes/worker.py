@@ -170,7 +170,7 @@ class Worker:
                     continue
                 else:
                     # Wait async until we can assign
-                    while not self.can_assign_job_by_type(job_type=test_job.job_type):
+                    while not self.can_assign_job_by_type(job_type=test_job.job_type) and not self.terminate:
                         logger.info(f"(Worker.process_jobs) Worker {self.worker_id} is busy. Waiting for job to be assigned.")
                         for job_type, jobs in self.assigned_jobs.items():
                             assigned_jobs_output = [
