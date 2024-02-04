@@ -25,7 +25,6 @@ class PromptlessVariationJob(Job):
                 "image_prompt": "__No prompt - promptless variation__",
                 "prompt": "__No prompt - promptless variation__",
                 "image_data": image,
-                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": config.get_user_config(user_id=ctx.author.id)
             }

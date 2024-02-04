@@ -28,7 +28,6 @@ class ImageUpscalingJob(Job):
                 "image_data": image,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
-                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
                 "upscaler": True
             }
         return message

@@ -31,7 +31,6 @@ class PromptVariationJob(Job):
                 "image_prompt": prompt,
                 "prompt": prompt,
                 "image_data": image,
-                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
             }

@@ -37,7 +37,6 @@ class ImageGenerationJob(Job):
                 "prompt": prompt,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
-                "scheduler_config": Schedulers.get_user_scheduler(user_config).to_dict(),
                 "model_config": self.get_transformer_details(user_config)
             }
         return message
