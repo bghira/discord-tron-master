@@ -208,7 +208,7 @@ class Generate(commands.Cog):
                 f"{ctx.author.mention} Search is not currently available at this time, try again later."
             )
     @commands.command(name='random', help='Search for random prompts. Returns up to 10 prompts, unless a number is provided.')
-    async def search_prompts(self, ctx, count: int = 10):
+    async def random_prompts(self, ctx, count: int = 10):
         try:
             app = AppConfig.flask
             with app.app_context():
