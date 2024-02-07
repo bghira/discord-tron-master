@@ -62,17 +62,17 @@ class GPT:
         system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
         image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
         logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
-        prompt_pieces = image_prompt_response.split(', ')
-        logging.debug(f'Prompt pieces: {prompt_pieces}')
-        # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
-        prompt_output = "("
-        for index, prompt_piece in enumerate(prompt_pieces):
-            if prompt_output == "(":
-                prompt_output = f'{prompt_output}"{prompt_piece}"'
-                continue
-            prompt_output = f'{prompt_output}, "{prompt_piece}"'
-        prompt_output = f'{prompt_output}).and()'
-        return prompt_output
+        # prompt_pieces = image_prompt_response.split(', ')
+        # logging.debug(f'Prompt pieces: {prompt_pieces}')
+        # # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
+        # prompt_output = "("
+        # for index, prompt_piece in enumerate(prompt_pieces):
+        #     if prompt_output == "(":
+        #         prompt_output = f'{prompt_output}"{prompt_piece}"'
+        #         continue
+        #     prompt_output = f'{prompt_output}, "{prompt_piece}"'
+        # prompt_output = f'{prompt_output}).and()'
+        return image_prompt_response
 
     async def auto_model_select(self, prompt: str, query_str: str = None):
         if query_str is None:
