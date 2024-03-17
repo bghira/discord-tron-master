@@ -192,7 +192,7 @@ class Model(commands.Cog):
                     recommended_positive="set a recommended positive string for this model with `!model-positive <model_id> <positive_string>`",
                     approved=addition_status,
                     description=description,
-                    tags=json.dumps(model_details.tags),
+                    tags="",
                     added_by=user_id,
                 )
         except Exception as e:
