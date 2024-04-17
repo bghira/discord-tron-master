@@ -10,74 +10,90 @@ app = AppConfig.flask
 prompt_styles = {
     "base": [
       "{prompt}",  
-      "{prompt}"  
+      "{prompt} striated lines, canvas pattern, blurry"  
+    ],
+    "alec-baldwin": [
+        "the alec baldwin version of {prompt}, absurd, zany, mash-up, shot on the Rust movie set",
+        "freedom, actor, movie, professional"
+    ],
+    "typography": [
+        "typography {prompt}, font, typeface, graphic design, centered composition",
+        "deformed, misspelt, glitch, noisy, realistic"
+    ],
+    "wes-anderson": [
+        "photo of a cinematic scene, {prompt} shot in the style of wes anderson on 70mm film",
+        "comic, newspaper, deformed, glitch, noisy, realistic, stock photo, canvas pattern"
+    ],
+    "deep-ocean": [
+        "underwater photograph of a deep ocean scene, {prompt} in the neon midnight zone",
+        "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured, terrestrial, sky"
     ],
     "phone-camera": [
         "iphone samsung galaxy camera photo of {prompt}",
         "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured"
     ],
     "enhance": [
-        "breathtaking {prompt} . award-winning, professional, highly detailed",
+        "breathtaking {prompt} award-winning, professional, highly detailed",
         "ugly, deformed, noisy, blurry, distorted, grainy"
     ],
     "anime": [
-        "anime artwork {prompt} . anime style, key visual, vibrant, studio anime,  highly detailed",
+        "anime artwork {prompt} anime style, key visual, vibrant, studio anime,  highly detailed",
         "photo, deformed, black and white, realism, disfigured, low contrast"
     ],
     "photographic": [
-        "cinematic photo {prompt} . 35mm photograph, film, bokeh, professional, 4k, highly detailed",
+        "cinematic photo {prompt} 35mm photograph, film, bokeh, professional, 4k, highly detailed",
         "drawing, painting, crayon, sketch, graphite, impressionist, noisy, blurry, soft, deformed, ugly"
     ],
     "digital-art": [
-        "concept art {prompt} . digital artwork, illustrative, painterly, matte painting, highly detailed",
+        "concept art {prompt} digital artwork, illustrative, painterly, matte painting, highly detailed",
         "photo, photorealistic, realism, ugly"
     ],
     "comic-book": [
-        "comic {prompt} . graphic illustration, comic art, graphic novel art, vibrant, highly detailed",
+        "comic {prompt} graphic illustration, comic art, graphic novel art, vibrant, highly detailed",
         "photograph, deformed, glitch, noisy, realistic, stock photo"
     ],
     "fantasy-art": [
-        "ethereal fantasy concept art of  {prompt} . magnificent, celestial, ethereal, painterly, epic, majestic, magical, fantasy art, cover art, dreamy",
+        "ethereal fantasy concept art of {prompt} magnificent, celestial, ethereal, painterly, epic, majestic, magical, fantasy art, cover art, dreamy",
         "photographic, realistic, realism, 35mm film, dslr, cropped, frame, text, deformed, glitch, noise, noisy, off-center, deformed, cross-eyed, closed eyes, bad anatomy, ugly, disfigured, sloppy, duplicate, mutated, black and white"
     ],
     "analog-film": [
-        "analog film photo {prompt} . faded film, desaturated, 35mm photo, grainy, vignette, vintage, Kodachrome, Lomography, stained, highly detailed, found footage",
+        "analog film photo vintage, detailed Kodachrome, found footage, 1980s {prompt}",
         "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured"
     ],
     "neonpunk": [
-        "neonpunk style {prompt} . cyberpunk, vaporwave, neon, vibes, vibrant, stunningly beautiful, crisp, detailed, sleek, ultramodern, magenta highlights, dark purple shadows, high contrast, cinematic, ultra detailed, intricate, professional",
+        "neonpunk style {prompt} cyberpunk, vaporwave, neon, vibes, vibrant, stunningly beautiful, crisp, detailed, sleek, ultramodern, magenta highlights, dark purple shadows, high contrast, cinematic, ultra detailed, intricate, professional",
         "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured"
     ],
     "isometric": [
-        "isometric style {prompt} . vibrant, beautiful, crisp, detailed, ultra detailed, intricate",
+        "isometric style {prompt} vibrant, beautiful, crisp, detailed, ultra detailed, intricate",
         "deformed, mutated, ugly, disfigured, blur, blurry, noise, noisy, realistic, photographic"
     ],
     "lowpoly": [
-        "low-poly style {prompt} . low-poly game art, polygon mesh, jagged, blocky, wireframe edges, centered composition",
+        "low-poly style {prompt} low-poly game art, polygon mesh, jagged, blocky, wireframe edges, centered composition",
         "noisy, sloppy, messy, grainy, highly detailed, ultra textured, photo"
     ],
     "origami": [
-        "origami style {prompt} . paper art, pleated paper, folded, origami art, pleats, cut and fold, centered composition",
+        "origami style {prompt} paper art, pleated paper, folded, origami art, pleats, cut and fold, centered composition",
         "noisy, sloppy, messy, grainy, highly detailed, ultra textured, photo"
     ],
     "line-art": [
-        "line art drawing {prompt} . professional, sleek, modern, minimalist, graphic, line art, vector graphics",
+        "line art drawing {prompt} professional, sleek, modern, minimalist, graphic, line art, vector graphics",
         "anime, photorealistic, 35mm film, deformed, glitch, blurry, noisy, off-center, deformed, cross-eyed, closed eyes, bad anatomy, ugly, disfigured, mutated, realism, realistic, impressionism, expressionism, oil, acrylic"
     ],
     "craft-clay": [
-        "play-doh style {prompt} . sculpture, clay art, centered composition, Claymation",
+        "play-doh style {prompt} sculpture, clay art, centered composition, Claymation",
         "sloppy, messy, grainy, highly detailed, ultra textured, photo"
     ],
     "cinematic": [
-        "cinematic film still {prompt} . shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, film grain, grainy",
+        "cinematic film still {prompt} shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, film grain, grainy",
         "anime, cartoon, graphic, text, painting, crayon, graphite, abstract, glitch, deformed, mutated, ugly, disfigured"
     ],
     "3d-model": [
-        "professional 3d model {prompt} . octane render, highly detailed, volumetric, dramatic lighting",
+        "professional 3d model {prompt} octane render, highly detailed, volumetric, dramatic lighting",
         "ugly, deformed, noisy, low poly, blurry, painting"
     ],
     "pixel-art": [
-        "pixel-art {prompt} . low-res, blocky, pixel art style, 8-bit graphics",
+        "pixel-art {prompt} low-res, blocky, pixel art style, 8-bit graphics",
         "sloppy, messy, blurry, noisy, highly detailed, ultra textured, photo, realistic"
     ],
     "texture": [
