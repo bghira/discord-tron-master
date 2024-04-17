@@ -12,6 +12,10 @@ prompt_styles = {
       "{prompt}",  
       "{prompt}"  
     ],
+    "phone-camera": [
+        "iphone samsung galaxy camera photo of {prompt}",
+        "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured"
+    ],
     "enhance": [
         "breathtaking {prompt} . award-winning, professional, highly detailed",
         "ugly, deformed, noisy, blurry, distorted, grainy"
