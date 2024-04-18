@@ -81,6 +81,15 @@ class Generate(commands.Cog):
         for i in range(0, int(count)):
             await self.generate(ctx, prompt=prompt)
 
+    @commands.command(name="dalle", help="Generates an image based on the given prompt using DALL-E.")
+    async def generate_dalle(self, ctx, *, prompt):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
+            return
+        from discord_tron_master.classes.openai.text import GPT
+        gpt = GPT()
+        image_output = await gpt.dalle_image_generate(prompt=prompt, user_config=self.config.get_user_config(user_id=ctx.author.id))
+        await ctx.channel.send(file=discord_lib.File(BytesIO(image_output), "image.png"))
+
     @commands.command(name="sd3", help="Generates an image based on the given prompt using Stable Diffusion 3.")
     async def generate_sd3(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):

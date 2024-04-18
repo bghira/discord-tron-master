@@ -168,3 +168,29 @@ class GPT:
                 return choice.text
 
         return response.choices[0].message.content
+
+    async def retrieve_image(self, url: str):
+        import requests
+        response = requests.get(url)
+        return response.content
+
+    async def dalle_image_generate(self, prompt, user_config: dict):
+        resolution = f"{user_config.get('width', 1024)}x{user_config.get('height', 1024)}"
+        try:
+            response = openai.images.generate(
+                model="dall-e-3",
+                prompt=f"I NEED to test how the tool works with extremely simple prompts. DO NOT add any detail, just use it AS-IS: {prompt}",
+                size=resolution,
+                quality="standard",
+                n=1,
+            )
+            url = response.data[0].url
+            # retrieve URL, return Image
+            image_obj = await self.retrieve_image(url)
+            if not hasattr(image_obj, "size"):
+                logging.error(f"Image object does not have a size attribute. Returning None.")
+                logging.debug(f"Response from OpenAI: {response}")
+                return None
+        except Exception as e:
+            logging.error(f"Error generating image: {e}")
+            return None
