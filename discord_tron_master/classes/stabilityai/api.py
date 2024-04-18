@@ -18,17 +18,20 @@ class StabilityAI:
         """Convert the decimal aspect_ratio representation to the nearest supported aspect."""
         # First, convert the allowed list from x:y to decimal:
         allowed_ratios = []
+        ratio_dict = {}
         for ratio in self.allowed_resolutions:
             x, y = map(int, ratio.split(":"))
-            allowed_ratios.append(x / y)
+            decimal_ratio = x / y
+            allowed_ratios.append(decimal_ratio)
+            ratio_dict[decimal_ratio] = ratio  # Map decimal ratio back to string ratio
         import logging
         logging.info(f"Allowed aspect ratios: {allowed_ratios}")
+        
         # Next, find the closest ratio to the decimal:
         closest_ratio = min(allowed_ratios, key=lambda x: abs(x - decimal))
-        # Finally, convert the ratio from float back to string:
-        x, y = map(str, map(int, closest_ratio.as_integer_ratio()))
-        return f"{x}:{y}"
-
+        
+        # Get the string representation from the dictionary:
+        return ratio_dict[closest_ratio]
 
     def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str ="sd3"):
         res = user_config.get("resolution", {})
