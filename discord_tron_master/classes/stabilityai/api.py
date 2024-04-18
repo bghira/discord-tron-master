@@ -33,23 +33,25 @@ class StabilityAI:
         # Get the string representation from the dictionary:
         return ratio_dict[closest_ratio]
 
-    def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str ="sd3"):
+    def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str = "sd3"):
         res = user_config.get("resolution", {})
         width, height = res.get("width", 1024), res.get("height", 1024)
         aspect_ratio = self.decimal_to_ratio(round(width / height, 2))
         seed = user_config.get("seed", 0)
+        arguments = {
+            "prompt": f"{prompt} {user_config.get('positive_prompt', '')}",
+            "output_format": output_format,
+            "seed": seed,
+            "aspect_ratio": aspect_ratio,
+            "model": model
+        }
+        if model != "sd3-turbo":
+            arguments["negative_prompt"] = user_config.get("negative_prompt", "")
         response = requests.post(
             self.base_url,
             headers=self.headers,
             files={"none": ''},
-            data={
-                "prompt": f"{prompt} {user_config.get('positive_prompt', '')}",
-                "negative_prompt": user_config.get("negative_prompt", ""),
-                "output_format": output_format,
-                "seed": seed,
-                "aspect_ratio": aspect_ratio,
-                "model": model
-            },
+            data=arguments
         )
         if response.status_code == 200:
             return response.content
