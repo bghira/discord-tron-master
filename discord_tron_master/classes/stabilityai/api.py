@@ -21,6 +21,8 @@ class StabilityAI:
         for ratio in self.allowed_resolutions:
             x, y = map(int, ratio.split(":"))
             allowed_ratios.append(x / y)
+        import logging
+        logging.info(f"Allowed aspect ratios: {allowed_ratios}")
         # Next, find the closest ratio to the decimal:
         closest_ratio = min(allowed_ratios, key=lambda x: abs(x - decimal))
         # Finally, convert the ratio back to string:
