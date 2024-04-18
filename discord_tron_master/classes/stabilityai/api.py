@@ -1,5 +1,5 @@
 import requests
-from classes.app_config import AppConfig
+from discord_tron_master.classes.app_config import AppConfig
 config = AppConfig()
 class StabilityAI:
     def __init__(self):
