@@ -94,7 +94,7 @@ class Generate(commands.Cog):
             # Not supported yet
             await ctx.send("Sorry, `--sd3-turbo` is not supported yet.")
         elif '--sd3' in prompt:
-            from classes.stabilityai.api import StabilityAI
+            from discord_tron_master.classes.stabilityai.api import StabilityAI
             stabilityai = StabilityAI()
             prompt = prompt.replace('--sd3', '').strip()
             try:
