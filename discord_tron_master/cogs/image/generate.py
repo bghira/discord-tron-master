@@ -1,5 +1,6 @@
 from discord.ext import commands
 from asyncio import Lock
+from io import BytesIO
 import discord as discord_lib
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.app_config import AppConfig
@@ -100,7 +101,7 @@ class Generate(commands.Cog):
             prompt = prompt.replace('--sd3', '').strip()
             try:
                 image = stabilityai.generate_image(prompt)
-                await ctx.channel.send(file=discord_lib.File(image, "image.png"))
+                await ctx.channel.send(file=discord_lib.File(BytesIO(image), "image.png"))
             except Exception as e:
                 await ctx.send(f"Error generating image: {e}")
         elif prompt == 'unconditional' or prompt == 'blank':
