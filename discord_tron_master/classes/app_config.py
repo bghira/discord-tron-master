@@ -163,6 +163,10 @@ class AppConfig:
         self.reload_config()
         return self.config.get("discord", {}).get("api_key", None)
 
+    def get_stabilityai_api_key(self):
+        self.reload_config()
+        return self.config.get("stabilityai", {}).get("api_key", None)
+
     def get_local_model_path(self):
         self.reload_config()
         return self.config.get("huggingface", {}).get("local_model_path", "/root/.cache/huggingface/hub")
