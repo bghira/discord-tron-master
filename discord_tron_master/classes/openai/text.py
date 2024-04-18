@@ -3,9 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 from discord_tron_master.classes.app_config import AppConfig
 import logging
 config = AppConfig()
-
-        logger.setLevel(config.get_log_level())
-logger = logger.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 import openai
 openai.api_key = config.get_openai_api_key()
