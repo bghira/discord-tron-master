@@ -183,7 +183,7 @@ class GPT:
         # Create Image object
         from PIL import Image
         from io import BytesIO
-        return Image.open(BytesIO(content))
+        return Image.open(BytesIO(content)), content
         
 
     async def dalle_image_generate(self, prompt, user_config: dict):
@@ -207,13 +207,13 @@ class GPT:
             url = response.data[0].url
             logger.debug(f"Retrieving URL: {url}")
             # retrieve URL, return Image
-            image_obj = await self.retrieve_image(url)
+            image_obj, image_data = await self.retrieve_image(url)
             logger.debug(f"Result: {image_obj}")
             if not hasattr(image_obj, "size"):
                 logger.error(f"Image object does not have a size attribute. Returning None.")
                 logger.debug(f"Response from OpenAI: {response}")
                 return None
-            return image_obj
+            return image_data
         except Exception as e:
             logger.setLevel(config.get_log_level())
             logger.error(f"Error generating image: {e}")
