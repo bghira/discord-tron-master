@@ -106,8 +106,8 @@ class Generate(commands.Cog):
             draw.text((10, 10), "DALL-E", (255, 255, 255))
             width, height = dalle_image.size
             new_image = Image.new('RGB', (width * 2, height))
-            new_image.paste(dalle_image, (0, 0))
-            new_image.paste(sd3_image, (width, 0))
+            new_image.paste(sd3_image, (0, 0))
+            new_image.paste(dalle_image, (width, 0))
             # Save the new image to a BytesIO object.
             output = BytesIO()
             new_image.save(output, format="PNG")
