@@ -200,7 +200,11 @@ class GPT:
             logger.setLevel(config.get_log_level())
             if "error" in response:
                 logger.error(f"Error generating image: {response}")
-                raise Exception(f'{response["error"]["code"]}: {response["error"]["message"]}')
+                # make a black image to return
+                from PIL import Image
+                image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
+                return image.tobytes()
+
             else:
                 logger.debug(f"Received response from OpenAI image endpoint: {response}")
 
