@@ -16,8 +16,11 @@ class StabilityAI:
     
     def decimal_to_ratio(self, decimal: float):
         """Convert the decimal aspect_ratio representation to the nearest supported aspect."""
-        # First, convert the allowed list to decimal:
-        allowed_ratios = [eval(ratio) for ratio in self.allowed_resolutions]
+        # First, convert the allowed list from x:y to decimal:
+        allowed_ratios = []
+        for ratio in self.allowed_resolutions:
+            x, y = map(int, ratio.split(":"))
+            allowed_ratios.append(x / y)
         # Next, find the closest ratio to the decimal:
         closest_ratio = min(allowed_ratios, key=lambda x: abs(x - decimal))
         # Finally, convert the ratio back to string:
