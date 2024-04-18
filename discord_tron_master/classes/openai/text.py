@@ -188,10 +188,14 @@ class GPT:
             if "error" in response:
                 logging.error(f"Error generating image: {response}")
                 raise Exception(f'{response["error"]["code"]}: {response["error"]["message"]}')
+            else:
+                logging.debug(f"Received response from OpenAI image endpoint: {response}")
 
             url = response.data[0].url
+            logging.debug(f"Retrieving URL: {url}")
             # retrieve URL, return Image
             image_obj = await self.retrieve_image(url)
+            logging.debug(f"Result: {image_obj}")
             if not hasattr(image_obj, "size"):
                 logging.error(f"Image object does not have a size attribute. Returning None.")
                 logging.debug(f"Response from OpenAI: {response}")
