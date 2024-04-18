@@ -4,6 +4,9 @@ from discord_tron_master.classes.app_config import AppConfig
 import logging
 config = AppConfig()
 
+        logger.setLevel(config.get_log_level())
+logger = logger.getLogger(__name__)
+
 import openai
 openai.api_key = config.get_openai_api_key()
 
@@ -61,9 +64,10 @@ class GPT:
         system_role = f"{system_role}The subject must come first, with actions coming next, and then style attributes.\n"
         system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
         image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
-        logging.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
+        logger.setLevel(config.get_log_level())
+        logger.debug(f'OpenAI returned the following response to the prompt: {image_prompt_response}')
         # prompt_pieces = image_prompt_response.split(', ')
-        # logging.debug(f'Prompt pieces: {prompt_pieces}')
+        # logger.debug(f'Prompt pieces: {prompt_pieces}')
         # # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
         # prompt_output = "("
         # for index, prompt_piece in enumerate(prompt_pieces):
@@ -121,12 +125,15 @@ class GPT:
                 "height": int(heidht)
             }
         except Exception as e:
-            logging.error(f"Error parsing JSON from prediction: {prediction}")
+            logger.setLevel(config.get_log_level())
+            logger.error(f"Error parsing JSON from prediction: {prediction}")
             return ("1280x768", "ptx0/terminus-xl-gamma-training")
-        logging.debug(f'OpenAI returned the following response to the prompt: {model_name}')
+        logger.setLevel(config.get_log_level())
+        logger.debug(f'OpenAI returned the following response to the prompt: {model_name}')
         # Did it refuse?
         if "ptx0" not in model_name:
-            logging.warning(f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training.")
+            logger.setLevel(config.get_log_level())
+            logger.warning(f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training.")
             return ("1280x768", "ptx0/terminus-xl-gamma-training")
 
         return (resolution, model_name)
@@ -185,21 +192,23 @@ class GPT:
                 n=1,
             )
             # Possible error: {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Your prompt may contain text that is not allowed by our safety system.', 'param': None, 'type': 'invalid_request_error'}}
+            logger.setLevel(config.get_log_level())
             if "error" in response:
-                logging.error(f"Error generating image: {response}")
+                logger.error(f"Error generating image: {response}")
                 raise Exception(f'{response["error"]["code"]}: {response["error"]["message"]}')
             else:
-                logging.debug(f"Received response from OpenAI image endpoint: {response}")
+                logger.debug(f"Received response from OpenAI image endpoint: {response}")
 
             url = response.data[0].url
-            logging.debug(f"Retrieving URL: {url}")
+            logger.debug(f"Retrieving URL: {url}")
             # retrieve URL, return Image
             image_obj = await self.retrieve_image(url)
-            logging.debug(f"Result: {image_obj}")
+            logger.debug(f"Result: {image_obj}")
             if not hasattr(image_obj, "size"):
-                logging.error(f"Image object does not have a size attribute. Returning None.")
-                logging.debug(f"Response from OpenAI: {response}")
+                logger.error(f"Image object does not have a size attribute. Returning None.")
+                logger.debug(f"Response from OpenAI: {response}")
                 return None
         except Exception as e:
-            logging.error(f"Error generating image: {e}")
+            logger.setLevel(config.get_log_level())
+            logger.error(f"Error generating image: {e}")
             return None
