@@ -184,6 +184,11 @@ class GPT:
                 quality="standard",
                 n=1,
             )
+            # Possible error: {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Your prompt may contain text that is not allowed by our safety system.', 'param': None, 'type': 'invalid_request_error'}}
+            if "error" in response:
+                logging.error(f"Error generating image: {response}")
+                raise Exception(f'{response["error"]["code"]}: {response["error"]["message"]}')
+
             url = response.data[0].url
             # retrieve URL, return Image
             image_obj = await self.retrieve_image(url)
