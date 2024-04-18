@@ -25,8 +25,9 @@ class StabilityAI:
         logging.info(f"Allowed aspect ratios: {allowed_ratios}")
         # Next, find the closest ratio to the decimal:
         closest_ratio = min(allowed_ratios, key=lambda x: abs(x - decimal))
-        # Finally, convert the ratio back to string:
-        return f"{closest_ratio[0]}:{closest_ratio[1]}"
+        # Finally, convert the ratio from float back to string:
+        x, y = map(str, map(int, closest_ratio.as_integer_ratio()))
+        return f"{x}:{y}"
 
 
     def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str ="sd3"):
