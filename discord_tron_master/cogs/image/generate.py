@@ -81,6 +81,20 @@ class Generate(commands.Cog):
         for i in range(0, int(count)):
             await self.generate(ctx, prompt=prompt)
 
+    @commands.command(name="sd3", help="Generates an image based on the given prompt using Stable Diffusion 3.")
+    async def generate_sd3(self, ctx, *, prompt):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
+            return
+        from discord_tron_master.classes.stabilityai.api import StabilityAI
+        stabilityai = StabilityAI()
+        prompt = prompt.replace('--sd3', '').strip()
+        user_config = self.config.get_user_config(user_id=ctx.author.id)
+        try:
+            image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
+            await ctx.channel.send(file=discord_lib.File(BytesIO(image), "image.png"))
+        except Exception as e:
+            await ctx.send(f"Error generating image: {e}")
+
     @commands.command(name="generate", help="Generates an image based on the given prompt.")
     async def generate(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
