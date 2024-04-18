@@ -99,7 +99,7 @@ class Generate(commands.Cog):
             prompt = prompt.replace('--sd3', '').strip()
             try:
                 image = stabilityai.generate_image(prompt)
-                await ctx.send(file=discord.File(image, "image.png"))
+                await ctx.channel.send(file=discord.File(image, "image.png"))
             except Exception as e:
                 await ctx.send(f"Error generating image: {e}")
         elif prompt == 'unconditional' or prompt == 'blank':
