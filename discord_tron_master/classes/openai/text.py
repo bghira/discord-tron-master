@@ -221,4 +221,6 @@ class GPT:
         except Exception as e:
             logger.setLevel(config.get_log_level())
             logger.error(f"Error generating image: {e}")
-            return None
+            from PIL import Image
+            image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
+            return image.tobytes()
