@@ -30,7 +30,20 @@ class Settings(commands.Cog):
             return
         guild_config.set_guild_banned_channel(ctx.guild.id, ctx.channel.id)
         await ctx.send(f"This channel has been banned from generating.")
-        
+
+    @commands.command(name="allow", help="Allow a channel to generate.", hidden=True)
+    async def disallow_channel(self, ctx):
+        is_channel_banned = guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id)
+        if not is_channel_banned:
+            await ctx.send(f"This channel is already allowed to generate.")
+            return
+        # Are they admin?
+        if not await self.is_admin(ctx):
+            await ctx.send(f"You are not an admin.")
+            return
+        guild_config.remove_guild_banned_channel(ctx.guild.id, ctx.channel.id)
+        await ctx.send(f"This channel has been allowed to generate.")
+
     async def is_admin(self, ctx):
         # Was the user in the "Image Admin" group?
         user_roles = ctx.author.roles

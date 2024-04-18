@@ -104,6 +104,14 @@ class Guilds:
         banned_channels.append(channel_id)
         return self.set_guild_setting(guild_id, "banned_channels", banned_channels)
 
+    def remove_guild_banned_channel(self, guild_id, channel_id):
+        """
+        Allow a channel to generate images.
+        """
+        banned_channels = self.get_guild_setting(guild_id, "banned_channels", [])
+        banned_channels.remove(channel_id)
+        return self.set_guild_setting(guild_id, "banned_channels", banned_channels)
+
     def is_guild_home_defined(self):
         if self.get_config_value('home_guild') is None:
             return False
