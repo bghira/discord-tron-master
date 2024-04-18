@@ -199,7 +199,7 @@ class GPT:
             # Possible error: {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Your prompt may contain text that is not allowed by our safety system.', 'param': None, 'type': 'invalid_request_error'}}
             logger.setLevel(config.get_log_level())
             if "error" in response:
-                logger.error(f"Error generating image: {response}")
+                logger.error(f"API returned error result, returning black image")
                 # make a black image to return
                 from PIL import Image
                 image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
@@ -221,7 +221,7 @@ class GPT:
             return image_data
         except Exception as e:
             logger.setLevel(config.get_log_level())
-            logger.error(f"Error generating image: {e}")
+            logger.error(f"Exception while generating image, generating black image for result: {e}")
             from PIL import Image
             image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
             return image.tobytes()
