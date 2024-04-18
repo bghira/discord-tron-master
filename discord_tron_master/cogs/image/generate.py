@@ -109,9 +109,9 @@ class Generate(commands.Cog):
                 font = ImageFont.load_default(size=40)
             sd3_image = Image.open(sd3_image)
             draw = ImageDraw.Draw(sd3_image)
-            draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_width=4)
+            draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             draw = ImageDraw.Draw(dalle_image)
-            draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_width=4)
+            draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             width, height = dalle_image.size
             new_image = Image.new('RGB', (width * 2, height))
             new_image.paste(sd3_image, (0, 0))
