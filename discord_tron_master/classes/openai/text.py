@@ -177,7 +177,14 @@ class GPT:
     async def retrieve_image(self, url: str):
         import requests
         response = requests.get(url)
-        return response.content
+        # Response: 024-04-18 16:00:15,447 [DEBUG] (discord_tron_master.classes.openai.text) Result: b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x04\x00\x00\x00\x04\x00\x08\x02\x00\x00\x00\xf0\x7f\xbc\xd4\x00\x009\xe7caBX\x00\x009\xe7jumb\x00\x00\x00\x1ejumdc2pa\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa\x00\x00\x009\xc1jumb\x00\x00\x00Gjumdc2ma\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03urn:uuid:01811e43-50a9-4e0b-b5bd-8f6364bc43e4\x00\x00\x00\x01\xa1jumb\x00\x00\x00)jumdc2as\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.assertions\x00\x00\x00\x00\xc5jumb\x00\x00\x00&jumdcbor\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.actions\x00\x00\x00\x00\x97cbor\xa1gactio
+        content = response.content
+
+        # Create Image object
+        from PIL import Image
+        from io import BytesIO
+        return Image.open(BytesIO(content))
+        
 
     async def dalle_image_generate(self, prompt, user_config: dict):
         resolution = f"{user_config.get('width', 1024)}x{user_config.get('height', 1024)}"
