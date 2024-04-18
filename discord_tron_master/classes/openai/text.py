@@ -203,7 +203,7 @@ class GPT:
                 # make a black image to return
                 from PIL import Image
                 image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
-                return image.tobytes()
+                return image
 
             else:
                 logger.debug(f"Received response from OpenAI image endpoint: {response}")
@@ -224,4 +224,4 @@ class GPT:
             logger.error(f"Exception while generating image, generating black image for result: {e}")
             from PIL import Image
             image = Image.new("RGB", (user_config.get('width', 1024), user_config.get('height', 1024)), (0, 0, 0))
-            return image.tobytes()
+            return image

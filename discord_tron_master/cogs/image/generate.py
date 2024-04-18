@@ -92,11 +92,11 @@ class Generate(commands.Cog):
             user_config["resolution"] = {"width": 1024, "height": 1024}
             dalle_image = await GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
             sd3_image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
-            dalle_image = BytesIO(dalle_image)
-            sd3_image = BytesIO(sd3_image)
             # Create a new image with the two images side by side.
             from PIL import Image
-            dalle_image = Image.open(dalle_image)
+            if not hasattr(dalle_image, 'size'):
+                dalle_image = BytesIO(dalle_image)
+                dalle_image = Image.open(dalle_image)
             # Add "DALLE-3" and "Stable Diffusion 3" labels to upper left corner
             from PIL import ImageDraw, ImageFont
             try:
@@ -107,7 +107,9 @@ class Generate(commands.Cog):
             except IOError:
                 # Fallback to default font
                 font = ImageFont.load_default(size=40)
-            sd3_image = Image.open(sd3_image)
+            if not hasattr(sd3_image, 'size'):
+                sd3_image = BytesIO(sd3_image)
+                sd3_image = Image.open(sd3_image)
             draw = ImageDraw.Draw(sd3_image)
             draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             draw = ImageDraw.Draw(dalle_image)
