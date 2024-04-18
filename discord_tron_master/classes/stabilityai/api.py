@@ -41,12 +41,13 @@ class StabilityAI:
         arguments = {
             "prompt": f"{prompt} {user_config.get('positive_prompt', '')}",
             "output_format": output_format,
-            "seed": seed,
             "aspect_ratio": aspect_ratio,
             "model": model
         }
         if model != "sd3-turbo":
             arguments["negative_prompt"] = user_config.get("negative_prompt", "")
+        if seed != 0:
+            arguments["seed"] = seed
         response = requests.post(
             self.base_url,
             headers=self.headers,
