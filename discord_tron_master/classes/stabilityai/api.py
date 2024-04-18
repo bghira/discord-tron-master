@@ -9,14 +9,22 @@ class StabilityAI:
             "authorization": f"Bearer {self.api_key}",
             "accept": "image/*"
         }
-    def generate_image(self, prompt: str, output_format: str = "png"):
+    def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str ="sd3"):
+        res = user_config.get("resolution", {})
+        width, height = res.get("width", 1024), res.get("height", 1024)
+        aspect_ratio = round(width / height, 2)
+        seed = user_config.get("seed", 0)
         response = requests.post(
             self.base_url,
             headers=self.headers,
             files={"none": ''},
             data={
-                "prompt": prompt,
+                "prompt": f"{prompt} {user_config.get('positive_prompt', '')}",
+                "negative_prompt": user_config.get("negative_prompt", ""),
                 "output_format": output_format,
+                "seed": seed,
+                "aspect_ratio": aspect_ratio,
+                "model": model
             },
         )
         if response.status_code == 200:

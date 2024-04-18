@@ -92,15 +92,25 @@ class Generate(commands.Cog):
             prompts = prompt.split('\n')
             # Remove blank prompts
             prompts = [p for p in prompts if p != '']
-        elif '--sd3-turbo' in prompt:
-            # Not supported yet
-            await ctx.send("Sorry, `--sd3-turbo` is not supported yet.")
         elif '--sd3' in prompt:
             from discord_tron_master.classes.stabilityai.api import StabilityAI
             stabilityai = StabilityAI()
             prompt = prompt.replace('--sd3', '').strip()
+            user_config = self.config.get_user_config(user_id=ctx.author.id)
             try:
-                image = stabilityai.generate_image(prompt)
+                image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
+                await ctx.channel.send(file=discord_lib.File(BytesIO(image), "image.png"))
+            except Exception as e:
+                await ctx.send(f"Error generating image: {e}")
+        elif '--sd3-full' in prompt:
+            from discord_tron_master.classes.stabilityai.api import StabilityAI
+            stabilityai = StabilityAI()
+            prompt = prompt.replace('--sd3-full', '').strip()
+            # remove any other -- params
+            prompt = prompt.split('--')[0]
+            user_config = self.config.get_user_config(user_id=ctx.author.id)
+            try:
+                image = stabilityai.generate_image(prompt, user_config, model="sd3")
                 await ctx.channel.send(file=discord_lib.File(BytesIO(image), "image.png"))
             except Exception as e:
                 await ctx.send(f"Error generating image: {e}")
