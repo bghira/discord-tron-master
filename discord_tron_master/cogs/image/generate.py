@@ -90,6 +90,18 @@ class Generate(commands.Cog):
             prompts = prompt.split('\n')
             # Remove blank prompts
             prompts = [p for p in prompts if p != '']
+        elif '--sd3-turbo' in prompt:
+            # Not supported yet
+            await ctx.send("Sorry, `--sd3-turbo` is not supported yet.")
+        elif '--sd3' in prompt:
+            from classes.stabilityai.api import StabilityAI
+            stabilityai = StabilityAI()
+            prompt = prompt.replace('--sd3', '').strip()
+            try:
+                image = stabilityai.generate_image(prompt)
+                await ctx.send(file=discord.File(image, "image.png"))
+            except Exception as e:
+                await ctx.send(f"Error generating image: {e}")
         elif prompt == 'unconditional' or prompt == 'blank':
             prompts = ['']
         else:
