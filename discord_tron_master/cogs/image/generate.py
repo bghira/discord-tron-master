@@ -81,6 +81,41 @@ class Generate(commands.Cog):
         for i in range(0, int(count)):
             await self.generate(ctx, prompt=prompt)
 
+    @commands.command(name="sd3-compare-dalle", help="Generate an SD3 and DALLE3 image, side by side for comparison.")
+    async def generate_sd3_dalle_comparison(self, ctx, *, prompt):
+        if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
+            return
+        from discord_tron_master.classes.stabilityai.api import StabilityAI
+        stabilityai = StabilityAI()
+        user_config = self.config.get_user_config(user_id=ctx.author.id)
+        try:
+            user_config["resolution"] = {"width": 1024, "height": 1024}
+            dalle_image = await GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
+            sd3_image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
+            dalle_image = BytesIO(dalle_image)
+            sd3_image = BytesIO(sd3_image)
+            # Create a new image with the two images side by side.
+            from PIL import Image
+            dalle_image = Image.open(dalle_image)
+            # Add "DALLE-3" and "Stable Diffusion 3" labels to upper left corner
+            from PIL import ImageDraw
+            sd3_image = Image.open(sd3_image)
+            draw = ImageDraw.Draw(sd3_image)
+            draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255))
+            draw = ImageDraw.Draw(dalle_image)
+            draw.text((10, 10), "DALL-E", (255, 255, 255))
+            width, height = dalle_image.size
+            new_image = Image.new('RGB', (width * 2, height))
+            new_image.paste(dalle_image, (0, 0))
+            new_image.paste(sd3_image, (width, 0))
+            # Save the new image to a BytesIO object.
+            output = BytesIO()
+            new_image.save(output, format="PNG")
+            output.seek(0)
+            await ctx.channel.send(file=discord_lib.File(output, "comparison.png"))
+        except Exception as e:
+            await ctx.send(f"Error generating image: {e}")
+
     @commands.command(name="dalle", help="Generates an image based on the given prompt using DALL-E.")
     async def generate_dalle(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
