@@ -108,8 +108,13 @@ class Generate(commands.Cog):
                 # Fallback to default font
                 font = ImageFont.load_default(size=40)
             if not hasattr(sd3_image, 'size'):
-                sd3_image = BytesIO(sd3_image)
-                sd3_image = Image.open(sd3_image)
+                try:
+                    sd3_image = BytesIO(sd3_image)
+                    sd3_image = Image.open(sd3_image)
+                except:
+                    # make black image, we had an error.
+                    sd3_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
+
             draw = ImageDraw.Draw(sd3_image)
             draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             draw = ImageDraw.Draw(dalle_image)
