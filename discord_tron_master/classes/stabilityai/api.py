@@ -57,4 +57,5 @@ class StabilityAI:
         if response.status_code == 200:
             return response.content
         else:
-            raise Exception(str(response.json()))
+            # return black canvas
+            return requests.get("https://via.placeholder.com/1024x1024").content
