@@ -217,6 +217,7 @@ class GPT:
                 logger.error(f"Image object does not have a size attribute. Returning None.")
                 logger.debug(f"Response from OpenAI: {response}")
                 return None
+            logger.debug(f"Returning image_data from dalle")
             return image_data
         except Exception as e:
             logger.setLevel(config.get_log_level())
