@@ -62,6 +62,9 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         output = BytesIO()
         new_image.save(output, format="PNG")
         output.seek(0)
-        await ctx.channel.send(file=discord_lib.File(output, "comparison.png"))
+        if hasattr(ctx, 'channel'):
+            await ctx.channel.send(file=discord_lib.File(output, "comparison.png"))
+        else:
+            await ctx.send(file=discord_lib.File(output, "comparison.png"))
     except Exception as e:
         await ctx.send(f"Error generating image: {e}")
