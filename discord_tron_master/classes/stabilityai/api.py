@@ -33,7 +33,7 @@ class StabilityAI:
         # Get the string representation from the dictionary:
         return ratio_dict[closest_ratio]
 
-    def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str = "sd3"):
+    async def generate_image(self, prompt: str, user_config: dict, output_format: str = "png", model: str = "sd3"):
         res = user_config.get("resolution", {})
         width, height = res.get("width", 1024), res.get("height", 1024)
         aspect_ratio = self.decimal_to_ratio(round(width / height, 2))

@@ -1,5 +1,5 @@
 from typing import Dict
-import websocket, discord, base64, logging, time, hashlib, gzip, os
+import websocket, discord, base64, logging, time, hashlib, gzip, os, requests
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
@@ -28,6 +28,19 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
+                    if config.should_compare():
+                        # Use the comparison tool for DALLE3 and SD3.
+                        logging.debug(f"Using comparison tool for DALLE3 and SD3.")
+                        from discord_tron_master.cogs.image import generate_image
+                        await generate_image(
+                            channel,
+                            arguments["image_prompt"],
+                            extra_image={
+                                "label": arguments["image_model"],
+                                "data": requests.get(arguments["image_url_list"][0]).content
+                            }
+                        )
+
                     logging.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
                     for image_url in arguments["image_url_list"]:

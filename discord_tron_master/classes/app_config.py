@@ -117,6 +117,10 @@ class AppConfig:
             merged_settings["model"] = self.config.get("default_diffusion_model", "ptx0/terminus-xl-gamma-v2")
         return merged_settings
 
+    def should_compare(self):
+        self.reload_config()
+        return self.config.get("compare_images", False)
+
     @staticmethod
     def merge_dicts(dict1, dict2):
         result = dict1.copy()
