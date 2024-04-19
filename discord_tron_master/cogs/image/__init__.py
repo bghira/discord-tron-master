@@ -50,17 +50,18 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
         width, height = dalle_image.size
-        new_width_multiplier = 2
+        new_width = width * 2
         if extra_image is not None:
-            new_width_multiplier += 1
-        new_image = Image.new('RGB', (width * new_width_multiplier, height))
+            extra_image_position = (new_width, 0)
+            new_width = new_width + extra_image["data"].size[0]
+        new_image = Image.new('RGB', (new_width, height))
         new_image.paste(sd3_image, (0, 0))
         new_image.paste(dalle_image, (width, 0))
         # Do we have an extra_image?
         if extra_image is not None:
             draw.text((10, 10), extra_image["label"], (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             width, height = extra_image["data"].size
-            new_image.paste(extra_image["data"], (width * 2, 0))
+            new_image.paste(extra_image["data"], extra_image_position)
         # Save the new image to a BytesIO object.
         output = BytesIO()
         new_image.save(output, format="PNG")
