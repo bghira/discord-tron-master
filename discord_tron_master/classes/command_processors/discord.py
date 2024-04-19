@@ -219,8 +219,8 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                                     "data": Image.open(BytesIO(requests.get(arguments["image_url_list"][0]).content))
                                 }
                             )
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.error(f"Error comparing images: {e}")
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
