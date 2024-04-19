@@ -51,7 +51,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
         pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
         draw = ImageDraw.Draw(pollinations_image)
-        draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+        draw.text((10, 10), "Poolinations.ai", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
 
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
