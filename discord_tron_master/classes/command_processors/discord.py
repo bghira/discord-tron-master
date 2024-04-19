@@ -204,6 +204,18 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logging.debug(f"Incoming message to send, has an image url list.")
+                    if config.should_compare():
+                        # Use the comparison tool for DALLE3 and SD3.
+                        logging.debug(f"Using comparison tool for DALLE3 and SD3.")
+                        from discord_tron_master.cogs.image import generate_image
+                        await generate_image(
+                            channel,
+                            arguments["image_prompt"],
+                            extra_image={
+                                "label": arguments["image_model"],
+                                "data": requests.get(arguments["image_url_list"][0]).content
+                            }
+                        )
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
