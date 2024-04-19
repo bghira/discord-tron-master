@@ -6,7 +6,7 @@ from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
 
 
-async def generate_image(ctx, prompt, extra_image: dict = None):
+async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     """
     Generate images with DALLE-3 and Stable Diffusion 3 models, stitching them with an extra optional image.
 
@@ -18,7 +18,7 @@ async def generate_image(ctx, prompt, extra_image: dict = None):
     """
     stabilityai = StabilityAI()
     config = AppConfig()
-    user_config = config.get_user_config(user_id=ctx.author.id)
+    user_config = config.get_user_config(user_id=user_id if user_id is not None else ctx.author.id)
     try:
         user_config["resolution"] = {"width": 1024, "height": 1024}
         dalle_image = await GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
