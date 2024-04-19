@@ -214,7 +214,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                             await generate_image(
                                 channel,
                                 arguments["image_prompt"],
-                                user_id=arguments["mention"],
+                                user_id=arguments["user_id"],
                                 extra_image={
                                     "label": arguments["image_model"],
                                     "data": Image.open(BytesIO(requests.get(arguments["image_url_list"][0]).content))
