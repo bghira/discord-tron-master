@@ -216,7 +216,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                                 arguments["image_prompt"],
                                 extra_image={
                                     "label": arguments["image_model"],
-                                    "data": requests.get(arguments["image_url_list"][0]).content
+                                    "data": Image.open(BytesIO(requests.get(arguments["image_url_list"][0]).content))
                                 }
                             )
                         except:
