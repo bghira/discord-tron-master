@@ -1,5 +1,6 @@
 from io import BytesIO
 import discord as discord_lib
+import requests
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
@@ -45,8 +46,13 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
                 # make black image, we had an error.
                 sd3_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
 
-        draw = ImageDraw.Draw(sd3_image)
+        # draw = ImageDraw.Draw(sd3_image)
+        # draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+        # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
+        pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
+        draw = ImageDraw.Draw(pollinations_image)
         draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
         width, height = dalle_image.size
@@ -56,7 +62,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
             extra_image_position = (new_width, extra_image_vertical_position)
             new_width = new_width + extra_image["data"].size[0]
         new_image = Image.new('RGB', (new_width, height))
-        new_image.paste(sd3_image, (0, 0))
+        new_image.paste(pollinations_image, (0, 0))
         new_image.paste(dalle_image, (width, 0))
         # Do we have an extra_image?
         if extra_image is not None:
