@@ -11,6 +11,8 @@ from scipy.io.wavfile import read as read_wav
 BARK_SAMPLE_RATE = 24_000
 web_root = config.get_web_root()
 url_base = config.get_url_base()
+logger = logging.getLogger(__name__)
+logger.setLevel(config.get_log_level())
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
@@ -30,7 +32,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["image_url_list"] is not None:
                     if config.should_compare():
                         # Use the comparison tool for DALLE3 and SD3.
-                        logging.debug(f"Using comparison tool for DALLE3 and SD3.")
+                        logger.debug(f"Using comparison tool for DALLE3 and SD3.")
                         from discord_tron_master.cogs.image import generate_image
                         await generate_image(
                             channel,
@@ -41,25 +43,25 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                             }
                         )
 
-                    logging.debug(f"Incoming message to send, has an image url list.")
+                    logger.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
                     for image_url in arguments["image_url_list"]:
-                        logging.debug(f"Adding {image_url} to embed")
+                        logger.debug(f"Adding {image_url} to embed")
                         embed = discord.Embed(url="http://tripleback.net")
                         embed.set_image(url=image_url)
                         embeds.append(embed)
                     wants_variations = len(arguments["image_url_list"])
                 else:
-                    logging.debug(f"Incoming message to send, has zero image url list.")
+                    logger.debug(f"Incoming message to send, has zero image url list.")
             if "audio_url" in arguments:
                 if arguments["audio_url"] is not None:
-                    logging.debug(f"Incoming message to send, has an audio url.")
+                    logger.debug(f"Incoming message to send, has an audio url.")
                     arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
                 else:
-                    logging.debug(f"Incoming message to send, has zero audio url.")
+                    logger.debug(f"Incoming message to send, has zero audio url.")
             if "audio_data" in arguments:
                 if arguments["audio_data"] is not None:
-                    logging.debug(f"Incoming message had audio data. Embedding as a file.")
+                    logger.debug(f"Incoming message had audio data. Embedding as a file.")
                     file=await get_audio_file(arguments["audio_data"])
             message = await channel.send(content=arguments["message"], file=file, embeds=embeds)
             # List of number emojis
@@ -129,8 +131,8 @@ async def delete_previous_errors(command_processor, arguments: Dict, data: Dict,
     return {"success": True, "result": "Message deleted."}
 
 async def edit_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
-    logging.debug(f"Received command data: {data}")
-    logging.debug(f"Received command arguments: {arguments}")
+    logger.debug(f"Received command data: {data}")
+    logger.debug(f"Received command arguments: {arguments}")
     if "message" not in arguments:
         raise Exception("Missing message argument.")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
@@ -170,25 +172,25 @@ async def send_files(command_processor, arguments: Dict, data: Dict, websocket: 
     return {"success": True, "result": "Files sent."}
 
 async def create_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
-    logging.debug(f"Entering create_thread: {arguments} {data} {websocket} {command_processor}")
+    logger.debug(f"Entering create_thread: {arguments} {data} {websocket} {command_processor}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
-    logging.debug(f"Found channel? {channel}")
+    logger.debug(f"Found channel? {channel}")
     wants_variations = 0
     if channel is not None:
         try:
             # Maybe channel is already a thread.
             if isinstance(channel, discord.Thread):
-                logging.debug(f"Channel is already a thread. Using it.")
+                logger.debug(f"Channel is already a thread. Using it.")
                 thread = channel
             elif isinstance(channel, discord.TextChannel):
-                logging.debug(f"Channel is a text channel. Creating thread.")
+                logger.debug(f"Channel is a text channel. Creating thread.")
                 thread = await channel.create_thread(name=arguments["name"])
             else:
                 raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
             embed = None
             embeds = None
             if "image" in arguments:
-                logging.debug(f"Found image inside message")
+                logger.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
                 pnginfo = PngImagePlugin()
                 metadata = arguments["metadata"]
@@ -197,37 +199,40 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 embed = await get_image_embed(arguments["image"], pnginfo=pnginfo)
                 wants_variations = 1
             if "image_url" in arguments:
-                logging.debug(f"Found image URL inside arguments: {arguments['image_url']}")
+                logger.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
                 embed.set_image(url=arguments["image_url"])
                 wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
-                    logging.debug(f"Incoming message to send, has an image url list.")
+                    logger.debug(f"Incoming message to send, has an image url list.")
                     if config.should_compare():
                         # Use the comparison tool for DALLE3 and SD3.
-                        logging.debug(f"Using comparison tool for DALLE3 and SD3.")
+                        logger.debug(f"Using comparison tool for DALLE3 and SD3, arguments: {arguments}")
                         from discord_tron_master.cogs.image import generate_image
-                        await generate_image(
-                            channel,
-                            arguments["image_prompt"],
-                            extra_image={
-                                "label": arguments["image_model"],
-                                "data": requests.get(arguments["image_url_list"][0]).content
-                            }
-                        )
+                        try:
+                            await generate_image(
+                                channel,
+                                arguments["image_prompt"],
+                                extra_image={
+                                    "label": arguments["image_model"],
+                                    "data": requests.get(arguments["image_url_list"][0]).content
+                                }
+                            )
+                        except:
+                            pass
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
-                        logging.debug(f"Adding {image_url} to embed")
+                        logger.debug(f"Adding {image_url} to embed")
                         new_embed = discord.Embed(url="http://tripleback.net")
                         new_embed.set_image(url=image_url)
                         embeds.append(new_embed)
                 else:
-                    logging.debug(f"Incoming message to send, has zero image url list.")
-            logging.debug(f"Sending message to thread: {arguments['message']}")
+                    logger.debug(f"Incoming message to send, has zero image url list.")
+            logger.debug(f"Sending message to thread: {arguments['message']}")
             if "mention" in arguments:
-                logging.debug(f"Mentioning user: {arguments['mention']}")
+                logger.debug(f"Mentioning user: {arguments['mention']}")
                 arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
             message = await thread.send(content=arguments["message"], embeds=embeds)
 
@@ -248,7 +253,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
-    logging.debug(f"Exiting create_thread")
+    logger.debug(f"Exiting create_thread")
     return {"success": True, "result": "Thread created."}
 
 async def delete_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -276,7 +281,7 @@ async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True)
     buffer.seek(0)
     image = Image.open(buffer)
     if pnginfo is not None:
-        logging.debug(f'Saving with pnginfo: {pnginfo}')
+        logger.debug(f'Saving with pnginfo: {pnginfo}')
         image.save(f"{web_root}/{filename}", format="PNG", pnginfo=pnginfo)
     else:
         image.save(f"{web_root}/{filename}")
