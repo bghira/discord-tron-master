@@ -52,7 +52,8 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         width, height = dalle_image.size
         new_width = width * 2
         if extra_image is not None:
-            extra_image_position = (new_width, 0)
+            extra_image_vertical_position = height - extra_image["data"].size[1]
+            extra_image_position = (new_width, extra_image_vertical_position)
             new_width = new_width + extra_image["data"].size[0]
         new_image = Image.new('RGB', (new_width, height))
         new_image.paste(sd3_image, (0, 0))
