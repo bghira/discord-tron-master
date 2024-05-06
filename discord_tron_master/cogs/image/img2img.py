@@ -59,6 +59,9 @@ class Img2img(commands.Cog):
         async for msg in message.channel.history(limit=100):
             if search_identifier.group(0) in msg.content:
                 logging.info(f"Found message with search identifier: {msg.content}")
+                # Is it the first message? if so, don't delete.
+                if msg.id == message.id:
+                    continue
                 await msg.delete()
 
 
