@@ -44,6 +44,7 @@ DEFAULT_USER_CONFIG = {
     "df_controlnet_upscaler": True,
     "df_controlnet_strength": 1.0,
     "df_esrgan_upscaler": False,
+    "df_stage3_strength": 1.0,
     "refiner_guidance": 7.5,
     "refiner_strength": 0.3,
     "aesthetic_score": 5.0,
