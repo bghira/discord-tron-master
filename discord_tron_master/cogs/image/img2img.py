@@ -34,10 +34,10 @@ class Img2img(commands.Cog):
         self.config.reload_config()
 
         # Ignore bot messages
-        if 'SimpleTuner has launched. Hold onto your butts!' not in message and (message.author == self.bot.user or message.author.bot):
+        if 'SimpleTuner has launched. Hold onto your butts!' not in message.content and (message.author == self.bot.user or message.author.bot):
             logging.debug("Ignoring message from this or another bot.")
             return
-        elif 'SimpleTuner has launched. Hold onto your butts!' in message and message.author.bot:
+        elif 'SimpleTuner has launched. Hold onto your butts!' in message.content and message.author.bot:
             # An application has posted a ST update. Let's remove previous updates and return.
             self._clear_previous_simpletuner_messages(message)
 
