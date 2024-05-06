@@ -57,7 +57,7 @@ class DiscordBot:
             for root, _, files in os.walk(cogs_path):
                 logging.debug("Found cogs: " + str(files))
                 for file in files:
-                    if file.endswith(".py") and not file.beginswith("__"):
+                    if file.endswith(".py") and not file.startswith("__"):
                         cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
                         try:
                             import importlib
