@@ -55,6 +55,11 @@ class Img2img(commands.Cog):
         logging.info(f"Running regex identifier search")
         search_identifier = re.search(r"`.*`", message.content)
         logging.info(f"Search identifier: {search_identifier}")
+        # Now, let's search for messages that contain the search identifier in the message channel.
+        async for msg in message.channel.history(limit=100):
+            if search_identifier.group(0) in msg.content:
+                logging.info(f"Found message with search identifier: {msg.content}")
+                await msg.delete()
 
 
     async def _handle_thread_message(self, message):
