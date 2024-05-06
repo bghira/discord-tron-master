@@ -22,6 +22,7 @@ discord_wrapper = DiscordBot.get_instance()
 from discord_tron_master.classes.openai.text import GPT
 
 
+
 # Commands used for Stable Diffusion image gen.
 class Img2img(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -33,14 +34,26 @@ class Img2img(commands.Cog):
         self.config.reload_config()
 
         # Ignore bot messages
-        if message.author == self.bot.user or message.author.bot:   
+        if 'SimpleTuner has launched. Hold onto your butts!' not in message and (message.author == self.bot.user or message.author.bot):
             logging.debug("Ignoring message from this or another bot.")
+            return
+        elif 'SimpleTuner has launched. Hold onto your butts!' in message and message.author.bot:
+            # An application has posted a ST update. Let's remove previous updates and return.
+            self._clear_previous_simpletuner_messages(message)
+
             return
 
         if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
             await self._handle_thread_message(message)
         elif self.bot.user in message.mentions:
             await self._handle_mentioned_message(message)
+
+    async def _clear_previous_simpletuner_messages(self, message):
+        # Look for the contents inside the `.*` at the beginning of the string. this is the search identifier.
+        import re
+        search_identifier = re.search(r"`.*`", message.content)
+        logging.debug(f"Search identifier: {search_identifier}")
+
 
     async def _handle_thread_message(self, message):
         if message.content.startswith("!") or message.content.startswith("+"):
