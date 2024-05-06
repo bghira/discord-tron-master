@@ -52,10 +52,10 @@ class DiscordBot:
 
     async def load_cogs(self, cogs_path="discord_tron_master/cogs"):
         import logging
-        logging.debug("Loading cogs! Path: " + cogs_path)
+        logging.info("Loading cogs! Path: " + cogs_path)
         try:
             for root, _, files in os.walk(cogs_path):
-                logging.debug("Found cogs: " + str(files))
+                logging.info("Found cogs: " + str(files))
                 for file in files:
                     if file.endswith(".py") and not file.startswith("__"):
                         cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
@@ -64,7 +64,7 @@ class DiscordBot:
                             cog_module = importlib.import_module(cog_path)
                             cog_class_name = getattr(cog_module, file[:-3].capitalize())
                             await self.bot.add_cog(cog_class_name(self.bot))
-                            logging.debug(f"Loaded cog: {cog_path}")
+                            logging.info(f"Loaded cog: {cog_path}")
                         except Exception as e:
                             logging.error(f"Failed to load cog: {cog_path}")
                             logging.error(e)
