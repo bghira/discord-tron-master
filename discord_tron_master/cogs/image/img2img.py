@@ -39,7 +39,7 @@ class Img2img(commands.Cog):
             return
         elif 'SimpleTuner has launched. Hold onto your butts!' in message.content and message.author.bot:
             # An application has posted a ST update. Let's remove previous updates and return.
-            self._clear_previous_simpletuner_messages(message)
+            await self._clear_previous_simpletuner_messages(message)
 
             return
 
