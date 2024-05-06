@@ -39,6 +39,7 @@ class Img2img(commands.Cog):
             return
         elif 'SimpleTuner has launched. Hold onto your butts!' in message.content and message.author.bot:
             # An application has posted a ST update. Let's remove previous updates and return.
+            logging.debug(f"Found a SimpleTuner update message from {message.author}. Removing previous messages.")
             await self._clear_previous_simpletuner_messages(message)
 
             return
@@ -51,6 +52,7 @@ class Img2img(commands.Cog):
     async def _clear_previous_simpletuner_messages(self, message):
         # Look for the contents inside the `.*` at the beginning of the string. this is the search identifier.
         import re
+        logging.debug(f"Running regex identifier search")
         search_identifier = re.search(r"`.*`", message.content)
         logging.debug(f"Search identifier: {search_identifier}")
 
