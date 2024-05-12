@@ -6,6 +6,25 @@ from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
 
+def generate_lumina_image(prompt: str):
+    from gradio_client import Client
+
+    client_url = "http://106.14.2.150:10022/"
+    client = Client(client_url)
+    result = client.predict(
+            param_0=prompt,
+            param_1="1024x1024",
+            param_2=20,
+            param_3=4,
+            param_4="euler",
+            param_5=6,
+            param_6=1,
+            param_7=True,
+            param_8=True,
+            api_name="/on_submit"
+    )
+    split_pieces = result.split('/')
+    return f"{client_url}file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
 async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     """
@@ -49,9 +68,10 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         # draw = ImageDraw.Draw(sd3_image)
         # draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
-        pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
+        # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
+        pollinations_image = Image.open(BytesIO(requests.get(generate_lumina_image(prompt)).content))
         draw = ImageDraw.Draw(pollinations_image)
-        draw.text((10, 10), "Poolinations.ai", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+        draw.text((10, 10), "LuminaT2I 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
 
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
