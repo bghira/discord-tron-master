@@ -6,10 +6,12 @@ from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
 
-def generate_lumina_image(prompt: str):
+def generate_lumina_image(prompt: str, use_5b: bool = False):
     from gradio_client import Client
 
     client_url = "http://106.14.2.150:10022/"
+    if use_5b:
+        client_url = "http://106.14.2.150:10020/"
     client = Client(client_url)
     result = client.predict(
             param_0=prompt,
@@ -70,6 +72,10 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
         # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
         pollinations_image = Image.open(BytesIO(requests.get(generate_lumina_image(prompt)).content))
+        extra_image = {
+            "label": "LuminaT2I 5B",
+            "data": Image.open(BytesIO(requests.get(generate_lumina_image(prompt, use_5b=True)).content))
+        }
         draw = ImageDraw.Draw(pollinations_image)
         draw.text((10, 10), "LuminaT2I 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
 
