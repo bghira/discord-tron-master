@@ -17,9 +17,6 @@ class GPT:
         self.discord_bot_role = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
-        self.client = OpenAI(
-            api_key=config.get_openai_api_key()
-        )
     
     def set_values(self, **kwargs):
         for key, value in kwargs.items():
@@ -149,7 +146,11 @@ class GPT:
         return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=4096)
 
     def send_request(self, message_log):
-        return self.client.chat.completions.create(
+        client = OpenAI(
+            api_key=config.get_openai_api_key()
+        )
+
+        return client.chat.completions.create(
             model="gpt-4o",
             messages=message_log,
             max_tokens=self.max_tokens,
