@@ -82,7 +82,7 @@ class Generate(commands.Cog):
         for i in range(0, int(count)):
             await self.generate(ctx, prompt=prompt)
 
-    @commands.command(name="sd3-compare-dalle", help="Generate an SD3 and DALLE3 image, side by side for comparison.")
+    @commands.command(name="compare", help="Generate an SD3 and DALLE3 image, side by side for comparison.")
     async def generate_sd3_dalle_comparison(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
