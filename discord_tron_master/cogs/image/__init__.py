@@ -22,7 +22,7 @@ def generate_cascade_via_hub(prompt: str, user_id: int = None):
     client = Client("multimodalart/stable-cascade")
     result = client.predict(
             prompt,	# str  in 'Prompt' Textbox component
-            AppConfig.get_user_config(user_id=user_id).get('negative_prompt', 'blurry, cropped, ugly'),	# str  in 'Negative prompt' Textbox component
+            'blurry, cropped, ugly',	# str  in 'Negative prompt' Textbox component
             0,	# float (numeric value between 0 and 2147483647) in 'Seed' Slider component
             1024,	# float (numeric value between 1024 and 1536) in 'Width' Slider component
             1024,	# float (numeric value between 1024 and 1536) in 'Height' Slider component
