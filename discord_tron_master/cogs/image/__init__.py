@@ -1,6 +1,6 @@
 from io import BytesIO
 import discord as discord_lib
-import requests
+import requests, logging
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
@@ -15,6 +15,26 @@ def retrieve_vlm_caption(image_url) -> str:
             fn_index=1
     )
     return str(result)
+
+def generate_cascade_via_hub(prompt: str, user_id: int = None):
+    from gradio_client import Client
+
+    client = Client("multimodalart/stable-cascade")
+    result = client.predict(
+            prompt,	# str  in 'Prompt' Textbox component
+            AppConfig.get_user_config(user_id=user_id).get('negative_prompt', 'blurry, cropped, ugly'),	# str  in 'Negative prompt' Textbox component
+            0,	# float (numeric value between 0 and 2147483647) in 'Seed' Slider component
+            1024,	# float (numeric value between 1024 and 1536) in 'Width' Slider component
+            1024,	# float (numeric value between 1024 and 1536) in 'Height' Slider component
+            10,	# float (numeric value between 10 and 30) in 'Prior Inference Steps' Slider component
+            0,	# float (numeric value between 0 and 20) in 'Prior Guidance Scale' Slider component
+            4,	# float (numeric value between 4 and 12) in 'Decoder Inference Steps' Slider component
+            0,	# float (numeric value between 0 and 0) in 'Decoder Guidance Scale' Slider component
+            1,	# float (numeric value between 1 and 2) in 'Number of Images' Slider component
+            api_name="/run"
+    )
+    split_pieces = result[0]['image'].split('/')
+    return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
 def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
     from gradio_client import Client
@@ -101,7 +121,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
         # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
         try:
-            pollinations_image = Image.open(BytesIO(requests.get(generate_lumina_image(prompt)).content))
+            pollinations_image = Image.open(BytesIO(requests.get(generate_cascade_via_hub(prompt, user_id=user_id)).content))
         except:
             pollinations_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
         try:
@@ -112,7 +132,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         except:
             extra_image = None
         draw = ImageDraw.Draw(pollinations_image)
-        draw.text((10, 10), "LuminaT2I 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+        draw.text((10, 10), "Stable Cascade", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
 
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
