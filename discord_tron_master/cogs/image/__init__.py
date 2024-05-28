@@ -33,7 +33,7 @@ def generate_cascade_via_hub(prompt: str, user_id: int = None):
             1,	# float (numeric value between 1 and 2) in 'Number of Images' Slider component
             api_name="/run"
     )
-    split_pieces = result[0]['image'].split('/')
+    split_pieces = result.split('/')
     return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
 def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
