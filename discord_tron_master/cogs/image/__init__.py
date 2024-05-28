@@ -32,8 +32,8 @@ def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int
             negative_prompt=user_config.get("negative_prompt", "underexposed, blurry, ugly, washed-out"),
             api_name="/predict"
     )
-    split_pieces = result.split('/')
-    return f"https://ptx0-ptx0-terminus-xl-velocity-v2.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
+    split_pieces = result[0]['image'].split('/')
+    return f"https://ptx0-ptx0-terminus-xl-velocity-v2.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.webp"
 
 def generate_lumina_image(prompt: str, use_5b: bool = False):
     from gradio_client import Client
