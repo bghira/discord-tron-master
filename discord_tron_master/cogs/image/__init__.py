@@ -6,6 +6,34 @@ from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
 
+def retrieve_vlm_caption(image_url) -> str:
+    from gradio_client import Client
+
+    client = Client("https://tri-ml-vlm-demo.hf.space/--replicas/fr18a/")
+    result = client.predict(
+            "Crop",	# str  in 'Preprocess for non-square image' Radio component
+            fn_index=1
+    )
+    return str(result)
+
+def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
+    from gradio_client import Client
+    available_models = {
+        "velocity": "ptx0/ptx0-terminus-xl-velocity-v2",
+        "gamma": "ptx0/ptx0-terminus-xl-gamma-v2-1"
+    }
+    client = Client(available_models[model])
+    user_config = AppConfig().get_user_config(user_id=user_id)
+    result = client.predict(
+            prompt=prompt,
+            guidance_scale=11.5,
+            guidance_rescale=0.7,
+            num_inference_steps=25,
+            negative_prompt=user_config.get("negative_prompt", "underexposed, blurry, ugly, washed-out"),
+            api_name="/predict"
+    )
+    print(result)
+
 def generate_lumina_image(prompt: str, use_5b: bool = False):
     from gradio_client import Client
 
@@ -77,8 +105,8 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
             pollinations_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
         try:
             extra_image = {
-                "label": "LuminaT2I 5B",
-                "data": Image.open(BytesIO(requests.get(generate_lumina_image(prompt, use_5b=True)).content))
+                "label": "Terminus XL Velocity V2 (WIP)",
+                "data": Image.open(BytesIO(requests.get(generate_terminus_via_hub(prompt, user_id=user_id)).content))
             }
         except:
             extra_image = None
