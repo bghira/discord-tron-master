@@ -14,6 +14,7 @@ def retrieve_vlm_caption(image_url) -> str:
             "Crop",	# str  in 'Preprocess for non-square image' Radio component
             fn_index=1
     )
+    client.close()
     return str(result)
 
 def generate_cascade_via_hub(prompt: str, user_id: int = None):
@@ -33,6 +34,8 @@ def generate_cascade_via_hub(prompt: str, user_id: int = None):
             1,	# float (numeric value between 1 and 2) in 'Number of Images' Slider component
             api_name="/run"
     )
+    # close the connection
+    client.close()
     split_pieces = result.split('/')
     return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
@@ -52,6 +55,7 @@ def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int
             negative_prompt=user_config.get("negative_prompt", "underexposed, blurry, ugly, washed-out"),
             api_name="/predict"
     )
+    client.close()
     split_pieces = result[0]['image'].split('/')
     return f"https://ptx0-ptx0-terminus-xl-velocity-v2.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.webp"
 
@@ -74,6 +78,7 @@ def generate_lumina_image(prompt: str, use_5b: bool = False):
             param_8=True,
             api_name="/on_submit"
     )
+    client.close()
     split_pieces = result.split('/')
     return f"{client_url}file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
