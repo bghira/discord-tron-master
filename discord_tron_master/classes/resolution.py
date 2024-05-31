@@ -49,6 +49,8 @@ class ResolutionHelper:
         {"width": 512, "height": 1856},
         {"width": 512, "height": 1920},
         {"width": 512, "height": 1984},
+        # Terminus resolutions - 1152x960, 896x1152 (in sdxl section above)
+        {"width": 1152, "height": 960},
     ]
 
     def is_valid_resolution(self, width, height):
