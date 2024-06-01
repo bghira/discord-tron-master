@@ -264,8 +264,9 @@ class Generate(commands.Cog):
             await ctx.send(
                 f"{ctx.author.mention} Search is not currently available at this time, try again later."
             )
+
     @commands.command(name='random', help='Search for random prompts. Returns up to 10 prompts, unless a number is provided.')
-    async def random_prompts(self, ctx, count: int = 10):
+    async def random_prompts(self, ctx, count: int = 10, raw: str = None):
         try:
             app = AppConfig.flask
             with app.app_context():
@@ -282,10 +283,16 @@ class Generate(commands.Cog):
                 found_string = "a prompt"
                 if len(discovered_prompts) > 1:
                     found_string = f"{len(discovered_prompts)} prompts"
-                output_string = f"{ctx.author.mention} I found {found_string} for you:"
+                if raw is None:
+                    output_string = f"{ctx.author.mention} I found {found_string} for you:"
+                else:
+                    output_string = ""
                 for prompt in discovered_prompts[:int(count)]:
-                    output_string = f"{output_string}\n- `{prompt[0]}`"
-                await ctx.send(output_string)
+                    if raw is not None:
+                        output_string = f"{output_string}\n{prompt[0]}"
+                    else:
+                        output_string = f"{output_string}\n- `{prompt[0]}`"
+                await DiscordBot.send_large_message(ctx=ctx, text=output_string)
         except Exception as e:
             logger.error("Caught error when searching prompts: " + str(e))
             await ctx.send(
