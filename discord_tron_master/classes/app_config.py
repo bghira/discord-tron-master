@@ -46,6 +46,7 @@ DEFAULT_USER_CONFIG = {
     "df_esrgan_upscaler": False,
     "df_stage3_strength": 1.0,
     "refiner_guidance": 7.5,
+    "refiner_guidance_rescale": 0.7,
     "refiner_strength": 0.3,
     "aesthetic_score": 5.0,
     "negative_aesthetic_score": 1.0,
