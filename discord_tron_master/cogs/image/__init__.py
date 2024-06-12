@@ -39,6 +39,30 @@ def generate_cascade_via_hub(prompt: str, user_id: int = None):
     split_pieces = result.split('/')
     return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
+
+def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None)
+    from gradio_client import Client
+    user_config = AppConfig().get_user_config(user_id=user_id)
+
+    client = Client("ameerazam08/SD-3-Medium-GPU")
+    result = client.predict(
+            prompt=prompt,
+            negative_prompt=user_config.get("negative_prompt", "deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, mutated hands and fingers, disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation, NSFW"),
+            use_negative_prompt=True,
+            seed=0,
+            width=1024,
+            height=1024,
+            guidance_scale=7,
+            randomize_seed=True,
+            num_inference_steps=50,
+            NUM_IMAGES_PER_PROMPT=1,
+            api_name="/run"
+    )
+    client.close()
+    split_pieces = result[0]['image'].split('/')
+    return f"https://ameerazam08-sd-3-medium-gpu.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
+
+
 def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
     from gradio_client import Client
     available_models = {
@@ -126,7 +150,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
         # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
         try:
-            pollinations_image = Image.open(BytesIO(requests.get(generate_cascade_via_hub(prompt, user_id=user_id)).content))
+            pollinations_image = Image.open(BytesIO(requests.get(generate_sd3_via_hub(prompt, user_id=user_id)).content))
         except:
             pollinations_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
         try:
@@ -137,7 +161,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
         except:
             extra_image = None
         draw = ImageDraw.Draw(pollinations_image)
-        draw.text((10, 10), "Stable Cascade", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+        draw.text((10, 10), "SD3 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
 
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
