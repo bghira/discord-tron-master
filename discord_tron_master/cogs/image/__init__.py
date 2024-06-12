@@ -60,7 +60,7 @@ def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None):
     )
     client.close()
     split_pieces = result[0]['image'].split('/')
-    return f"https://ameerazam08-sd-3-medium-gpu.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
+    return f"https://ameerazam08-sd-3-medium-gpu.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.webp"
 
 
 def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
