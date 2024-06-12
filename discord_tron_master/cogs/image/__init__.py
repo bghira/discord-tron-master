@@ -40,7 +40,7 @@ def generate_cascade_via_hub(prompt: str, user_id: int = None):
     return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
 
-def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None)
+def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None):
     from gradio_client import Client
     user_config = AppConfig().get_user_config(user_id=user_id)
 
