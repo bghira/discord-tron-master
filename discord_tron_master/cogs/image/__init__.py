@@ -5,7 +5,7 @@ from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
-from threading import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 def retrieve_vlm_caption(image_url) -> str:
     from gradio_client import Client
