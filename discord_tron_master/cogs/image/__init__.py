@@ -17,7 +17,7 @@ def retrieve_vlm_caption(image_url) -> str:
     client.close()
     return str(result)
 
-async def generate_pixart_via_hub(prompt:str, user_id: int = None):
+def generate_pixart_via_hub(prompt:str, user_id: int = None):
     from gradio_client import Client
     user_config = AppConfig().get_user_config(user_id=user_id)
     resolution = user_config.get("resolution", {"width": 1024, "height": 1024})
@@ -38,7 +38,7 @@ async def generate_pixart_via_hub(prompt:str, user_id: int = None):
     return f"https://ptx0-pixart-900m.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.webp"
 
 
-async def generate_cascade_via_hub(prompt: str, user_id: int = None):
+def generate_cascade_via_hub(prompt: str, user_id: int = None):
     from gradio_client import Client
 
     client = Client("multimodalart/stable-cascade")
@@ -61,7 +61,7 @@ async def generate_cascade_via_hub(prompt: str, user_id: int = None):
     return f"https://multimodalart-stable-cascade.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
 
-async def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None):
+def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = None):
     from gradio_client import Client
     user_config = AppConfig().get_user_config(user_id=user_id)
 
@@ -84,7 +84,7 @@ async def generate_sd3_via_hub(prompt: str, model: str = None, user_id: int = No
     return f"https://ameerazam08-sd-3-medium-gpu.hf.space/file=/tmp/gradio/{split_pieces[-2]}/image.webp"
 
 
-async def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
+def generate_terminus_via_hub(prompt: str, model: str = "velocity", user_id: int = None):
     from gradio_client import Client
     available_models = {
         "velocity": "ptx0/ptx0-terminus-xl-velocity-v2",
@@ -142,7 +142,7 @@ def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     user_config = config.get_user_config(user_id=user_id if user_id is not None else ctx.author.id)
     try:
         user_config["resolution"] = {"width": 1024, "height": 1024}
-        dalle_image = await GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
+        dalle_image = GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
         # Create a new image with the two images side by side.
         from PIL import Image
         if not hasattr(dalle_image, 'size'):
@@ -157,7 +157,7 @@ def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
         except IOError:
             # Fallback to default font
             font = ImageFont.load_default(size=40)
-        # sd3_image = await stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
+        # sd3_image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
         # if not hasattr(sd3_image, 'size'):
         #     try:
         #         sd3_image = BytesIO(sd3_image)
@@ -171,20 +171,20 @@ def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
         # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
         # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
         try:
-            pollinations_image = Image.open(BytesIO(requests.get(await generate_sd3_via_hub(prompt, user_id=user_id)).content))
+            pollinations_image = Image.open(BytesIO(requests.get(generate_sd3_via_hub(prompt, user_id=user_id)).content))
         except:
             pollinations_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
         try:
             extra_image = {
                 "label": "Terminus XL Velocity V2 (WIP)",
-                "data": Image.open(BytesIO(requests.get(await generate_terminus_via_hub(prompt, user_id=user_id)).content))
+                "data": Image.open(BytesIO(requests.get(generate_terminus_via_hub(prompt, user_id=user_id)).content))
             }
         except:
             extra_image = None
         try:
             extra_image_2 = {
                 "label": "PixArt 900M (WIP)",
-                "data": Image.open(BytesIO(requests.get(await generate_pixart_via_hub(prompt, user_id=user_id)).content))
+                "data": Image.open(BytesIO(requests.get(generate_pixart_via_hub(prompt, user_id=user_id)).content))
             }
         except:
             extra_image_2 = None
