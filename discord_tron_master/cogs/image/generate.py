@@ -87,15 +87,7 @@ class Generate(commands.Cog):
     async def generate_sd3_dalle_comparison(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
-        # await generate_image(ctx, prompt)
-        # instead, run generate_image in a thread and don't block the main thread.
-        try:
-            thread = Thread(target=generate_image, args=(ctx, prompt))
-            thread.start()
-        except Exception as e:
-            await ctx.send(
-                f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-            )
+        await generate_image(ctx, prompt)
 
 
     @commands.command(name="dalle", help="Generates an image based on the given prompt using DALL-E.")

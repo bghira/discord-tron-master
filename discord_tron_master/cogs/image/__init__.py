@@ -5,6 +5,7 @@ from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
 from PIL import ImageDraw, ImageFont, Image
+from threading import ThreadPoolExecutor
 
 def retrieve_vlm_caption(image_url) -> str:
     from gradio_client import Client
@@ -127,7 +128,7 @@ def generate_lumina_image(prompt: str, use_5b: bool = False):
     split_pieces = result.split('/')
     return f"{client_url}file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
-def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
+async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     """
     Generate images with DALLE-3 and Stable Diffusion 3 models, stitching them with an extra optional image.
 
@@ -140,91 +141,90 @@ def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     stabilityai = StabilityAI()
     config = AppConfig()
     user_config = config.get_user_config(user_id=user_id if user_id is not None else ctx.author.id)
-    try:
-        user_config["resolution"] = {"width": 1024, "height": 1024}
-        dalle_image = GPT().dalle_image_generate(prompt=prompt, user_config=user_config)
-        # Create a new image with the two images side by side.
-        from PIL import Image
-        if not hasattr(dalle_image, 'size'):
-            dalle_image = BytesIO(dalle_image)
-            dalle_image = Image.open(dalle_image)
-        # # Add "DALLE-3" and "Stable Diffusion 3" labels to upper left corner
-        try:
-            # Attempt to use a specific font
-            font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40
-            )
-        except IOError:
-            # Fallback to default font
-            font = ImageFont.load_default(size=40)
-        # sd3_image = stabilityai.generate_image(prompt, user_config, model="sd3-turbo")
-        # if not hasattr(sd3_image, 'size'):
-        #     try:
-        #         sd3_image = BytesIO(sd3_image)
-        #         sd3_image = Image.open(sd3_image)
-        #     except:
-        #         # make black image, we had an error.
-        #         sd3_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
+    
+    user_config["resolution"] = {"width": 1024, "height": 1024}
+    
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor()
 
-        # draw = ImageDraw.Draw(sd3_image)
-        # draw.text((10, 10), "Stable Diffusion 3", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
-        # Retrieve https://pollinations.ai/prompt/{prompt}?seed={seed}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}
-        # pollinations_image = Image.open(BytesIO(requests.get(f"https://pollinations.ai/prompt/{prompt}?seed={user_config['seed']}&width={user_config['resolution']['width']}&height={user_config['resolution']['height']}").content))
+    async def fetch_image(url):
+        return await loop.run_in_executor(executor, lambda: Image.open(BytesIO(requests.get(url).content)))
+
+    async def generate_dalle_image():
+        dalle_image_data = await loop.run_in_executor(executor, lambda: GPT().dalle_image_generate(prompt=prompt, user_config=user_config))
+        if not hasattr(dalle_image_data, 'size'):
+            dalle_image_data = BytesIO(dalle_image_data)
+            dalle_image_data = Image.open(dalle_image_data)
+        return dalle_image_data
+
+    async def generate_pollinations_image():
+        url = generate_sd3_via_hub(prompt, user_id=user_id)
         try:
-            pollinations_image = Image.open(BytesIO(requests.get(generate_sd3_via_hub(prompt, user_id=user_id)).content))
+            return await fetch_image(url)
         except:
-            pollinations_image = Image.new('RGB', dalle_image.size, (0, 0, 0))
+            return Image.new('RGB', (1024, 1024), (0, 0, 0))
+    
+    async def generate_extra_images():
+        extra_images = []
         try:
-            extra_image = {
-                "label": "Terminus XL Velocity V2 (WIP)",
-                "data": Image.open(BytesIO(requests.get(generate_terminus_via_hub(prompt, user_id=user_id)).content))
-            }
+            url_terminus = generate_terminus_via_hub(prompt, user_id=user_id)
+            extra_image_terminus = await fetch_image(url_terminus)
+            extra_images.append({"label": "Terminus XL Velocity V2 (WIP)", "data": extra_image_terminus})
         except:
-            extra_image = None
+            pass
         try:
-            extra_image_2 = {
-                "label": "PixArt 900M (WIP)",
-                "data": Image.open(BytesIO(requests.get(generate_pixart_via_hub(prompt, user_id=user_id)).content))
-            }
+            url_pixart = generate_pixart_via_hub(prompt, user_id=user_id)
+            extra_image_pixart = await fetch_image(url_pixart)
+            extra_images.append({"label": "PixArt 900M (WIP)", "data": extra_image_pixart})
         except:
-            extra_image_2 = None
-        draw = ImageDraw.Draw(pollinations_image)
-        draw.text((10, 10), "SD3 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+            pass
+        return extra_images
+
+    try:
+        dalle_image, pollinations_image, extra_images = await asyncio.gather(
+            generate_dalle_image(),
+            generate_pollinations_image(),
+            generate_extra_images()
+        )
+
+        # Add "DALLE-3" and "Stable Diffusion 3" labels to upper left corner
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
+        except IOError:
+            font = ImageFont.load_default()
 
         draw = ImageDraw.Draw(dalle_image)
         draw.text((10, 10), "DALL-E", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+
+        draw = ImageDraw.Draw(pollinations_image)
+        draw.text((10, 10), "SD3 2B", (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+
         width, height = dalle_image.size
         new_width = width * 2
-        if extra_image is not None:
-            extra_image_vertical_position = int((height - extra_image["data"].size[1]) / 2)
-            extra_image_position = (new_width, extra_image_vertical_position)
-            new_width = new_width + extra_image["data"].size[0]
-        if extra_image_2 is not None:
-            extra_image_vertical_position_2 = int((height - extra_image_2["data"].size[1]) / 2)
-            extra_image_position_2 = (new_width, extra_image_vertical_position_2)
-            new_width = new_width + extra_image_2["data"].size[0]
+
+        for extra_img in extra_images:
+            extra_img["data"] = extra_img["data"].resize((1024, 1024))
+            extra_img_vertical_position = int((height - extra_img["data"].size[1]) / 2)
+            extra_img["position"] = (new_width, extra_img_vertical_position)
+            new_width += extra_img["data"].size[0]
 
         new_image = Image.new('RGB', (new_width, height))
         new_image.paste(pollinations_image, (0, 0))
         new_image.paste(dalle_image, (width, 0))
-        # Do we have an extra_image?
-        if extra_image is not None:
-            draw = ImageDraw.Draw(extra_image["data"])
-            draw.text((10, 10), extra_image["label"], (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
-            width, height = extra_image["data"].size
-            new_image.paste(extra_image["data"], extra_image_position)
-        if extra_image_2 is not None:
-            draw = ImageDraw.Draw(extra_image_2["data"])
-            draw.text((10, 10), extra_image_2["label"], (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
-            width, height = extra_image_2["data"].size
-            new_image.paste(extra_image_2["data"], extra_image_position_2)
-        # Save the new image to a BytesIO object.
+
+        for extra_img in extra_images:
+            draw = ImageDraw.Draw(extra_img["data"])
+            draw.text((10, 10), extra_img["label"], (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
+            new_image.paste(extra_img["data"], extra_img["position"])
+
         output = BytesIO()
         new_image.save(output, format="PNG")
         output.seek(0)
+
         if hasattr(ctx, 'channel'):
-            asyncio.run(ctx.channel.send(file=discord_lib.File(output, "comparison.png")))
+            await ctx.channel.send(file=discord_lib.File(output, "comparison.png"))
         else:
-            asyncio.run(ctx.send(file=discord_lib.File(output, "comparison.png")))
+            await ctx.send(file=discord_lib.File(output, "comparison.png"))
+
     except Exception as e:
-        asyncio.run(ctx.send(f"Error generating image: {e}"))
+        await ctx.send(f"Error generating image: {e}")
