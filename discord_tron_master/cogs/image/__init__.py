@@ -19,14 +19,17 @@ def retrieve_vlm_caption(image_url) -> str:
 
 async def generate_pixart_via_hub(prompt:str, user_id: int = None):
     from gradio_client import Client
+    user_config = AppConfig().get_user_config(user_id=user_id)
+    resolution = user_config.get("resolution", {"width": 1024, "height": 1024})
+    res_str = f"{resolution['width']}x{resolution['height']}"
 
     client = Client("ptx0/PixArt-900M")
     result = client.predict(
-            prompt="Hello!!",
-            guidance_scale=3.4,
+            prompt=prompt,
+            guidance_scale=user_config.get("guidance_scale", 4.4),
             num_inference_steps=28,
-            resolution="1152x960",
-            negative_prompt="underexposed, blurry, ugly, washed-out",
+            resolution=res_str,
+            negative_prompt=user_config.get("negative_prompt", "blurry, ugly, cropped"),
             api_name="/predict"
     )
     # close the connection

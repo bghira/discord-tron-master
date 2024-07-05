@@ -14,6 +14,7 @@ from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.bot import clean_traceback
 # For queue manager, etc.
+from threading import Thread
 discord = DiscordBot.get_instance()
 
 from discord_tron_master.classes.guilds import Guilds
@@ -86,7 +87,16 @@ class Generate(commands.Cog):
     async def generate_sd3_dalle_comparison(self, ctx, *, prompt):
         if guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id):
             return
-        await generate_image(ctx, prompt)
+        # await generate_image(ctx, prompt)
+        # instead, run generate_image in a thread and don't block the main thread.
+        try:
+            thread = Thread(target=generate_image, args=(ctx, prompt))
+            thread.start()
+        except Exception as e:
+            await ctx.send(
+                f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+            )
+
 
     @commands.command(name="dalle", help="Generates an image based on the given prompt using DALL-E.")
     async def generate_dalle(self, ctx, *, prompt):
