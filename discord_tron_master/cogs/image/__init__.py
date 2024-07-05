@@ -1,6 +1,6 @@
 from io import BytesIO
 import discord as discord_lib
-import requests, logging
+import requests, logging, asyncio
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.stabilityai.api import StabilityAI
@@ -223,8 +223,8 @@ def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
         new_image.save(output, format="PNG")
         output.seek(0)
         if hasattr(ctx, 'channel'):
-            await ctx.channel.send(file=discord_lib.File(output, "comparison.png"))
+            asyncio.run(ctx.channel.send(file=discord_lib.File(output, "comparison.png")))
         else:
-            await ctx.send(file=discord_lib.File(output, "comparison.png"))
+            asyncio.run(ctx.send(file=discord_lib.File(output, "comparison.png")))
     except Exception as e:
-        await ctx.send(f"Error generating image: {e}")
+        asyncio.run(ctx.send(f"Error generating image: {e}"))
