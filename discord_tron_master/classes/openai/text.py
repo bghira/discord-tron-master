@@ -179,7 +179,7 @@ class GPT:
 
         return response.choices[0].message.content
 
-    async def retrieve_image(self, url: str):
+    def retrieve_image(self, url: str):
         import requests
         response = requests.get(url)
         # Response: 024-04-18 16:00:15,447 [DEBUG] (discord_tron_master.classes.openai.text) Result: b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x04\x00\x00\x00\x04\x00\x08\x02\x00\x00\x00\xf0\x7f\xbc\xd4\x00\x009\xe7caBX\x00\x009\xe7jumb\x00\x00\x00\x1ejumdc2pa\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa\x00\x00\x009\xc1jumb\x00\x00\x00Gjumdc2ma\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03urn:uuid:01811e43-50a9-4e0b-b5bd-8f6364bc43e4\x00\x00\x00\x01\xa1jumb\x00\x00\x00)jumdc2as\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.assertions\x00\x00\x00\x00\xc5jumb\x00\x00\x00&jumdcbor\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.actions\x00\x00\x00\x00\x97cbor\xa1gactio
@@ -191,7 +191,7 @@ class GPT:
         return Image.open(BytesIO(content)), content
         
 
-    async def dalle_image_generate(self, prompt, user_config: dict):
+    def dalle_image_generate(self, prompt, user_config: dict):
         resolution = f"{user_config.get('width', 1024)}x{user_config.get('height', 1024)}"
         try:
             response = openai.images.generate(
@@ -216,7 +216,7 @@ class GPT:
             url = response.data[0].url
             logger.debug(f"Retrieving URL: {url}")
             # retrieve URL, return Image
-            image_obj, image_data = await self.retrieve_image(url)
+            image_obj, image_data = self.retrieve_image(url)
             logger.debug(f"Result: {image_obj}")
             if not hasattr(image_obj, "size"):
                 logger.error(f"Image object does not have a size attribute. Returning None.")
