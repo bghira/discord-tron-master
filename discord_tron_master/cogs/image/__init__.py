@@ -127,7 +127,7 @@ def generate_lumina_image(prompt: str, use_5b: bool = False):
     split_pieces = result.split('/')
     return f"{client_url}file=/tmp/gradio/{split_pieces[-2]}/image.png"
 
-async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
+def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = None):
     """
     Generate images with DALLE-3 and Stable Diffusion 3 models, stitching them with an extra optional image.
 
