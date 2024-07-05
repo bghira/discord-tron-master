@@ -200,8 +200,8 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
             extra_image_position = (new_width, extra_image_vertical_position)
             new_width = new_width + extra_image["data"].size[0]
         if extra_image_2 is not None:
-            extra_image_vertical_position = int((height - extra_image_2["data"].size[1]) / 2)
-            extra_image_position = (new_width, extra_image_vertical_position)
+            extra_image_vertical_position_2 = int((height - extra_image_2["data"].size[1]) / 2)
+            extra_image_position_2 = (new_width, extra_image_vertical_position_2)
             new_width = new_width + extra_image_2["data"].size[0]
 
         new_image = Image.new('RGB', (new_width, height))
@@ -217,7 +217,7 @@ async def generate_image(ctx, prompt, user_id: int = None, extra_image: dict = N
             draw = ImageDraw.Draw(extra_image_2["data"])
             draw.text((10, 10), extra_image_2["label"], (255, 255, 255), font=font, stroke_fill=(0,0,0), stroke_width=4)
             width, height = extra_image_2["data"].size
-            new_image.paste(extra_image_2["data"], extra_image_position)
+            new_image.paste(extra_image_2["data"], extra_image_position_2)
         # Save the new image to a BytesIO object.
         output = BytesIO()
         new_image.save(output, format="PNG")
