@@ -1,73 +1,32 @@
 [tool.poetry]
-name = "discord-tron-client"
+name = "discord-tron-master"
 version = "0.1.0"
-description = "A worker process for PyTorch nodes that connect to the central Discord bot hub."
+description = "The master connection hub and Discord / Flask interface for the PyTorch bot."
 authors = ["bghira <bghira@users.github.com>"]
 license = "GPL3"
 readme = "README.md"
-packages = [{include = "discord_tron_client"}]
-
-[tool.poetry.scripts]
-client = "discord_tron_client.__main__:main"
+packages = [{include = "discord_tron_master"}]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
-websockets = "^10.4"
-poetry = "^1.4.1"
-flask = "^2.2.3"
-psutil = "^5.9.4"
-websocket = "^0.2.1"
-diffusers = "^0.30.1"
-transformers = "^4.40.1"
-tensorflow = "^2.12.0"
-accelerate = "^0.29.3"
-
-numpy = ">=1.23.2"
-torch = "^2.1.0+cu118"
-torchaudio = "^2.1.0+cu118"
-colorama = "^0.4.6"
-compel = "^2.0.2"
-llama-cpp-python = "^0.1.74"
-peft = "^0.10.0"
-sentencepiece = "^0.1.98"
-tokenizers = "^0.19.1"
-suno-bark = {git = "https://github.com/bghira/bghira-bark"}
-pydub = "^0.25.1"
-tiktoken = "^0.3.3"
 pyopenssl = "^23.1.1"
-black = "^23.3.0"
-torchvision = "^0.16.0+cu118"
-torchmetrics = "^0.11.4"
-opencv-contrib-python = "^4.7.0.72"
-controlnet-aux = "^0.0.3"
-k-diffusion = "^0.0.14"
-safetensors = "^0.4.3"
-split-image = "^2.0.1"
-realesrgan = {git = "https://github.com/sberbank-ai/Real-ESRGAN.git"}
-invisible-watermark = "^0.2.0"
-discord-py-slash-command = "^4.2.1"
-torchtriton = "^2.0.0+f16138d447"
-dadaptation = "^3.1"
-xformers = "^0.0.22.post4+cu118"
+bcrypt = "^4.0.1"
+pillow = "^10.0.1"
+requests = "^2.28.2"
+huggingface = "^0.0.1"
+huggingface-hub = "^0.20.2"
+colorama = "^0.4.6"
+pynacl = "^1.5.0"
+openai = "^1.21.2"
+tiktoken = "^0.3.3"
+transformers = "^4.36.2"
+accelerate = "^0.18.0"
+gunicorn = "^20.1.0"
+scipy = "^1.10.1"
+wheel = "^0.40.0"
+jaxlib = "^0.4.14"
+flask-sqlalchemy = "^3.1.1"
 
-[[tool.poetry.source]]
-name = "default"
-url = "https://pypi.org/simple"
-priority = "primary"
-
-[[tool.poetry.source]]
-name = "pytorch"
-secondary = true
-url = "https://download.pytorch.org/whl/cu118"
-
-[[tool.poetry.source]]
-name = "pytorch-nightly"
-secondary = true
-url = "https://download.pytorch.org/whl/nightly/cu118"
-
-[[tool.poetry.source]]
-name = "PyPI"
-priority = "primary"
 
 [build-system]
 requires = ["poetry-core"]
