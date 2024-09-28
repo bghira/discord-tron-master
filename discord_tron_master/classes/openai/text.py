@@ -11,7 +11,7 @@ openai.api_key = config.get_openai_api_key()
 
 class GPT:
     def __init__(self):
-        self.engine = "o1-mini-2024-09-12"
+        self.engine = "gpt-4o-mini"
         self.temperature = 0.9
         self.max_tokens = 4096
         self.discord_bot_role = "You are a Discord bot."
@@ -151,7 +151,7 @@ class GPT:
         )
 
         return client.chat.completions.create(
-            model="o1-mini-2024-09-12",
+            model="gpt-4o-mini",
             messages=message_log,
             max_tokens=self.max_tokens,
             stop=None,
