@@ -136,6 +136,16 @@ class Job:
             logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
             return False
 
+    async def job_reassign(self, new_worker: str, reassignment_stage:str = "begin"):
+        try:
+            if reassignment_stage == "begin":
+                await self.discord_first_message.edit(content=f"Reassigned job to worker, '{new_worker}'. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
+            elif reassignment_stage == "complete":
+                await self.discord_first_message.edit(content=f"Reassigned job to worker, '{new_worker}', from '{self.worker.worker_id}'. Let's hope this shit works..")
+            return True
+        except Exception as e:
+            logging.error("Error updating the discord message on job lost: " + str(e))
+
     async def job_lost(self):
         try:
             await self.discord_first_message.edit(content="Sorry, hossicle. We had an error reassigning your " + self.module_command + f" job to another worker. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
