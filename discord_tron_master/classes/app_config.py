@@ -75,7 +75,8 @@ DEFAULT_USER_CONFIG = {
         "width": 1024,
         "height": 1024
     },
-    "flux_adapter_1": ""
+    "flux_adapter_1": "",
+    "flux_guidance_scale": 3.0,
 }
 
 class AppConfig:
