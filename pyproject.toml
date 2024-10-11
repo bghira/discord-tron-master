@@ -26,6 +26,15 @@ scipy = "^1.10.1"
 wheel = "^0.40.0"
 jaxlib = "^0.4.14"
 flask-sqlalchemy = "^3.1.1"
+flask = "^3.0.3"
+flask-restful = "^0.3.10"
+flask-oauthlib = "^0.9.6"
+websockets = "^13.1"
+discord = ">=2.2.2"
+flask-migrate = "^4.0.7"
+mysql-connector-python = "^9.0.0"
+python-dotenv = "^1.0.1"
+websocket = "^0.2.1"
 
 
 [build-system]
