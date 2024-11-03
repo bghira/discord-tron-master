@@ -75,6 +75,7 @@ DEFAULT_USER_CONFIG = {
         "width": 1024,
         "height": 1024
     },
+    "model_adapter_1": None,
     "flux_adapter_1": "",
     "flux_guidance_scale": 3.0,
 }
