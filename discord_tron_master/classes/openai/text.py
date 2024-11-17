@@ -4,7 +4,7 @@ from discord_tron_master.classes.app_config import AppConfig
 import logging
 config = AppConfig()
 logger = logging.getLogger(__name__)
-
+logger.setLevel('INFO')
 import openai
 from openai import OpenAI
 openai.api_key = config.get_openai_api_key()
@@ -146,17 +146,20 @@ class GPT:
         return await self.turbo_completion(user_role, prompt, temperature=user_temperature, max_tokens=4096)
 
     def send_request(self, message_log):
-        client = OpenAI(
-            api_key=config.get_openai_api_key()
-        )
+        try:
+            client = OpenAI(
+                api_key=config.get_openai_api_key()
+            )
 
-        return client.chat.completions.create(
-            model="o1-mini-2024-09-12",
-            messages=message_log,
-            max_tokens=self.max_tokens,
-            stop=None,
-            temperature=self.temperature,
-        )
+            return client.chat.completions.create(
+                model="o1-mini-2024-09-12",
+                messages=message_log,
+                max_tokens=self.max_tokens,
+                stop=None,
+                temperature=self.temperature,
+            )
+        except Exception as e:
+            logger.error(f"Error sending request to OpenAI: {e}")
 
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
