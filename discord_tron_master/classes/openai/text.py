@@ -11,10 +11,10 @@ openai.api_key = config.get_openai_api_key()
 
 class GPT:
     def __init__(self):
-        self.engine = "o1-mini-2024-09-12"
+        self.engine = "o1-mini"
         self.temperature = 0.9
         self.max_tokens = 4096
-        self.discord_bot_role = "You are a Discord bot."
+        self.[] = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
     
@@ -152,10 +152,10 @@ class GPT:
             )
 
             return client.chat.completions.create(
-                model="o1-mini-2024-09-12",
+                model="o1-mini",
                 messages=message_log,
                 max_tokens=self.max_tokens,
-                stop=None,
+                stop=[],
                 temperature=self.temperature,
             )
         except Exception as e:
