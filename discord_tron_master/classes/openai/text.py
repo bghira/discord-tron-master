@@ -154,7 +154,7 @@ class GPT:
             return client.chat.completions.create(
                 model="o1-mini",
                 messages=message_log,
-                max_tokens=self.max_tokens,
+                max_completion_tokens=self.max_tokens,
                 stop=[],
                 temperature=self.temperature,
             )
