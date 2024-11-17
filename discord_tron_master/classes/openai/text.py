@@ -166,7 +166,7 @@ class GPT:
             self.set_values(**kwargs)
 
         message_log = [
-            {"role": "system", "content": role},
+            {"role": "assistant", "content": role},
             {"role": "user", "content": prompt},
         ]
 
