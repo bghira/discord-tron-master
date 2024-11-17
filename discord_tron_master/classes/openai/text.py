@@ -14,7 +14,7 @@ class GPT:
         self.engine = "o1-mini"
         self.temperature = 0.9
         self.max_tokens = 4096
-        self.[] = "You are a Discord bot."
+        self.discord_bot_role = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
     
