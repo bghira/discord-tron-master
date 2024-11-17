@@ -155,8 +155,8 @@ class GPT:
                 model="o1-mini",
                 messages=message_log,
                 max_completion_tokens=self.max_tokens,
-                stop=[],
-                temperature=self.temperature,
+                # stop=[],
+                # temperature=self.temperature,
             )
         except Exception as e:
             logger.error(f"Error sending request to OpenAI: {e}")
