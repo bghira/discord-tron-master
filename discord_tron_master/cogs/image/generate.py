@@ -247,7 +247,6 @@ class Generate(commands.Cog):
                 discovered_prompts = UserHistory.search_all_prompts(search_string)
                 # Shuffle the list:
                 import random
-                random.shuffle(discovered_prompts)
                 logger.info(f"Discovered prompts: {discovered_prompts}")
                 if not discovered_prompts:
                     # We didn't discover any prompts. Let the user know their search was bonkers.
@@ -258,7 +257,23 @@ class Generate(commands.Cog):
                 if len(discovered_prompts) > 1:
                     found_string = f"{len(discovered_prompts)} prompts"
                 output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
-                for prompt in discovered_prompts[:10]:
+                # pre-filter all prompts by some criteria:
+                filtered_prompts = []
+                for prompt in discovered_prompts:
+                    # strip outer whitespace:
+                    prompt = prompt[0].strip()
+                    # remove the 2nd half of the string after any --commands if they exist
+                    if '--' in prompt:
+                        prompt = prompt.split('--')[0]
+                    # check if the lowercase version is in a lowercase version if the filtered_prompts already and skip it
+                    if prompt.lower() in [x[0].lower() for x in filtered_prompts]:
+                        # this performs like shit for huge sets but we don't have them that large yet, so YOLO(n).
+                        continue
+                    # add to list
+                    filtered_prompts.append(prompt)
+                random.shuffle(filtered_prompts)
+
+                for prompt in filtered_prompts[:10]:
                     output_string = f"{output_string}\n- `{prompt[0]}`"
                 await DiscordBot.send_large_message(ctx=ctx, text=output_string)
         except Exception as e:
