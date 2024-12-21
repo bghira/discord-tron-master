@@ -261,7 +261,7 @@ class Generate(commands.Cog):
                 filtered_prompts = []
                 for prompt in discovered_prompts:
                     # strip outer whitespace:
-                    prompt = prompt[0].strip()
+                    prompt = prompt.strip()
                     # remove the 2nd half of the string after any --commands if they exist
                     if '--' in prompt:
                         prompt = prompt.split('--')[0]
