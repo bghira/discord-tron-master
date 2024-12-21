@@ -261,7 +261,7 @@ class Generate(commands.Cog):
                 filtered_prompts = []
                 for prompt in discovered_prompts:
                     # strip outer whitespace:
-                    prompt = prompt.strip()
+                    prompt = prompt[0].strip()
                     # remove the 2nd half of the string after any --commands if they exist
                     if '--' in prompt:
                         prompt = prompt.split('--')[0]
@@ -274,7 +274,7 @@ class Generate(commands.Cog):
                 random.shuffle(filtered_prompts)
 
                 for prompt in filtered_prompts[:10]:
-                    output_string = f"{output_string}\n- `{prompt[0]}`"
+                    output_string = f"{output_string}\n- `{prompt}`"
                 await DiscordBot.send_large_message(ctx=ctx, text=output_string)
         except Exception as e:
             logger.error("Caught error when searching prompts: " + str(e))
