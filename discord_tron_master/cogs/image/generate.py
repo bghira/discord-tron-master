@@ -269,7 +269,7 @@ class Generate(commands.Cog):
                         except:
                             pass
                     # check if the lowercase version is in a lowercase version if the filtered_prompts already and skip it
-                    if prompt.lower() in [x[0].lower() for x in filtered_prompts]:
+                    if prompt.lower() in [x.lower() for x in filtered_prompts]:
                         # this performs like shit for huge sets but we don't have them that large yet, so YOLO(n).
                         continue
                     # add to list
