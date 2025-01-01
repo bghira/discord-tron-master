@@ -94,20 +94,26 @@ class Settings(commands.Cog):
             # Check whether the new value type is the same type as their old value.
             # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
             same_type = compare_setting_types(user_config[setting_key], setting_value)
-            if same_type is None:
+            if same_type is None and setting_key != "skip_guidance_layers":
                 await ctx.send(f"Dude, do not fuck with me. Are you trying to override {user_config[setting_key]} with {setting_value}? Seriously? They're not even the same data type. Keep it similar. Everything goes through the square hole though, right? Amateurs.")
                 return
             # Same type comes back as the cast value.
-            setting_value = same_type
+            if same_type is not None:
+                setting_value = same_type
+
             # We are given valid option, value checks out. Is it a forbidden fruit?
             unforgivable_curses = [ 'model', 'resolution', 'seed' ]
             if setting_key in unforgivable_curses:
                 await ctx.send(f"Well, well, well. If it isn't that user that thought they could go around whatever roadblocks I've put in the way of their fun. You cannot set {unforgivable_curses} on your settings profile through this option. Use `{self.config.get_command_prefix()}help` to discover your own asshole and finger your way out of this mess.")
                 return
+            setting_text = setting_value
+            if setting_value == "none":
+                setting_value = None
+                setting_text = "literally nothing"
             self.config.set_user_setting(user_id, setting_key, setting_value)
             if setting_value == "":
-                setting_value = "literally nothing"
-            await ctx.send(f"{ctx.author.mention} your setting, `{setting_key}` has been updated to `{setting_value}`.  Did you know {random_fact()}?")
+                setting_text = "literally nothing"
+            await ctx.send(f"{ctx.author.mention} your setting, `{setting_key}` has been updated to `{setting_text}`.  Did you know {random_fact()}?")
             return
 
         model_id = user_config.get("model")
