@@ -78,6 +78,7 @@ DEFAULT_USER_CONFIG = {
     "model_adapter_1": None,
     "flux_adapter_1": "",
     "flux_guidance_scale": 3.0,
+    "skip_guidance_layers": -1,
 }
 
 class AppConfig:
