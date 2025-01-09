@@ -57,10 +57,10 @@ class GPT:
             prompt = prompt + '. Your theme for consideration: ' + theme
         system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
         system_role = f"{system_role}Your prompts look like these 3 examples:\n"
-        system_role = f"{system_role}a portrait of astonisng daisies, rolling hills, beautiful quality, luxurious, 1983, kodachrome\n"
-        system_role = f"{system_role}a camera photo of great look up a rolling wave, the ocean in full view, best quality, intricate, photography\n"
+        system_role = f"{system_role}A 1983 photograph of astonishing daisies in the rolling hills of Some Location. The image has beautiful quality and kodachrome style.\n"
+        system_role = f"{system_role}A high quality camera photo of great look up a rolling wave; the ocean is present in full view, as a surfer challenges himself by paddling out to the break.\n"
         system_role = f"{system_role}digital artwork, feels like the first time, we went to the zoo, colourful and majestic, amazing clouds in the sky, epic\n"
-        system_role = f"{system_role}The subject must come first, with actions coming next, and then style attributes.\n"
+        system_role = f"{system_role}Natural language prompting works best with short and concise bits.\n"
         system_role = f"{system_role}Any additional output other than the prompt will damage the results. Stick to just the prompts."
         image_prompt_response = await self.turbo_completion(system_role, prompt, temperature=1.18)
         logger.setLevel(config.get_log_level())
