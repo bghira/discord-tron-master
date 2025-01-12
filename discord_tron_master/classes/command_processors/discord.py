@@ -47,13 +47,13 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     logger.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
                     for image_url in arguments["image_url_list"]:
-                        if image_url is None or str(image_url).lower == "none":
-                            # video does this
-                            continue
-                        logger.debug(f"Adding {image_url} to embed")
-                        embed = discord.Embed(url="http://tripleback.net")
-                        embed.set_image(url=image_url)
-                        embeds.append(embed)
+                        if 'mp4' in image_url:
+                            arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                        else:
+                            logger.debug(f"Adding {image_url} to embed")
+                            embed = discord.Embed(url="http://tripleback.net")
+                            embed.set_image(url=image_url)
+                            embeds.append(embed)
                     wants_variations = len(arguments["image_url_list"])
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
