@@ -38,7 +38,7 @@ class JobQueue:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
         if self.queue is None or len(self.queue) == 0:
-            logger.debug("Queue is empty, returning None")
+            # logger.debug("Queue is empty, returning None")
             return None
         return self.queue[0]
 
@@ -50,7 +50,7 @@ class JobQueue:
             logger.debug(f"Job Queue Terminating: {self.worker_id}")
             return None
         if self.queue is None or len(self.queue) == 0:
-            logger.debug("Queue is empty, returning None")
+            # logger.debug("Queue is empty, returning None")
             return None
         for job in self.queue:
             if job.id == job_id:
