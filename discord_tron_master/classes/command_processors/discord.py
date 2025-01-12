@@ -93,7 +93,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             adding_reactions.append('❌')
             await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
-            logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
 async def send_large_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -103,7 +103,7 @@ async def send_large_message(command_processor, arguments: Dict, data: Dict, web
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             await command_processor.discord.send_large_message(channel, arguments["message"])
         except Exception as e:
-            logging.error(f"Error sending large message to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending large message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Large message sent."}
 
 
@@ -118,7 +118,7 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
                 embed = get_image_embed(image_data)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
-            logging.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
             return {"success": False, "result": str(e)}
         return {"success": True, "result": "Message sent."}
     return {"success": False, "result": "Channel not found."}
@@ -131,7 +131,7 @@ async def delete_message(command_processor, arguments: Dict, data: Dict, websock
             message = await channel.fetch_message(data["message_id"])
             await message.delete()
         except Exception as e:
-            logging.warn(f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!")
+            logger.warning(f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!")
             return {"success": True, "result": "Message deleted, but not by us."}
         return {"success": True, "result": "Message deleted."}
     return {"error": "Channel could not be found."}
@@ -154,7 +154,7 @@ async def edit_message(command_processor, arguments: Dict, data: Dict, websocket
             message = await channel.fetch_message(data["message_id"])
             await message.edit(content=arguments["message"])
         except Exception as e:
-            logging.error(f"Error editing message in {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error editing message in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message edited."}
 
 async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -163,7 +163,7 @@ async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: 
         try:
             await channel.send(embed=arguments["embed"])
         except Exception as e:
-            logging.error(f"Error sending embed to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending embed to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Embed sent."}
 
 async def send_file(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -172,7 +172,7 @@ async def send_file(command_processor, arguments: Dict, data: Dict, websocket: W
         try:
             await channel.send(file=arguments["file"])
         except Exception as e:
-            logging.error(f"Error sending file to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending file to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "File sent."}
 
 async def send_files(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -181,7 +181,7 @@ async def send_files(command_processor, arguments: Dict, data: Dict, websocket: 
         try:
             await channel.send(files=arguments["files"])
         except Exception as e:
-            logging.error(f"Error sending files to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending files to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Files sent."}
 
 async def create_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -277,7 +277,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             adding_reactions.append('❌')
             await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
-            logging.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logger.debug(f"Exiting create_thread")
     return {"success": True, "result": "Thread created."}
 
@@ -287,7 +287,7 @@ async def delete_thread(command_processor, arguments: Dict, data: Dict, websocke
         try:
             await channel.delete()
         except Exception as e:
-            logging.error(f"Error deleting thread in {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error deleting thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Thread deleted."}
 
 async def send_message_to_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
@@ -296,7 +296,7 @@ async def send_message_to_thread(command_processor, arguments: Dict, data: Dict,
         try:
             await discord.send(content=arguments["message"])
         except Exception as e:
-            logging.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
 async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True):

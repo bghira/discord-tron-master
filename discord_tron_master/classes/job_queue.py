@@ -73,7 +73,7 @@ class JobQueue:
             return None
 
         if len(self.queue) == 0:
-            logger.debug("Queue is empty, returning None")
+            # logger.debug("Queue is empty, returning None")
             return None
         logger.debug(f"Got job! Queue size: {len(self.queue)}")
         job = self.queue.popleft()
