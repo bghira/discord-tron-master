@@ -151,21 +151,21 @@ class Worker:
         logger.debug(f"(Worker.process_jobs) Begin function.")
         while not self.terminate:
             try:
-                logger.debug(f"(Worker.process_jobs) Begin loop. Fetching preview task.")
+                # logger.debug(f"(Worker.process_jobs) Begin loop. Fetching preview task.")
                 test_job = await self.job_queue.preview()  # Use 'await' instead of synchronous call
                 if test_job is None:
-                    logger.debug(f"(Worker.process_jobs) No job to process for worker {self.worker_id}")
+                    # logger.debug(f"(Worker.process_jobs) No job to process for worker {self.worker_id}")
                     await asyncio.sleep(1)
                     continue
-                logger.debug(f"(Worker.process_jobs) Preview task: {test_job}")
+                # logger.debug(f"(Worker.process_jobs) Preview task: {test_job}")
                 if self.can_assign_job_by_type(job_type=test_job.job_type):
-                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} can assign job {test_job.id}. Queue type: {type(self.job_queue)}")
+                    # logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} can assign job {test_job.id}. Queue type: {type(self.job_queue)}")
                     job = await self.job_queue.get()  # Use 'get()' to pull the job from the queue and pop it out.
                     self.assign_job(job)
-                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job {job.id}.")
+                    # logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned job {job.id}.")
                 elif test_job in self.assigned_jobs.get(test_job.job_type, []):
                     # Job is already assigned. Wait for it to complete.
-                    logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is already processing job {test_job.id}.")
+                    # logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is already processing job {test_job.id}.")
                     await asyncio.sleep(1)
                     continue
                 else:
@@ -183,14 +183,14 @@ class Worker:
                                 "acknowledged": job.acknowledged,
                                 "acknowledged_date": job.acknowledged_date
                             } for job in jobs]
-                        logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {assigned_jobs_output}")
+                        # logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} assigned jobs: {assigned_jobs_output}")
                         if self.are_jobs_acknowledged():
-                            logger.debug(f"All jobs have been acknowledged. Waiting cleanly.")
+                            # logger.debug(f"All jobs have been acknowledged. Waiting cleanly.")
                             await asyncio.sleep(1)
                             continue
-                        logger.debug(f"Not all jobs have been acknowledged: {[job.id for job in self.job_queue.in_progress.values() if not job.is_acknowledged()[0]]}")
+                        # logger.debug(f"Not all jobs have been acknowledged: {[job.id for job in self.job_queue.in_progress.values() if not job.is_acknowledged()[0]]}")
                         for job in self.assigned_jobs.get(test_job.job_type, []):
-                            logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, executed: {job.executed}")
+                            # logger.debug(f"(Worker.process_jobs) Worker {self.worker_id} is executing job: {job.id}, executed: {job.executed}")
                         await asyncio.sleep(1)
                 if job is None:
                     logger.info("(Worker.process_jobs) Empty job submitted to worker!?")
