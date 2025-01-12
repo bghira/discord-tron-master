@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.get_log_level())
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
