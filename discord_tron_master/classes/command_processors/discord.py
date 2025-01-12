@@ -54,7 +54,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                             embed = discord.Embed(url="http://tripleback.net")
                             embed.set_image(url=image_url)
                             embeds.append(embed)
-                    wants_variations = len(arguments["image_url_list"])
+                            wants_variations = len(arguments["image_url_list"])
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
             if "audio_url" in arguments:
@@ -250,13 +250,13 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
-                        if image_url is None:
-                            # video probably
-                            continue
-                        logger.debug(f"Adding {image_url} to embed")
-                        new_embed = discord.Embed(url="http://tripleback.net")
-                        new_embed.set_image(url=image_url)
-                        embeds.append(new_embed)
+                        if 'mp4' in image_url:
+                            arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                        else:
+                            logger.debug(f"Adding {image_url} to embed")
+                            new_embed = discord.Embed(url="http://tripleback.net")
+                            new_embed.set_image(url=image_url)
+                            embeds.append(new_embed)
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
             logger.debug(f"Sending message to thread: {arguments['message']}")
