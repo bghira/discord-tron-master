@@ -97,6 +97,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
     return {"success": True, "result": "Message sent."}
 
 async def send_large_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_large_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -108,6 +109,7 @@ async def send_large_message(command_processor, arguments: Dict, data: Dict, web
 
 
 async def send_image(command_processor, arguments: Dict[str, str], data: Dict[str, str], websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_image: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -158,6 +160,7 @@ async def edit_message(command_processor, arguments: Dict, data: Dict, websocket
     return {"success": True, "result": "Message edited."}
 
 async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_embed: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -167,6 +170,7 @@ async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: 
     return {"success": True, "result": "Embed sent."}
 
 async def send_file(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_file: {arguments} {data} {websocket} {command_processor}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -291,6 +295,7 @@ async def delete_thread(command_processor, arguments: Dict, data: Dict, websocke
     return {"success": True, "result": "Thread deleted."}
 
 async def send_message_to_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+    logger.debug(f"Entering send_message_to_thread: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
