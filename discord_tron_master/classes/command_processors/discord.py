@@ -46,6 +46,9 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     logger.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
                     for image_url in arguments["image_url_list"]:
+                        if image_url is None or str(image_url).lower == "none":
+                            # video does this
+                            continue
                         logger.debug(f"Adding {image_url} to embed")
                         embed = discord.Embed(url="http://tripleback.net")
                         embed.set_image(url=image_url)
@@ -59,6 +62,13 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
                 else:
                     logger.debug(f"Incoming message to send, has zero audio url.")
+            if "video_url" in arguments:
+                if arguments["video_url"] is not None:
+                    logger.debug(f"Incoming message to send, has a video url.")
+                    arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                else:
+                    logger.debug(f"Incoming message to send, has zero video url.")
+
             if "audio_data" in arguments:
                 if arguments["audio_data"] is not None:
                     logger.debug(f"Incoming message had audio data. Embedding as a file.")
@@ -198,6 +208,14 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                     pnginfo.add_text(key, value)
                 embed = await get_image_embed(arguments["image"], pnginfo=pnginfo)
                 wants_variations = 1
+            if "video_url" in arguments:
+                if arguments["video_url"] is not None:
+                    logger.debug(f"Incoming message to send, has a video url.")
+                    arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                    embed = discord.Embed(url='https://tripleback.net')
+                    embed.set_image(url=arguments["video_url"])
+                else:
+                    logger.debug(f"Incoming message to send, has zero video url.")
             if "image_url" in arguments:
                 logger.debug(f"Found image URL inside arguments: {arguments['image_url']}")
                 embed = discord.Embed(url='https://tripleback.net')
@@ -225,6 +243,9 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
+                        if image_url is None:
+                            # video probably
+                            continue
                         logger.debug(f"Adding {image_url} to embed")
                         new_embed = discord.Embed(url="http://tripleback.net")
                         new_embed.set_image(url=image_url)
@@ -292,6 +313,7 @@ async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True)
         embed.set_image(url=image_url)
         return embed
     return image_url
+
 async def get_audio_file(audio_data):
     base64_decoded_audio = base64.b64decode(audio_data)
     buffer = BytesIO(base64_decoded_audio)
@@ -310,11 +332,20 @@ async def get_audio_url(audio_data):
 def extract_wav(audio_data):
     wav_binary_stream = BytesIO(audio_data)
     return read_wav(wav_binary_stream)
-    
 
 async def get_audio_url_from_numpy(audio_array):
     audio_base64 = base64.b64encode(audio_array)
     return get_audio_url(audio_base64)
+
+async def get_video_url(video_data):
+    filename = f"{time.time()}{hashlib.md5(video_data).hexdigest()}.mp4"
+    # Save the video mp4 file and get its URL
+    os.makedirs(web_root, exist_ok=True)
+    with open(os.path.join(web_root, filename), 'wb') as f:
+        f.write(video_data)
+    
+    video_url = f"\n{url_base}/{filename}"
+    return video_url
 
 async def get_message_txt_file(text):
     # write to file

@@ -142,6 +142,17 @@ class API:
             audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_buffer.read()))
             return jsonify({"audio_url": audio_url.strip()})
 
+        @self.app.route("/upload_video", methods=["POST"])
+        def upload_video():
+            logging.debug(f"upload_video endpoint hit with data: {request}")
+            if not self.check_auth(request):
+                return jsonify({"error": "Authentication required"}), 401
+            video_buffer = request.files.get("file")
+            if not video_buffer:
+                return jsonify({"error": "file is required"}), 400
+            video_url = asyncio.run(DiscordCommandProcessor.get_video_url(video_buffer.read()))
+            return jsonify({"video_url": video_url.strip()})
+
     def check_auth(self, request):
         try:
             access_token = request.headers.get("Authorization")
