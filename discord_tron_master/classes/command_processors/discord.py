@@ -66,6 +66,8 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
                     arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                    embed = discord.Embed(url='https://tripleback.net')
+                    embed.set_image(url=arguments["video_url"])
                 else:
                     logger.debug(f"Incoming message to send, has zero video url.")
 
