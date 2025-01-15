@@ -100,8 +100,8 @@ class Img2img(commands.Cog):
             message.content = re.sub(r'(https?://[^\s]+)', '', message.content).strip()
             for url in url_list:
                 # Remove any ?query=string from the URL:
-                # url = url.split("?")[0]
-                if url.endswith(".png") or url.endswith(".jpg") or url.endswith(".jpeg") or url.endswith(".webp"):
+                test_url = url.split("?")[0]
+                if test_url.endswith(".png") or test_url.endswith(".jpg") or test_url.endswith(".jpeg") or test_url.endswith(".webp"):
                     try:
                         return await self._handle_image_attachment(message, url)
                     except Exception as e:
