@@ -25,8 +25,38 @@ class UserHistory(db.Model):
         return UserHistory.query.with_entities(UserHistory.prompt).distinct().all()
 
     @staticmethod
-    def search_all_prompts(prompt: str) -> list:
-        return UserHistory.query.filter(UserHistory.prompt.like(f"%{prompt}%")).with_entities(UserHistory.prompt).distinct().all()
+    def search_all_prompts(search_term: str = None, excludes: list = None) -> list:
+        """
+        Searches for prompts that match 'search_term' (with wildcards), excluding any in 'excludes'.
+        - Wildcards: '*' -> '%', '?' -> '_'
+        - Exclusions: each exclude term is also wildcard-translated and used with a NOT ILIKE condition.
+        Returns a list of distinct prompt strings.
+        """
+        query = UserHistory.query
+
+        # If there's a search term, convert * -> %, ? -> _
+        if search_term:
+            wildcard_search = search_term.replace('*', '%').replace('?', '_')
+            # We can wrap with '%' to allow for substring matching
+            if not wildcard_search.startswith('%'):
+                wildcard_search = f"%{wildcard_search}"
+            if not wildcard_search.endswith('%'):
+                wildcard_search = f"{wildcard_search}%"
+            query = query.filter(UserHistory.prompt.ilike(wildcard_search))
+
+        # If excludes is not empty, apply each as a NOT ILIKE
+        if excludes:
+            for exclude_term in excludes:
+                exclude_term = exclude_term.replace('*', '%').replace('?', '_')
+                # Similarly handle substring searching
+                if not exclude_term.startswith('%'):
+                    exclude_term = f"%{exclude_term}"
+                if not exclude_term.endswith('%'):
+                    exclude_term = f"{exclude_term}%"
+                query = query.filter(~UserHistory.prompt.ilike(exclude_term))
+        
+        # Return distinct prompt strings
+        return query.with_entities(UserHistory.prompt).distinct().all()
 
     @staticmethod
     def get_all_user_prompts(user: str):

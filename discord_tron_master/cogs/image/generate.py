@@ -239,50 +239,99 @@ class Generate(commands.Cog):
                 f"{ctx.author.mention} Statistics are not currently available at this time, try again later."
             )
             
-    @commands.command(name='search', help='Search for a prompt in your history. Returns up to 10 prompts.')
+    @commands.command(name='search', help='Search for a prompt in your history. Supports wildcards (*, ?) and exclusion via --not TERM.')
     async def search_prompts(self, ctx, *, search_string: str):
+        """
+        Usage Examples:
+        1) !search cat
+        -> finds prompts containing the substring "cat"
+        2) !search cat dog
+        -> finds prompts containing "cat dog" exactly, as a substring
+        3) !search cat* --not dog
+        -> finds prompts with "cat" as a prefix and excludes any containing "dog"
+        4) !search cat* --not dog --not "pink"
+        -> excludes dog, pink, etc.
+        5) !search cat?milk
+        -> replaces ? with '_' so effectively "cat_milk"
+        """
         try:
             app = AppConfig.flask
             with app.app_context():
-                discovered_prompts = UserHistory.search_all_prompts(search_string)
-                # Shuffle the list:
-                import random
-                logger.info(f"Discovered prompts: {discovered_prompts}")
-                if not discovered_prompts:
-                    # We didn't discover any prompts. Let the user know their search was bonkers.
-                    return await ctx.send(
-                        f"{ctx.author.mention} I couldn't find any prompts matching that search."
-                    )
-                found_string = "a prompt"
-                if len(discovered_prompts) > 1:
-                    found_string = f"{len(discovered_prompts)} prompts"
-                output_string = f"{ctx.author.mention} I found {found_string} matching your search, `{search_string}`:"
-                # pre-filter all prompts by some criteria:
-                filtered_prompts = []
-                for prompt in discovered_prompts:
-                    # strip outer whitespace:
-                    prompt = prompt[0].strip()
-                    # remove the 2nd half of the string after any --commands if they exist
-                    if '--' in prompt:
-                        try:
-                            prompt = prompt.split('--')[0]
-                        except:
-                            pass
-                    # check if the lowercase version is in a lowercase version if the filtered_prompts already and skip it
-                    if prompt.lower() in [x.lower() for x in filtered_prompts]:
-                        # this performs like shit for huge sets but we don't have them that large yet, so YOLO(n).
-                        continue
-                    # add to list
-                    filtered_prompts.append(prompt)
-                random.shuffle(filtered_prompts)
+                # 1) Split out any --not terms. Keep them in a list of excludes.
+                import shlex
 
-                for prompt in filtered_prompts[:10]:
-                    output_string = f"{output_string}\n- `{prompt}`"
-                await DiscordBot.send_large_message(ctx=ctx, text=output_string)
+                # We'll do a minimal parse of the search_string
+                tokens = shlex.split(search_string)
+                excludes = []
+                included_tokens = []
+                
+                skip_next = False
+                for i, token in enumerate(tokens):
+                    # If we've already used this token (i.e., after we see `--not`), skip it
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    
+                    if token.lower() == "--not":
+                        # The next token should be the term to exclude
+                        if i+1 < len(tokens):
+                            excludes.append(tokens[i+1])
+                            skip_next = True
+                    else:
+                        included_tokens.append(token)
+
+                # The main search string becomes what’s left (joined).
+                # This is flexible. You can choose to do more advanced logic
+                # such as "AND" logic for multiple tokens, etc.
+                # For simplicity, we'll treat the remainder as one big string.
+                included_str = " ".join(included_tokens)
+                
+                # 2) We pass that to our updated search_all_prompts
+                discovered_prompts = UserHistory.search_all_prompts(
+                    search_term=included_str,
+                    excludes=excludes
+                )
+            filtered_prompts = []
+            for prompt in discovered_prompts:
+                # strip outer whitespace:
+                prompt = prompt[0].strip()
+                # remove the 2nd half of the string after any --commands if they exist
+                if '--' in prompt:
+                    try:
+                        prompt = prompt.split('--')[0]
+                    except:
+                        pass
+                # check if the lowercase version is in a lowercase version if the filtered_prompts already and skip it
+                if prompt.lower() in [x.lower() for x in filtered_prompts]:
+                    # this performs like shit for huge sets but we don't have them that large yet, so YOLO(n).
+                    continue
+                # add to list
+                filtered_prompts.append(prompt)
+            # Shuffle or do anything else with discovered_prompts as you like:
+            import random
+            random.shuffle(filtered_prompts)
+
+            if not filtered_prompts:
+                return await ctx.send(
+                    f"{ctx.author.mention} I couldn't find any prompts matching your query."
+                )
+            
+            found_string = f"{len(filtered_prompts)} prompt{'s' if len(filtered_prompts)>1 else ''}"
+            output_string = (
+                f"{ctx.author.mention} I found {found_string} matching your search: `{search_string}`"
+            )
+
+            # Print up to 10 results
+            for prompt in filtered_prompts[:10]:
+                # prompt is a tuple (UserHistory.prompt,) so index [0].
+                output_string += f"\n- `{prompt}`"
+
+            await DiscordBot.send_large_message(ctx=ctx, text=output_string)
+
         except Exception as e:
             logger.error("Caught error when searching prompts: " + str(e))
             await ctx.send(
-                f"{ctx.author.mention} Search is not currently available at this time, try again later."
+                f"{ctx.author.mention} Search is not currently available, please try again later."
             )
 
     @commands.command(name='random', help='Search for random prompts. Returns up to 10 prompts, unless a number is provided.')
