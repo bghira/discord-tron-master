@@ -117,6 +117,11 @@ class GPT:
 
         system_role = "Print ONLY the specified JSON document WITHOUT any other markdown or formatting. Determine which model and resolution would work best for the user's prompt, ignoring any other issues. If anything but the JSON object and the defined keys are returned, THE APPLICATION WILL ERROR OUT."
         prediction = await self.turbo_completion(system_role, query_str, temperature=1.18)
+        # if any ``` are in the response, remove the entire lines containing it
+        for line in prediction.split("\n"):
+            if "```" in line:
+                prediction = prediction.replace(line, "")
+        
         import json
         try:
             result = json.loads(prediction)
