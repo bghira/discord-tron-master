@@ -139,7 +139,7 @@ class GPT:
         logger.setLevel(config.get_log_level())
         logger.debug(f'OpenAI returned the following response to the prompt: {model_name}')
         # Did it refuse?
-        if "ptx0" not in model_name:
+        if "/" not in model_name:
             logger.setLevel(config.get_log_level())
             logger.warning(f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training.")
             return ("1280x768", "ptx0/terminus-xl-gamma-training")

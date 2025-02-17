@@ -33,6 +33,9 @@ DEFAULT_CONFIG = {
 DEFAULT_USER_CONFIG = {
     "seed": -1,
     "scheduler": "fast",
+    "enable_deepcache": True,
+    "deepcache_branch_id": 0,
+    "deepcache_interval": 3,
     "enable_teacache": True,
     "teacache_distance": 0.6,
     "steps": 25,
