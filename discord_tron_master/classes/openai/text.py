@@ -11,7 +11,7 @@ openai.api_key = config.get_openai_api_key()
 
 class GPT:
     def __init__(self):
-        self.engine = "o1-mini"
+        self.engine = "o3-mini"
         self.temperature = 0.9
         self.max_tokens = 4096
         self.discord_bot_role = "You are a Discord bot."
@@ -86,7 +86,7 @@ class GPT:
                 "\n -> ptx0/terminus-xl-gamma-v2"
                 "\n    -> Requests for 'high quality' images go here, but it has some high frequency noise issues."
                 "\n -> ptx0/terminus-xl-gamma-training"
-                "\n    -> This was an attempt to resolve some issues in the v2 model, but the issues persist. It noticeably improves on some concepts, and the high freq noise issue appears less often than v2. This model might have the strongest ability to produce readable text."
+                "\n    -> This was an attempt to resolve some issues in the v2 model, but the issues persist. It noticeably improves on some concepts, and the high freq noise issue appears less often than v2."
                 "\n -> ptx0/terminus-xl-gamma-v2-1"
                 "\n    -> Cinema, photographs, most images with text in them, adult content, etc. This is the default model, but if the request contains 'high quality', it should use gamma-v2 or training instead."
                 "\n -> terminusresearch/fluxbooru-v0.3"
