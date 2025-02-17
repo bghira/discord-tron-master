@@ -89,6 +89,10 @@ class GPT:
                 "\n    -> This was an attempt to resolve some issues in the v2 model, but the issues persist. It noticeably improves on some concepts, and the high freq noise issue appears less often than v2. This model might have the strongest ability to produce readable text."
                 "\n -> ptx0/terminus-xl-gamma-v2-1"
                 "\n    -> Cinema, photographs, most images with text in them, adult content, etc. This is the default model, but if the request contains 'high quality', it should use gamma-v2 or training instead."
+                "\n -> terminusresearch/fluxbooru-v0.3"
+                "\n    -> Flux is a 12B parameter model, slow but very good for complex prompts and anime/drawn text. Typography requests and cinematic stuff do well here too."
+                "\n -> stabilityai/stable-diffusion-3.5-medium"
+                "\n    -> Needs longer more detailed prompts but can do really well for realism and typography if the text is shorter."
                 "\n\n-----------\n\n"
                 "Resolutions: "
                 "\n| Square        | Landscape    | Portrait     |"
@@ -111,7 +115,7 @@ class GPT:
                 "Analyze Prompt: " + prompt
             )
 
-        system_role = "Print ONLY the specified JSON document. Determine which model and resolution would work best for the user's prompt, ignoring any other issues. If anything but the JSON object and the defined keys are returned, THE APPLICATION WILL ERROR OUT."
+        system_role = "Print ONLY the specified JSON document WITHOUT any other markdown or formatting. Determine which model and resolution would work best for the user's prompt, ignoring any other issues. If anything but the JSON object and the defined keys are returned, THE APPLICATION WILL ERROR OUT."
         prediction = await self.turbo_completion(system_role, query_str, temperature=1.18)
         import json
         try:
