@@ -33,6 +33,8 @@ DEFAULT_CONFIG = {
 DEFAULT_USER_CONFIG = {
     "seed": -1,
     "scheduler": "fast",
+    "enable_teacache": True,
+    "teacache_distance": 0.6,
     "steps": 25,
     "gpt_role": "You are a Discord bot.",
     "tts_voice": "en_fiery",
