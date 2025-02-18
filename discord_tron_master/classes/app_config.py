@@ -38,6 +38,7 @@ DEFAULT_USER_CONFIG = {
     "deepcache_interval": 3,
     "enable_teacache": True,
     "teacache_distance": 0.6,
+    "enable_sageattn": True,
     "steps": 25,
     "gpt_role": "You are a Discord bot.",
     "tts_voice": "en_fiery",
