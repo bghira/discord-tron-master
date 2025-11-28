@@ -201,7 +201,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 thread = channel
             elif isinstance(channel, discord.TextChannel):
                 logger.debug(f"Channel is a text channel. Creating thread.")
-                thread = await channel.create_thread(name=arguments["name"])
+                thread = await channel.create_thread(name=arguments["name"], type=discord.ChannelType.public_thread)
             else:
                 raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
             embed = None
