@@ -83,7 +83,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             # Add reactions
             adding_reactions = []
             if wants_variations > 0:
-                adding_reactions = [ '♻️', '©️', '🌱', '📜' ]
+                adding_reactions = [ '♻️', '\u00a9\ufe0f', '🌱', '📜' ]
 
             # Add the appropriate number of emojis based on wants_variations
             if wants_variations > 0:
@@ -271,7 +271,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             # Add reactions
             adding_reactions = []
             if wants_variations > 0:
-                adding_reactions = [ '♻️', '©️', '🌱', '📜', '💾' ]
+                adding_reactions = [ '♻️', '\u00a9\ufe0f', '🌱', '📜', '💾' ]
 
             # Add the appropriate number of emojis based on wants_variations
             if wants_variations > 0:
