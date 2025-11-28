@@ -46,6 +46,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
 
                     logger.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
+                    wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
                         if 'mp4' in image_url:
                             arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
@@ -54,7 +55,6 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                             embed = discord.Embed(url="http://tripleback.net")
                             embed.set_image(url=image_url)
                             embeds.append(embed)
-                            wants_variations = len(arguments["image_url_list"])
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
             if "audio_url" in arguments:
