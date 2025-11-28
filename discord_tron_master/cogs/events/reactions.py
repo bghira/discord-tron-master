@@ -63,8 +63,8 @@ class Reactions(commands.Cog):
         if new_config == {} and reaction.emoji != '❌':
             logging.debug(f'Error loading config from image info.')
             return
-        if str(reaction.emoji).replace('\ufe0f', '') == "©":
-            # We want to clone the settings of this post.
+        if reaction.emoji == "📋":
+            # We want to clone/copy the settings of this post.
             logging.debug(f'Would clone settings: user_config {img.info["user_config"]}, prompt {img.info["prompt"]}.')
             # Keep the user's current seed instead of setting a static one.
             new_config['seed'] = current_config['seed']
