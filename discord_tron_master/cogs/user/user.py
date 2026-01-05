@@ -4,6 +4,7 @@ from discord_tron_master.classes.text_replies import return_random as random_fac
 from discord_tron_master.classes.app_config import AppConfig
 
 import logging
+import discord
 
 config = AppConfig()
 app = AppConfig.flask
@@ -107,9 +108,18 @@ class User(commands.Cog):
         self.bot = bot
         self.generic_error = "The smoothbrain geriatric that writes my codebase did not correctly implement that method. I am sorry. Trying again will only lead to tears."
 
+    def _get_conversation_owner(self, ctx):
+        if not config.get_user_setting(ctx.author.id, "group_chat"):
+            return ctx.author.id
+        if ctx.guild is None:
+            return ctx.author.id
+        if isinstance(ctx.channel, discord.Thread):
+            return ctx.author.id
+        return ctx.channel.id
+
     @commands.command(name="clear", help="Clear your GPT conversation history and start again.")
     async def clear_history(self, ctx):
-        user_id = ctx.author.id
+        user_id = self._get_conversation_owner(ctx)
         try:
             with app.app_context():
                 Conversations.clear_history_by_owner(owner=user_id)

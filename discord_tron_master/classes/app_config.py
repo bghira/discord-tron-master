@@ -69,6 +69,7 @@ DEFAULT_USER_CONFIG = {
     "resize": 1,
     "guidance_scaling": 6,
     "guidance_rescale": 0.7,
+    "group_chat": True,
     "negative_prompt": "washed-out low-contrast (deep fried) watermark, cropped, out-of-frame, low quality, low res, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation",
     "positive_prompt": "",
     "tile_negative": "blur, lowres, bad anatomy, bad hands, cropped, worst quality",

@@ -1,5 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import ProcessPoolExecutor
+import asyncio
+import threading
 from discord_tron_master.classes.app_config import AppConfig
 import logging
 config = AppConfig()
@@ -8,6 +8,19 @@ logger.setLevel('INFO')
 import openai
 from openai import OpenAI
 openai.api_key = config.get_openai_api_key()
+
+_OPENAI_SEMAPHORES = {}
+_OPENAI_SEMAPHORE_LOCK = threading.Lock()
+
+
+def _get_openai_semaphore(limit: int) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    with _OPENAI_SEMAPHORE_LOCK:
+        entry = _OPENAI_SEMAPHORES.get(loop)
+        if entry is None or entry[0] != limit:
+            entry = (limit, asyncio.Semaphore(limit))
+            _OPENAI_SEMAPHORES[loop] = entry
+        return entry[1]
 
 class GPT:
     def __init__(self):
@@ -185,11 +198,9 @@ class GPT:
             {"role": "user", "content": prompt},
         ]
 
-        with ProcessPoolExecutor(max_workers=self.concurrent_requests) as executor:
-            futures = [executor.submit(self.send_request, message_log) for _ in range(1)]
-            responses = [future.result() for future in as_completed(futures)]
-
-        response = responses[0]
+        semaphore = _get_openai_semaphore(self.concurrent_requests)
+        async with semaphore:
+            response = await asyncio.to_thread(self.send_request, message_log)
 
         for choice in response.choices:
             if "text" in choice:

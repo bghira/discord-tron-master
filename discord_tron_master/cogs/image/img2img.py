@@ -29,6 +29,15 @@ class Img2img(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
+    def _get_conversation_owner(self, message):
+        if not self.config.get_user_setting(message.author.id, "group_chat"):
+            return message.author.id
+        if message.guild is None:
+            return message.author.id
+        if isinstance(message.channel, discord.Thread):
+            return message.author.id
+        return message.channel.id
+
     @commands.Cog.listener()
     async def on_message(self, message):
         self.config.reload_config()
@@ -118,12 +127,13 @@ class Img2img(commands.Cog):
 
             app = AppConfig.flask
             with app.app_context():
+                conversation_owner = self._get_conversation_owner(message)
                 user_conversation = Conversations.create(
-                    message.author.id,
+                    conversation_owner,
                     self.config.get_user_setting(message.author.id, "gpt_role"),
                     Conversations.get_new_history(),
                 )
-                chat_ml = ChatML(user_conversation)
+                chat_ml = ChatML(user_conversation, config_user_id=message.author.id)
             await chat_ml.add_user_reply(message.content)
             response = await gpt.discord_bot_response(
                 prompt=await chat_ml.get_prompt(), ctx=message

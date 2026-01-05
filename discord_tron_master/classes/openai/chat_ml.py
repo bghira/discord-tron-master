@@ -12,11 +12,12 @@ if app is None:
     raise Exception("Flask app is not initialized.")
 
 class ChatML:
-    def __init__(self, conversation: Conversations, token_limit: int = 120000):
+    def __init__(self, conversation: Conversations, token_limit: int = 120000, config_user_id: int = None):
         self.conversations = conversation
         self.user_id = conversation.owner
         self.history = conversation.get_history(self.user_id) or Conversations.get_new_history()
-        self.user_config = config.get_user_config(self.user_id)
+        self.config_user_id = self.user_id if config_user_id is None else config_user_id
+        self.user_config = config.get_user_config(self.config_user_id)
         # Pick up their current role from their profile.
         self.role = self.user_config["gpt_role"]
         self.reply = {}
