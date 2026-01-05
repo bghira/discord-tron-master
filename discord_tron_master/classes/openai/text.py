@@ -157,15 +157,21 @@ class GPT:
     def send_request(self, message_log):
         try:
             client = OpenAI(
-                api_key=config.get_openai_api_key()
+                api_key=config.get_openai_api_key(),
+                base_url="https://api.z.ai/api/coding/paas/v4",
             )
 
             return client.chat.completions.create(
-                model="o3-mini",
+                model="glm-4.7",
                 messages=message_log,
                 max_completion_tokens=self.max_tokens,
                 # stop=[],
-                # temperature=self.temperature,
+                temperature=self.temperature,
+                extra_body={
+                    "thinking": {
+                        "type": "enabled",
+                    },
+                }
             )
         except Exception as e:
             logger.error(f"Error sending request to OpenAI: {e}")
