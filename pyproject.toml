@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "discord-tron-master"
-version = "0.1.0"
+version = "0.3.0"
 description = "The master connection hub and Discord / Flask interface for the PyTorch bot."
 authors = ["bghira <bghira@users.github.com>"]
 license = "GPL3"
