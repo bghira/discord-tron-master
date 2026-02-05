@@ -66,6 +66,7 @@ class ZorkEmulator:
         "Return ONLY the ASCII map (no markdown, no code fences).\n"
         "Keep it under 25 lines and 60 columns. Use @ for the player location.\n"
         "Use simple ASCII only: - | + . # / \\ and letters.\n"
+        "Include other player markers (A, B, C, ...) and add a Legend at the bottom.\n"
     )
 
     @classmethod
@@ -406,6 +407,21 @@ class ZorkEmulator:
         return "\n".join(lines).strip()
 
     @classmethod
+    def _assign_player_markers(cls, players: List["ZorkPlayer"], exclude_user_id: int) -> List[dict]:
+        markers = []
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        idx = 0
+        for player in players:
+            if player.user_id == exclude_user_id:
+                continue
+            if idx >= len(letters):
+                break
+            marker = letters[idx]
+            idx += 1
+            markers.append({"marker": marker, "player": player})
+        return markers
+
+    @classmethod
     def _apply_state_update(cls, state: Dict[str, object], update: Dict[str, object]) -> Dict[str, object]:
         if not isinstance(update, dict):
             return state
@@ -568,12 +584,31 @@ class ZorkEmulator:
             if not room_summary and not room_title:
                 return "No map data yet. Try `look` first."
 
+            other_players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.user_id.asc()).all()
+            marker_data = cls._assign_player_markers(other_players, ctx.author.id)
+            other_entries = []
+            for entry in marker_data:
+                other = entry["player"]
+                other_state = cls.get_player_state(other)
+                other_room = other_state.get("room_summary") or other_state.get("room_title") or other_state.get("location")
+                if not other_room:
+                    continue
+                other_entries.append(
+                    {
+                        "marker": entry["marker"],
+                        "user_id": other.user_id,
+                        "room": other_room,
+                        "party_status": other_state.get("party_status"),
+                    }
+                )
+
             map_prompt = (
                 f"CAMPAIGN: {campaign.name}\n"
                 f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
                 f"WORLD_SUMMARY: {cls._trim_text(campaign.summary or '', 1200)}\n"
+                f"OTHER_PLAYERS: {cls._dump_json(other_entries)}\n"
                 "Draw a compact map with @ marking the player's location.\n"
             )
             gpt = GPT()

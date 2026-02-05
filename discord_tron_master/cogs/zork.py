@@ -367,4 +367,7 @@ class Zork(commands.Cog):
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
         ascii_map = await ZorkEmulator.generate_map(ctx, command_prefix=self._prefix())
-        await DiscordBot.send_large_message(ctx, ascii_map)
+        if ascii_map.startswith("```") and ascii_map.endswith("```"):
+            await DiscordBot.send_large_message(ctx, ascii_map)
+            return
+        await DiscordBot.send_large_message(ctx, f"```\n{ascii_map}\n```")
