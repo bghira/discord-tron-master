@@ -225,7 +225,7 @@ class Zork(commands.Cog):
             campaign = ZorkCampaign.query.get(channel.active_campaign_id)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(ctx.guild.id, "main", ctx.author.id)
-            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id)
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
 
             if not args:
                 attrs = ZorkEmulator.get_player_attributes(player)
@@ -282,7 +282,7 @@ class Zork(commands.Cog):
             campaign = ZorkCampaign.query.get(channel.active_campaign_id)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(ctx.guild.id, "main", ctx.author.id)
-            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id)
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
             attrs = ZorkEmulator.get_player_attributes(player)
             total_points = ZorkEmulator.total_points_for_level(player.level)
             spent = ZorkEmulator.points_spent(attrs)
@@ -314,7 +314,7 @@ class Zork(commands.Cog):
             campaign = ZorkCampaign.query.get(channel.active_campaign_id)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(ctx.guild.id, "main", ctx.author.id)
-            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id)
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
             ok, message = ZorkEmulator.level_up(player)
             await ctx.send(message)
 

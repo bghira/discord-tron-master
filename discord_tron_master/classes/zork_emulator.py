@@ -68,6 +68,61 @@ class ZorkEmulator:
         "Use simple ASCII only: - | + . # / \\ and letters.\n"
         "Include other player markers (A, B, C, ...) and add a Legend at the bottom.\n"
     )
+    PRESET_ALIASES = {
+        "alice": "alice",
+        "alice in wonderland": "alice",
+        "alice-wonderland": "alice",
+    }
+    PRESET_CAMPAIGNS = {
+        "alice": {
+            "summary": (
+                "Alice dozes on a riverbank; a White Rabbit with a waistcoat hurries past. "
+                "She follows into a rabbit hole, landing in a long hall of doors. "
+                "A tiny key and a bottle labeled DRINK ME lead to size changes. "
+                "A pool of tears forms; a caucus race follows; the Duchess's house, "
+                "the Mad Tea Party, the Queen's croquet ground, and the court of cards await."
+            ),
+            "state": {
+                "setting": "Alice in Wonderland",
+                "tone": "whimsical, dreamlike, slightly menacing",
+                "landmarks": [
+                    "riverbank",
+                    "rabbit hole",
+                    "hall of doors",
+                    "garden",
+                    "pool of tears",
+                    "caucus shore",
+                    "duchess house",
+                    "mad tea party",
+                    "croquet ground",
+                    "court of cards",
+                ],
+                "main_party_location": "hall of doors",
+                "start_room": {
+                    "room_title": "A Riverbank, Afternoon",
+                    "room_summary": "A sunny riverbank where Alice grows drowsy as a White Rabbit hurries past.",
+                    "room_description": (
+                        "You are on a grassy riverbank beside a slow, glittering stream. "
+                        "The day is warm and lazy, the air humming with insects. "
+                        "A book without pictures lies nearby. "
+                        "In the corner of your eye, a White Rabbit in a waistcoat scurries past, "
+                        "muttering about being late."
+                    ),
+                    "exits": ["follow the white rabbit", "stroll along the riverbank"],
+                    "location": "riverbank",
+                },
+            },
+            "last_narration": (
+                "A Riverbank, Afternoon\n"
+                "You are on a grassy riverbank beside a slow, glittering stream. "
+                "The day is warm and lazy, the air humming with insects. "
+                "A book without pictures lies nearby. "
+                "In the corner of your eye, a White Rabbit in a waistcoat scurries past, "
+                "muttering about being late.\n"
+                "Exits: follow the white rabbit, stroll along the riverbank"
+            ),
+        }
+    }
 
     @classmethod
     def _get_lock(cls, campaign_id: int) -> asyncio.Lock:
@@ -101,6 +156,13 @@ class ZorkEmulator:
         name = re.sub(r"[^a-zA-Z0-9 _-]", "", name)
         normalized = name.lower()[:64]
         return normalized if normalized else "main"
+
+    @classmethod
+    def _get_preset_campaign(cls, normalized_name: str) -> Optional[dict]:
+        key = cls.PRESET_ALIASES.get(normalized_name)
+        if not key:
+            return None
+        return cls.PRESET_CAMPAIGNS.get(key)
 
     @classmethod
     def _trim_text(cls, text: str, max_chars: int) -> str:
@@ -198,6 +260,16 @@ class ZorkEmulator:
             )
             db.session.add(campaign)
             db.session.commit()
+        preset = cls._get_preset_campaign(normalized)
+        if preset:
+            is_empty_summary = not (campaign.summary or "").strip()
+            is_empty_state = cls._load_json(campaign.state_json, {}) == {}
+            if is_empty_summary and is_empty_state:
+                campaign.summary = preset.get("summary", "") or ""
+                campaign.state_json = cls._dump_json(preset.get("state", {}) or {})
+                campaign.last_narration = preset.get("last_narration")
+                campaign.updated = db.func.now()
+                db.session.commit()
         return campaign
 
     @classmethod
@@ -253,16 +325,27 @@ class ZorkEmulator:
         return campaign, True, None
 
     @classmethod
-    def get_or_create_player(cls, campaign_id: int, user_id: int) -> ZorkPlayer:
+    def get_or_create_player(
+        cls,
+        campaign_id: int,
+        user_id: int,
+        campaign: Optional[ZorkCampaign] = None,
+    ) -> ZorkPlayer:
         player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
         if player is None:
+            player_state = {}
+            if campaign is not None:
+                campaign_state = cls.get_campaign_state(campaign)
+                start_room = campaign_state.get("start_room")
+                if isinstance(start_room, dict):
+                    player_state.update(start_room)
             player = ZorkPlayer(
                 campaign_id=campaign_id,
                 user_id=user_id,
                 level=1,
                 xp=0,
                 attributes_json="{}",
-                state_json="{}",
+                state_json=cls._dump_json(player_state),
             )
             db.session.add(player)
             db.session.commit()
@@ -455,7 +538,7 @@ class ZorkEmulator:
         async with lock:
             with app.app_context():
                 campaign = ZorkCampaign.query.get(campaign_id)
-                player = cls.get_or_create_player(campaign_id, ctx.author.id)
+                player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
                 player.last_active = db.func.now()
                 player.updated = db.func.now()
                 db.session.commit()
@@ -575,7 +658,7 @@ class ZorkEmulator:
 
         with app.app_context():
             campaign = ZorkCampaign.query.get(campaign_id)
-            player = cls.get_or_create_player(campaign_id, ctx.author.id)
+            player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
             player_state = cls.get_player_state(player)
             room_summary = player_state.get("room_summary")
             room_title = player_state.get("room_title")
