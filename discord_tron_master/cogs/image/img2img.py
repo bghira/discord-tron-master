@@ -16,6 +16,7 @@ from discord_tron_master.classes.jobs.image_generation_job import ImageGeneratio
 from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJob
 from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
+from discord_tron_master.classes.zork_emulator import ZorkEmulator
 
 # For queue manager, etc.
 discord_wrapper = DiscordBot.get_instance()
@@ -52,6 +53,13 @@ class Img2img(commands.Cog):
             await self._clear_previous_simpletuner_messages(message)
 
             return
+
+        if message.guild is not None:
+            app = AppConfig.get_flask()
+            if app is not None:
+                with app.app_context():
+                    if ZorkEmulator.is_channel_enabled(message.guild.id, message.channel.id):
+                        return
 
         if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
             await self._handle_thread_message(message)
