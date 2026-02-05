@@ -25,18 +25,27 @@ class ZorkEmulator:
     MAX_NARRATION_CHARS = 3500
     XP_BASE = 100
     XP_PER_LEVEL = 50
-    MODEL_STATE_EXCLUDE_KEYS = {"room_description", "last_narration"}
-    PLAYER_STATE_EXCLUDE_KEYS = {"inventory"}
+    ROOM_STATE_KEYS = {
+        "room_title",
+        "room_description",
+        "room_summary",
+        "exits",
+        "location",
+        "room_id",
+    }
+    MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {"last_narration"}
+    PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description"}
 
     _locks: Dict[int, asyncio.Lock] = {}
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
         "You describe outcomes in second person, terse but vivid. You track rooms, "
-        "objects, exits, and consequences. You never break character.\n\n"
+        "objects, exits, and consequences. Each player is a distinct character and "
+        "may be in a different location or timeline than other players. You never break character.\n\n"
         "Return ONLY valid JSON with these keys:\n"
         "- narration: string (what the player sees)\n"
-        "- state_update: object (world state patches, include room_title and room_description when location changes)\n"
+        "- state_update: object (world state patches)\n"
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n\n"
@@ -44,11 +53,19 @@ class ZorkEmulator:
         "- No markdown or code fences.\n"
         "- Keep narration under 1800 characters.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
-        "- Use state_update.room_description for a full room description only when location changes.\n"
-        "- Use state_update.room_summary for a short one-line room summary for future context.\n"
-        "- Use state_update.exits as a short list of exits if applicable.\n"
+        "- Use player_state_update for player-specific location and status.\n"
+        "- Use player_state_update.room_description for a full room description only when location changes.\n"
+        "- Use player_state_update.room_summary for a short one-line room summary for future context.\n"
+        "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
+        "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
+    )
+    MAP_SYSTEM_PROMPT = (
+        "You draw compact ASCII maps for text adventures.\n"
+        "Return ONLY the ASCII map (no markdown, no code fences).\n"
+        "Keep it under 25 lines and 60 columns. Use @ for the player location.\n"
+        "Use simple ASCII only: - | + . # / \\ and letters.\n"
     )
 
     @classmethod
@@ -102,6 +119,21 @@ class ZorkEmulator:
                 continue
             model_state[key] = value
         return model_state
+
+    @classmethod
+    def _split_room_state(
+        cls,
+        state_update: Dict[str, object],
+        player_state_update: Dict[str, object],
+    ) -> Tuple[Dict[str, object], Dict[str, object]]:
+        if not isinstance(state_update, dict):
+            state_update = {}
+        if not isinstance(player_state_update, dict):
+            player_state_update = {}
+        for key in cls.ROOM_STATE_KEYS:
+            if key in state_update and key not in player_state_update:
+                player_state_update[key] = state_update.pop(key)
+        return state_update, player_state_update
 
     @classmethod
     def _build_player_state_for_prompt(cls, player_state: Dict[str, object]) -> Dict[str, object]:
@@ -363,6 +395,17 @@ class ZorkEmulator:
         return text[start:end + 1]
 
     @classmethod
+    def _extract_ascii_map(cls, text: str) -> str:
+        if not text:
+            return ""
+        lines = []
+        for line in text.splitlines():
+            if "```" in line:
+                continue
+            lines.append(line.rstrip())
+        return "\n".join(lines).strip()
+
+    @classmethod
     def _apply_state_update(cls, state: Dict[str, object], update: Dict[str, object]) -> Dict[str, object]:
         if not isinstance(update, dict):
             return state
@@ -404,10 +447,12 @@ class ZorkEmulator:
                 state = cls.get_campaign_state(campaign)
                 player_state = cls.get_player_state(player)
                 action_clean = action.strip().lower()
-                if action_clean in ("look", "l") and state.get("room_description"):
-                    title = state.get("room_title", "Unknown")
-                    desc = state.get("room_description", "")
-                    exits = state.get("exits")
+                if action_clean in ("look", "l") and (
+                    player_state.get("room_description") or state.get("room_description")
+                ):
+                    title = player_state.get("room_title") or state.get("room_title", "Unknown")
+                    desc = player_state.get("room_description") or state.get("room_description", "")
+                    exits = player_state.get("exits") or state.get("exits")
                     exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
                     narration = f"{title}\n{desc}{exits_text}"
                     inventory_line = cls._format_inventory(player_state)
@@ -457,6 +502,10 @@ class ZorkEmulator:
 
                 narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
 
+                state_update, player_state_update = cls._split_room_state(
+                    state_update, player_state_update
+                )
+
                 campaign_state = cls.get_campaign_state(campaign)
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
                 campaign.state_json = cls._dump_json(campaign_state)
@@ -489,3 +538,52 @@ class ZorkEmulator:
                 db.session.commit()
 
                 return narration
+
+    @classmethod
+    async def generate_map(cls, ctx, command_prefix: str = "!") -> str:
+        app = AppConfig.get_flask()
+        if app is None:
+            raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
+
+        with app.app_context():
+            channel = cls.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if not channel.enabled:
+                return f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it."
+            if channel.active_campaign_id is None:
+                _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+            else:
+                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+                if campaign is None:
+                    _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+            campaign_id = campaign.id
+
+        with app.app_context():
+            campaign = ZorkCampaign.query.get(campaign_id)
+            player = cls.get_or_create_player(campaign_id, ctx.author.id)
+            player_state = cls.get_player_state(player)
+            room_summary = player_state.get("room_summary")
+            room_title = player_state.get("room_title")
+            exits = player_state.get("exits")
+
+            if not room_summary and not room_title:
+                return "No map data yet. Try `look` first."
+
+            map_prompt = (
+                f"CAMPAIGN: {campaign.name}\n"
+                f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
+                f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
+                f"PLAYER_EXITS: {exits or []}\n"
+                f"WORLD_SUMMARY: {cls._trim_text(campaign.summary or '', 1200)}\n"
+                "Draw a compact map with @ marking the player's location.\n"
+            )
+            gpt = GPT()
+            response = await gpt.turbo_completion(
+                cls.MAP_SYSTEM_PROMPT,
+                map_prompt,
+                temperature=0.2,
+                max_tokens=400,
+            )
+            ascii_map = cls._extract_ascii_map(response)
+            if not ascii_map:
+                return "Map is foggy. Try again."
+            return ascii_map

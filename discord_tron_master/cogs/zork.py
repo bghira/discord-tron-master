@@ -1,11 +1,12 @@
 from discord.ext import commands
+import datetime
 import logging
 
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.zork_emulator import ZorkEmulator
 from discord_tron_master.models.base import db
-from discord_tron_master.models.zork import ZorkCampaign
+from discord_tron_master.models.zork import ZorkCampaign, ZorkPlayer
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -124,6 +125,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
             f"- `{prefix}zork stats` view player stats\n"
             f"- `{prefix}zork level` level up if you have enough XP\n"
+            f"- `{prefix}zork map` draw an ASCII map for your location\n"
             f"- `{prefix}zork disable` disable adventure mode in this channel\n"
         )
         await DiscordBot.send_large_message(ctx, message)
@@ -315,3 +317,54 @@ class Zork(commands.Cog):
             player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id)
             ok, message = ZorkEmulator.level_up(player)
             await ctx.send(message)
+
+    @zork.command(name="where")
+    async def zork_where(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).all()
+            if not players:
+                await ctx.send("No players have joined this campaign yet.")
+                return
+            now = datetime.datetime.utcnow()
+            cutoff = now - datetime.timedelta(hours=1)
+            lines = []
+            for player in players:
+                player_state = ZorkEmulator.get_player_state(player)
+                room = (
+                    player_state.get("room_summary")
+                    or player_state.get("room_title")
+                    or player_state.get("location")
+                    or "unknown"
+                )
+                party_status = player_state.get("party_status")
+                status = "active" if player.last_active and player.last_active >= cutoff else "inactive"
+                extra = f" | party: {party_status}" if party_status else ""
+                lines.append(f"- <@{player.user_id}>: {room} ({status}{extra})")
+            await DiscordBot.send_large_message(ctx, "Locations:\n" + "\n".join(lines))
+
+    @zork.command(name="map")
+    async def zork_map(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        ascii_map = await ZorkEmulator.generate_map(ctx, command_prefix=self._prefix())
+        await DiscordBot.send_large_message(ctx, ascii_map)
