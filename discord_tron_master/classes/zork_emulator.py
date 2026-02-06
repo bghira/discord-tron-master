@@ -680,7 +680,7 @@ class ZorkEmulator:
         cfg = AppConfig()
         user_config = cfg.get_user_config(user_id=ctx.author.id)
         user_config["auto_model"] = False
-        user_config["model"] = "Tongy-MAI/Z-Image-Turbo"
+        user_config["model"] = "Tongyi-MAI/Z-Image-Turbo"
         user_config["steps"] = 8
         user_config["guidance_scaling"] = 1.0
         user_config["guidance_scale"] = 1.0
