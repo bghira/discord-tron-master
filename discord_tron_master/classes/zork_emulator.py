@@ -340,11 +340,36 @@ class ZorkEmulator:
     def _same_scene(cls, actor_state: Dict[str, object], other_state: Dict[str, object]) -> bool:
         if not isinstance(actor_state, dict) or not isinstance(other_state, dict):
             return False
-        for key in ("room_id", "location", "room_title", "room_summary"):
-            actor_value = cls._normalize_match_text(actor_state.get(key))
-            other_value = cls._normalize_match_text(other_state.get(key))
-            if actor_value and other_value and actor_value == other_value:
-                return True
+        actor_room_id = cls._normalize_match_text(actor_state.get("room_id"))
+        other_room_id = cls._normalize_match_text(other_state.get("room_id"))
+        if actor_room_id and other_room_id:
+            return actor_room_id == other_room_id
+
+        actor_location = cls._normalize_match_text(actor_state.get("location"))
+        other_location = cls._normalize_match_text(other_state.get("location"))
+        actor_title = cls._normalize_match_text(actor_state.get("room_title"))
+        other_title = cls._normalize_match_text(other_state.get("room_title"))
+        actor_summary = cls._normalize_match_text(actor_state.get("room_summary"))
+        other_summary = cls._normalize_match_text(other_state.get("room_summary"))
+
+        # Prefer location as primary key, but require at least one confirming room field
+        # when those fields are present to avoid false positives.
+        if actor_location and other_location and actor_location == other_location:
+            title_known = bool(actor_title and other_title)
+            summary_known = bool(actor_summary and other_summary)
+            title_match = title_known and actor_title == other_title
+            summary_match = summary_known and actor_summary == other_summary
+            if title_known or summary_known:
+                return title_match or summary_match
+            return True
+
+        # Fallback path only when location is unavailable on both sides.
+        if (not actor_location and not other_location) and actor_title and other_title:
+            if actor_title != other_title:
+                return False
+            if actor_summary and other_summary:
+                return actor_summary == other_summary
+            return False
         return False
 
     @classmethod
@@ -414,7 +439,9 @@ class ZorkEmulator:
             name = str(entry.get("name") or "").strip()
             if not name:
                 continue
-            if name.lower() not in prompt_l:
+            name_l = name.lower()
+            name_pattern = re.escape(name_l).replace(r"\ ", r"\s+")
+            if not re.search(rf"(?<![a-z0-9]){name_pattern}(?![a-z0-9])", prompt_l):
                 missing.append(name)
         return missing
 
@@ -430,6 +457,7 @@ class ZorkEmulator:
         prompt = scene_prompt.strip()
         if not prompt:
             return ""
+        pending_prefixes = []
 
         room_bits = []
         room_title = str(player_state.get("room_title") or "").strip()
@@ -442,7 +470,7 @@ class ZorkEmulator:
         if room_clause:
             room_clause_l = room_clause.lower()
             if room_clause_l not in prompt.lower():
-                prompt = f"{prompt} Location: {room_clause}."
+                pending_prefixes.append(f"Location: {room_clause}.")
 
         missing_names = cls._missing_scene_names(prompt, party_snapshot)
         if missing_names:
@@ -468,10 +496,22 @@ class ZorkEmulator:
                 else:
                     cast_fragments.append(name)
             if cast_fragments:
-                prompt = f"{prompt} Characters: {'; '.join(cast_fragments)}."
+                pending_prefixes.append(f"Characters: {'; '.join(cast_fragments)}.")
 
+        if pending_prefixes:
+            prompt = f"{' '.join(pending_prefixes)} {prompt}".strip()
         prompt = re.sub(r"\s+", " ", prompt).strip()
-        return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
+        if len(prompt) > cls.MAX_SCENE_PROMPT_CHARS:
+            prompt = prompt[: cls.MAX_SCENE_PROMPT_CHARS].strip()
+            missing_after_trim = cls._missing_scene_names(prompt, party_snapshot)
+            if missing_after_trim:
+                cast_prefix = f"Characters: {', '.join(missing_after_trim)}. "
+                remaining = cls.MAX_SCENE_PROMPT_CHARS - len(cast_prefix)
+                if remaining > 24:
+                    prompt = (cast_prefix + prompt[:remaining]).strip()
+                else:
+                    prompt = cast_prefix[: cls.MAX_SCENE_PROMPT_CHARS].strip()
+        return prompt
 
     @classmethod
     def _format_inventory(cls, player_state: Dict[str, object]) -> Optional[str]:
