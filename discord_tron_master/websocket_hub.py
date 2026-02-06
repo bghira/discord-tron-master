@@ -25,6 +25,7 @@ class WebSocketHub:
 
     async def handler(self, websocket, path):
         logging.debug(f"Hitting WebSocket Handler..")
+        worker_id = None
         access_token = websocket.request_headers.get("Authorization")
         token_type, access_token = access_token.split(' ', 1)
         if token_type.lower() != "bearer":
@@ -79,13 +80,19 @@ class WebSocketHub:
         finally:
             # Remove the client from the set of clients
             logging.info(f"Removing worker {worker_id} from connected clients")
-            self.connected_clients.remove(websocket)
+            self.connected_clients.discard(websocket)
             # Check if the worker is registered, and if so, unregister it
             if worker_id:
-                logging.warn("Removing worker from the QueueManager")
-                await self.queue_manager.unregister_worker(worker_id)
-                logging.warn("Removing worker from the WorkerManager")
-                await self.worker_manager.unregister_worker(worker_id)
+                try:
+                    logging.warn("Removing worker from the QueueManager")
+                    await self.queue_manager.unregister_worker(worker_id)
+                except Exception as e:
+                    logging.error(f"Error unregistering worker {worker_id} from QueueManager: {e}")
+                try:
+                    logging.warn("Removing worker from the WorkerManager")
+                    await self.worker_manager.unregister_worker(worker_id)
+                except Exception as e:
+                    logging.error(f"Error unregistering worker {worker_id} from WorkerManager: {e}")
         await asyncio.sleep(5)
 
 

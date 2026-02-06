@@ -22,6 +22,8 @@ class Worker:
         self.worker_thread = None
         self.monitor_thread = None
         self.worker_task = None
+        self.monitor_task = None
+        self.ack_task = None
         # Jobs to assign
         self.job_queue = None
         # Jobs we have assigned (by job type)
@@ -141,11 +143,27 @@ class Worker:
 
     async def stop(self):
         self.terminate = True
-        await self.job_queue.stop()
-        await self.ack_task.stop()
-        await self.monitor_task.stop()
-        await self.worker_task.stop()
-        await self.websocket.close(code=4002, reason="Worker is stopping due to deregistration request.")
+        if self.job_queue is not None:
+            await self.job_queue.stop()
+
+        tasks = [self.ack_task, self.monitor_task, self.worker_task]
+        for task in tasks:
+            if task is None:
+                continue
+            if task.done():
+                continue
+            task.cancel()
+
+        pending_tasks = [task for task in tasks if task is not None]
+        if pending_tasks:
+            # Gather with return_exceptions to avoid bubbling cancellation noise into unregister.
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        if self.websocket is not None:
+            try:
+                await self.websocket.close(code=4002, reason="Worker is stopping due to deregistration request.")
+            except Exception as e:
+                logger.warning(f"Failed closing worker websocket for {self.worker_id}: {e}")
 
     async def process_jobs(self):
         logger.debug(f"(Worker.process_jobs) Begin function.")

@@ -145,8 +145,10 @@ class WorkerManager:
             for job_type in supported_job_types:
                 # Remove worker from the list of workers_by_capability
                 self.workers_by_capability[job_type] = [w for w in self.workers_by_capability[job_type] if w.worker_id != worker_id]
-                
-            await worker.stop()
+            try:
+                await worker.stop()
+            except Exception as e:
+                logger.warning(f"Error while stopping worker {worker_id}: {e}")
         logger.info(f"After unregistering worker, we are left with: {self.workers} and {self.workers_by_capability}")
 
 
@@ -213,8 +215,6 @@ class WorkerManager:
         except KeyError:
             logger.error("Worker ID not provided in payload")
             return {"error": "Worker ID not provided in payload"}
-        worker = self.workers.get(worker_id)
-        worker.stop()
         await self.unregister_worker(worker_id)
         await self.queue_manager.unregister_worker(worker_id)
         logger.info("Successfully unregistered worker from queue manager.")
