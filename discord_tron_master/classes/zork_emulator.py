@@ -63,6 +63,7 @@ class ZorkEmulator:
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
+        "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
     )
     MAP_SYSTEM_PROMPT = (
@@ -290,6 +291,19 @@ class ZorkEmulator:
         else:
             inv_text = str(inventory)
         return f"Inventory: {inv_text}"
+
+    @classmethod
+    def _strip_inventory_from_narration(cls, narration: str) -> str:
+        if not narration:
+            return ""
+        # Drop any model-authored inventory line(s); we append canonical inventory later.
+        kept_lines = []
+        for line in narration.splitlines():
+            if line.strip().lower().startswith("inventory:"):
+                continue
+            kept_lines.append(line)
+        cleaned = "\n".join(kept_lines).strip()
+        return cleaned
 
     @classmethod
     def total_points_for_level(cls, level: int) -> int:
@@ -676,6 +690,7 @@ class ZorkEmulator:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                    narration = cls._strip_inventory_from_narration(narration)
 
                     state_update, player_state_update = cls._split_room_state(
                         state_update, player_state_update
@@ -700,9 +715,11 @@ class ZorkEmulator:
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
 
-                    inventory_line = cls._format_inventory(player_state)
-                    if inventory_line and "Inventory:" not in narration:
+                    inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
+                    if narration:
                         narration = f"{narration}\n\n{inventory_line}"
+                    else:
+                        narration = inventory_line
 
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
