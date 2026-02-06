@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import discord
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
+from discord_tron_master.bot import DiscordBot
 from discord_tron_master.models.base import db
 from discord_tron_master.models.zork import ZorkCampaign, ZorkChannel, ZorkPlayer, ZorkTurn
 
@@ -57,6 +58,7 @@ class ZorkEmulator:
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n\n"
+        "- scene_image_prompt: string (optional; include only when scene/location changes and a fresh image should be rendered)\n\n"
         "Rules:\n"
         "- No markdown or code fences.\n"
         "- Keep narration under 1800 characters.\n"
@@ -73,6 +75,7 @@ class ZorkEmulator:
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
+        "- scene_image_prompt should describe the visible scene, not inventory lists.\n"
     )
     MAP_SYSTEM_PROMPT = (
         "You draw compact ASCII maps for text adventures.\n"
@@ -655,6 +658,43 @@ class ZorkEmulator:
         return f"Existing campaigns: {sample}"
 
     @classmethod
+    def _gpu_worker_available(cls) -> bool:
+        discord_wrapper = DiscordBot.get_instance()
+        if discord_wrapper is None or discord_wrapper.worker_manager is None:
+            return False
+        worker = discord_wrapper.worker_manager.find_first_worker("gpu")
+        return worker is not None
+
+    @classmethod
+    async def _enqueue_scene_image(cls, ctx, scene_image_prompt: str):
+        if not scene_image_prompt:
+            return
+        if not cls._gpu_worker_available():
+            return
+        discord_wrapper = DiscordBot.get_instance()
+        if discord_wrapper is None or discord_wrapper.bot is None:
+            return
+        generator = discord_wrapper.bot.get_cog("Generate")
+        if generator is None:
+            return
+        cfg = AppConfig()
+        user_config = cfg.get_user_config(user_id=ctx.author.id)
+        user_config["auto_model"] = False
+        user_config["model"] = "Tongy-MAI/Z-Image-Turbo"
+        user_config["steps"] = 8
+        user_config["guidance_scaling"] = 1.0
+        user_config["guidance_scale"] = 1.0
+        try:
+            await generator.generate_from_user_config(
+                ctx=ctx,
+                user_config=user_config,
+                user_id=ctx.author.id,
+                prompt=scene_image_prompt,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue scene image prompt: {e}")
+
+    @classmethod
     def get_player_attributes(cls, player: ZorkPlayer) -> Dict[str, int]:
         data = cls._load_json(player.attributes_json, {})
         return data if isinstance(data, dict) else {}
@@ -972,6 +1012,7 @@ class ZorkEmulator:
                     summary_update = None
                     xp_awarded = 0
                     player_state_update = {}
+                    scene_image_prompt = None
 
                     json_text = cls._extract_json(response)
                     if json_text:
@@ -982,6 +1023,7 @@ class ZorkEmulator:
                             summary_update = payload.get("summary_update")
                             xp_awarded = payload.get("xp_awarded", 0) or 0
                             player_state_update = payload.get("player_state_update", {}) or {}
+                            scene_image_prompt = payload.get("scene_image_prompt")
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
@@ -1033,6 +1075,11 @@ class ZorkEmulator:
                     db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
                     db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
                     db.session.commit()
+
+                    if isinstance(scene_image_prompt, str):
+                        cleaned_scene_prompt = scene_image_prompt.strip()
+                        if cleaned_scene_prompt:
+                            await cls._enqueue_scene_image(ctx, cleaned_scene_prompt)
 
                     return narration
         finally:
