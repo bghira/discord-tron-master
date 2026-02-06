@@ -26,6 +26,9 @@ class ZorkEmulator:
     MAX_RECENT_TURNS = 12
     MAX_TURN_CHARS = 1200
     MAX_NARRATION_CHARS = 3500
+    MAX_PARTY_CONTEXT_PLAYERS = 6
+    MAX_SCENE_PROMPT_CHARS = 900
+    MAX_PERSONA_PROMPT_CHARS = 140
     XP_BASE = 100
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 2
@@ -76,6 +79,10 @@ class ZorkEmulator:
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
         "- scene_image_prompt should describe the visible scene, not inventory lists.\n"
+        "- When you output scene_image_prompt, it MUST be specific: include the room/location name and named characters from PARTY_SNAPSHOT (never generic 'group of adventurers').\n"
+        "- Use PARTY_SNAPSHOT persona/attributes to describe each visible character's look/pose/style cues.\n"
+        "- Include at least one concrete prop or action beat tied to the acting player.\n"
+        "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
     )
     MAP_SYSTEM_PROMPT = (
         "You draw compact ASCII maps for text adventures.\n"
@@ -320,6 +327,151 @@ class ZorkEmulator:
                 continue
             model_state[key] = value
         return model_state
+
+    @classmethod
+    def _normalize_match_text(cls, value: object) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().lower()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    @classmethod
+    def _same_scene(cls, actor_state: Dict[str, object], other_state: Dict[str, object]) -> bool:
+        if not isinstance(actor_state, dict) or not isinstance(other_state, dict):
+            return False
+        for key in ("room_id", "location", "room_title", "room_summary"):
+            actor_value = cls._normalize_match_text(actor_state.get(key))
+            other_value = cls._normalize_match_text(other_state.get(key))
+            if actor_value and other_value and actor_value == other_value:
+                return True
+        return False
+
+    @classmethod
+    def _build_attribute_cues(cls, attributes: Dict[str, int]) -> List[str]:
+        if not isinstance(attributes, dict):
+            return []
+        ranked = []
+        for key, value in attributes.items():
+            if isinstance(value, int):
+                ranked.append((str(key), value))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        cues = []
+        for key, value in ranked[:2]:
+            cues.append(f"{key} {value}")
+        return cues
+
+    @classmethod
+    def _build_party_snapshot_for_prompt(
+        cls,
+        campaign: ZorkCampaign,
+        actor: ZorkPlayer,
+        actor_state: Dict[str, object],
+    ) -> List[Dict[str, object]]:
+        out = []
+        players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.last_active.desc()).all()
+        for entry in players:
+            state = cls.get_player_state(entry)
+            if entry.user_id != actor.user_id and not cls._same_scene(actor_state, state):
+                continue
+            fallback_name = f"Adventurer-{str(entry.user_id)[-4:]}"
+            display_name = str(state.get("character_name") or fallback_name).strip()
+            persona = str(state.get("persona") or "").strip()
+            if persona:
+                persona = cls._trim_text(persona, cls.MAX_PERSONA_PROMPT_CHARS)
+                persona = " ".join(persona.split()[:18])
+            attributes = cls.get_player_attributes(entry)
+            attribute_cues = cls._build_attribute_cues(attributes)
+            visible_items = []
+            if entry.user_id == actor.user_id:
+                visible_items = cls._normalize_inventory_items(state.get("inventory"))[:3]
+            out.append(
+                {
+                    "user_id": entry.user_id,
+                    "name": display_name,
+                    "is_actor": entry.user_id == actor.user_id,
+                    "level": entry.level,
+                    "persona": persona,
+                    "attribute_cues": attribute_cues,
+                    "location": state.get("location"),
+                    "room_title": state.get("room_title"),
+                    "visible_items": visible_items,
+                }
+            )
+            if len(out) >= cls.MAX_PARTY_CONTEXT_PLAYERS:
+                break
+        return out
+
+    @classmethod
+    def _missing_scene_names(
+        cls,
+        scene_prompt: str,
+        party_snapshot: List[Dict[str, object]],
+    ) -> List[str]:
+        prompt_l = (scene_prompt or "").lower()
+        missing = []
+        for entry in party_snapshot:
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            if name.lower() not in prompt_l:
+                missing.append(name)
+        return missing
+
+    @classmethod
+    def _enrich_scene_image_prompt(
+        cls,
+        scene_prompt: str,
+        player_state: Dict[str, object],
+        party_snapshot: List[Dict[str, object]],
+    ) -> str:
+        if not isinstance(scene_prompt, str):
+            return ""
+        prompt = scene_prompt.strip()
+        if not prompt:
+            return ""
+
+        room_bits = []
+        room_title = str(player_state.get("room_title") or "").strip()
+        location = str(player_state.get("location") or "").strip()
+        if room_title:
+            room_bits.append(room_title)
+        if location and cls._normalize_match_text(location) != cls._normalize_match_text(room_title):
+            room_bits.append(location)
+        room_clause = ", ".join(room_bits).strip()
+        if room_clause:
+            room_clause_l = room_clause.lower()
+            if room_clause_l not in prompt.lower():
+                prompt = f"{prompt} Location: {room_clause}."
+
+        missing_names = cls._missing_scene_names(prompt, party_snapshot)
+        if missing_names:
+            cast_fragments = []
+            for entry in party_snapshot:
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    continue
+                if name not in missing_names:
+                    continue
+                tags = []
+                persona = str(entry.get("persona") or "").strip()
+                if persona:
+                    tags.append(persona)
+                cues = entry.get("attribute_cues") or []
+                if cues:
+                    tags.append(" / ".join([str(cue) for cue in cues[:2]]))
+                items = entry.get("visible_items") or []
+                if items:
+                    tags.append("carrying " + ", ".join([str(item) for item in items[:2]]))
+                if tags:
+                    cast_fragments.append(f"{name} ({'; '.join(tags)})")
+                else:
+                    cast_fragments.append(name)
+            if cast_fragments:
+                prompt = f"{prompt} Characters: {'; '.join(cast_fragments)}."
+
+        prompt = re.sub(r"\s+", " ", prompt).strip()
+        return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
 
     @classmethod
     def _format_inventory(cls, player_state: Dict[str, object]) -> Optional[str]:
@@ -760,6 +912,7 @@ class ZorkEmulator:
         player: ZorkPlayer,
         action: str,
         turns: List[ZorkTurn],
+        party_snapshot: Optional[List[Dict[str, object]]] = None,
     ) -> Tuple[str, str]:
         summary = cls._strip_inventory_mentions(campaign.summary or "")
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
@@ -770,6 +923,8 @@ class ZorkEmulator:
         state_text = cls._trim_text(state_text, cls.MAX_STATE_CHARS)
         attributes = cls.get_player_attributes(player)
         player_state = cls.get_player_state(player)
+        if party_snapshot is None:
+            party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
         player_state_prompt = cls._build_player_state_for_prompt(player_state)
         total_points = cls.total_points_for_level(player.level)
         spent = cls.points_spent(attributes)
@@ -797,6 +952,7 @@ class ZorkEmulator:
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {state_text}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
+            f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
             f"PLAYER_ACTION: {action}\n"
         )
@@ -1006,7 +1162,14 @@ class ZorkEmulator:
                         return narration
 
                     turns = cls.get_recent_turns(campaign.id, user_id=ctx.author.id)
-                    system_prompt, user_prompt = cls.build_prompt(campaign, player, action, turns)
+                    party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
+                    system_prompt, user_prompt = cls.build_prompt(
+                        campaign,
+                        player,
+                        action,
+                        turns,
+                        party_snapshot=party_snapshot,
+                    )
                     gpt = GPT()
                     response = await gpt.turbo_completion(system_prompt, user_prompt, temperature=0.8, max_tokens=900)
                     if not response:
@@ -1082,7 +1245,12 @@ class ZorkEmulator:
                     db.session.commit()
 
                     if isinstance(scene_image_prompt, str):
-                        cleaned_scene_prompt = scene_image_prompt.strip()
+                        refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
+                        cleaned_scene_prompt = cls._enrich_scene_image_prompt(
+                            scene_image_prompt,
+                            player_state=player_state,
+                            party_snapshot=refreshed_party_snapshot,
+                        )
                         if cleaned_scene_prompt:
                             await cls._enqueue_scene_image(ctx, cleaned_scene_prompt)
 
