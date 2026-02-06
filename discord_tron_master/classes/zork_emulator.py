@@ -328,6 +328,18 @@ class ZorkEmulator:
 
     @classmethod
     def _normalize_inventory_items(cls, value) -> List[str]:
+        def _item_to_text(item) -> str:
+            if isinstance(item, dict):
+                # Prefer stable user-facing names when model emits structured objects.
+                if "name" in item and item.get("name") is not None:
+                    return str(item.get("name")).strip()
+                if "item" in item and item.get("item") is not None:
+                    return str(item.get("item")).strip()
+                if "title" in item and item.get("title") is not None:
+                    return str(item.get("title")).strip()
+                return ""
+            return str(item).strip()
+
         if value is None:
             return []
         if isinstance(value, str):
@@ -337,7 +349,7 @@ class ZorkEmulator:
         cleaned = []
         seen = set()
         for item in value:
-            item_text = str(item).strip()
+            item_text = _item_to_text(item)
             if not item_text:
                 continue
             norm = item_text.lower()
