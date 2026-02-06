@@ -40,6 +40,7 @@ class ZorkEmulator:
     _locks: Dict[int, asyncio.Lock] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
+    PROCESSING_EMOJI = "🤔"
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
@@ -161,6 +162,43 @@ class ZorkEmulator:
                 await ctx.message.delete()
         except Exception:
             # Ignore message delete failures (perms/race).
+            return
+
+    @classmethod
+    def _get_context_message(cls, ctx):
+        if hasattr(ctx, "message"):
+            return ctx.message
+        if hasattr(ctx, "add_reaction"):
+            return ctx
+        return None
+
+    @classmethod
+    async def _add_processing_reaction(cls, ctx):
+        message = cls._get_context_message(ctx)
+        if message is None:
+            return False
+        try:
+            await message.add_reaction(cls.PROCESSING_EMOJI)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    async def _remove_processing_reaction(cls, ctx):
+        message = cls._get_context_message(ctx)
+        if message is None:
+            return
+        try:
+            bot_user = None
+            if hasattr(message, "guild") and message.guild is not None:
+                bot_user = getattr(message.guild, "me", None)
+            if bot_user is None and hasattr(ctx, "bot") and ctx.bot is not None:
+                bot_user = ctx.bot.user
+            if bot_user is None:
+                return
+            await message.remove_reaction(cls.PROCESSING_EMOJI, bot_user)
+        except Exception:
+            # Ignore reaction remove failures (missing perms/deleted message/race).
             return
 
     @staticmethod
@@ -574,6 +612,7 @@ class ZorkEmulator:
             await cls._delete_context_message(ctx)
             return None
 
+        reaction_added = await cls._add_processing_reaction(ctx)
         try:
             async with lock:
                 with app.app_context():
@@ -676,6 +715,8 @@ class ZorkEmulator:
                     return narration
         finally:
             cls._clear_inflight_turn(campaign_id, ctx.author.id)
+            if reaction_added:
+                await cls._remove_processing_reaction(ctx)
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:
