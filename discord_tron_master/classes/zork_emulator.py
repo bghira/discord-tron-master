@@ -64,7 +64,8 @@ class ZorkEmulator:
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
         "- Treat each player's inventory as private and never copy items from other players.\n"
-        "- For inventory changes, prefer player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
+        "- For inventory changes, ONLY use player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
+        "- Do not return player_state_update.inventory full lists.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
@@ -385,23 +386,37 @@ class ZorkEmulator:
         cls,
         previous_state: Dict[str, object],
         update: Dict[str, object],
+        action_text: str = "",
+        narration_text: str = "",
     ) -> Dict[str, object]:
         if not isinstance(update, dict):
             return {}
         cleaned = dict(update)
         previous_inventory = cls._normalize_inventory_items(previous_state.get("inventory"))
+        action_l = (action_text or "").lower()
+        narration_l = (narration_text or "").lower()
 
         inventory_add = cls._normalize_inventory_items(cleaned.pop("inventory_add", []))
         inventory_remove = cls._normalize_inventory_items(cleaned.pop("inventory_remove", []))
-        candidate_inventory = None
+
         if "inventory" in cleaned:
-            candidate_inventory = cls._normalize_inventory_items(cleaned.pop("inventory"))
-            # Legacy fallback: infer delta from full-list inventory if explicit delta absent.
-            if not inventory_add and not inventory_remove:
-                prev_norm = {item.lower() for item in previous_inventory}
-                cand_norm = {item.lower() for item in candidate_inventory}
-                inventory_add = [item for item in candidate_inventory if item.lower() not in prev_norm]
-                inventory_remove = [item for item in previous_inventory if item.lower() not in cand_norm]
+            cleaned.pop("inventory", None)
+            logger.warning("Ignored full inventory list in player_state_update; only delta fields are accepted.")
+
+        # Only accept inventory deltas when item names are referenced in action/narration.
+        filtered_add = []
+        for item in inventory_add:
+            item_l = item.lower()
+            if item_l in action_l or item_l in narration_l:
+                filtered_add.append(item)
+        inventory_add = filtered_add
+
+        filtered_remove = []
+        for item in inventory_remove:
+            item_l = item.lower()
+            if item_l in action_l or item_l in narration_l:
+                filtered_remove.append(item)
+        inventory_remove = filtered_remove
 
         if len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN or len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
             logger.warning(
@@ -416,8 +431,7 @@ class ZorkEmulator:
             cleaned["inventory"] = cls._apply_inventory_delta(
                 previous_inventory, inventory_add, inventory_remove
             )
-        elif candidate_inventory is not None:
-            # Candidate matched previous inventory exactly; keep as-is to avoid data loss.
+        else:
             cleaned["inventory"] = previous_inventory
 
         for key in list(cleaned.keys()):
@@ -867,7 +881,10 @@ class ZorkEmulator:
 
                     player_state = cls.get_player_state(player)
                     player_state_update = cls._sanitize_player_state_update(
-                        player_state, player_state_update
+                        player_state,
+                        player_state_update,
+                        action_text=action,
+                        narration_text=narration,
                     )
                     player_state = cls._apply_state_update(player_state, player_state_update)
                     player.state_json = cls._dump_json(player_state)
