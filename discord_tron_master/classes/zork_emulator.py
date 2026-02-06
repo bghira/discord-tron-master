@@ -548,9 +548,10 @@ class ZorkEmulator:
         guild_id: int,
         name: str,
         user_id: int,
+        enforce_activity_window: bool = True,
     ) -> Tuple[ZorkCampaign, bool, Optional[str]]:
         normalized = cls._normalize_campaign_name(name)
-        if channel.active_campaign_id is not None:
+        if enforce_activity_window and channel.active_campaign_id is not None:
             can_switch, active_count = cls.can_switch_campaign(channel.active_campaign_id, user_id)
             if not can_switch:
                 return None, False, f"{active_count} other player(s) active in last hour"

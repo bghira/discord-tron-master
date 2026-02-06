@@ -1,6 +1,7 @@
 from discord.ext import commands
 import datetime
 import logging
+import discord
 
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
@@ -165,6 +166,7 @@ class Zork(commands.Cog):
             f"Zork commands:\n"
             f"- `{prefix}zork` enable adventure mode in this channel\n"
             f"- `{prefix}zork <action>` take an action (ex: look, open door, take lamp)\n"
+            f"- `{prefix}zork thread [name]` create a dedicated Zork thread/campaign for yourself\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
@@ -247,12 +249,74 @@ class Zork(commands.Cog):
                 await ctx.send(f"Active campaign: `{campaign_name}`.")
                 return
             campaign, allowed, reason = ZorkEmulator.set_active_campaign(
-                channel, ctx.guild.id, name, ctx.author.id
+                channel,
+                ctx.guild.id,
+                name,
+                ctx.author.id,
+                enforce_activity_window=not isinstance(ctx.channel, discord.Thread),
             )
             if not allowed:
                 await ctx.send(f"Cannot switch campaigns: {reason}.")
                 return
             await ctx.send(f"Active campaign set to `{campaign.name}`.")
+
+    @zork.command(name="thread")
+    async def zork_thread(self, ctx, *, name: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        if isinstance(ctx.channel, discord.Thread):
+            with app.app_context():
+                channel, _ = ZorkEmulator.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+                campaign_name = name or f"thread-{ctx.channel.id}"
+                campaign, _, _ = ZorkEmulator.set_active_campaign(
+                    channel,
+                    ctx.guild.id,
+                    campaign_name,
+                    ctx.author.id,
+                    enforce_activity_window=False,
+                )
+            await ctx.send(
+                f"Thread mode enabled here. Active campaign: `{campaign.name}`. "
+                f"This thread is tracked independently."
+            )
+            return
+
+        thread_name = (name or f"zork-{ctx.author.display_name}").strip()
+        if not thread_name:
+            thread_name = f"zork-{ctx.author.id}"
+        thread_name = thread_name[:90]
+        try:
+            thread = await ctx.channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.public_thread,
+                auto_archive_duration=1440,
+            )
+        except Exception as e:
+            await ctx.send(f"Could not create thread: {e}")
+            return
+
+        with app.app_context():
+            channel, _ = ZorkEmulator.enable_channel(ctx.guild.id, thread.id, ctx.author.id)
+            campaign_name = f"thread-{thread.id}"
+            campaign, _, _ = ZorkEmulator.set_active_campaign(
+                channel,
+                ctx.guild.id,
+                campaign_name,
+                ctx.author.id,
+                enforce_activity_window=False,
+            )
+
+        await ctx.send(f"Created Zork thread: {thread.mention}")
+        await thread.send(
+            f"{ctx.author.mention} Thread campaign ready: `{campaign.name}`.\n"
+            f"Use `{self._prefix()}zork` or just type actions here."
+        )
 
     @zork.command(name="attributes")
     async def zork_attributes(self, ctx, *args):
