@@ -176,6 +176,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork thread [name]` create a dedicated Zork thread/campaign for yourself\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
+            f"- `{prefix}zork identity <name>` set your character name\n"
+            f"- `{prefix}zork persona <text>` set your persona and campaign default persona\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
             f"- `{prefix}zork stats` view player stats\n"
@@ -267,6 +269,94 @@ class Zork(commands.Cog):
                 await ctx.send(f"Cannot switch campaigns: {reason}.")
                 return
             await ctx.send(f"Active campaign set to `{campaign.name}`.")
+
+    @zork.command(name="identity")
+    async def zork_identity(self, ctx, *, character_name: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
+            player_state = ZorkEmulator.get_player_state(player)
+
+            if character_name is None:
+                current_name = player_state.get("character_name")
+                if current_name:
+                    await ctx.send(f"Current identity: `{current_name}`.")
+                else:
+                    await ctx.send(f"No identity set. Use `{self._prefix()}zork identity <name>`.")
+                return
+
+            character_name = character_name.strip()
+            if not character_name:
+                await ctx.send("Identity cannot be empty.")
+                return
+            character_name = character_name[:64]
+            player_state["character_name"] = character_name
+            player.state_json = ZorkEmulator._dump_json(player_state)
+            player.updated = db.func.now()
+            db.session.commit()
+            await ctx.send(f"Identity set to `{character_name}`.")
+
+    @zork.command(name="persona")
+    async def zork_persona(self, ctx, *, persona: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
+            player_state = ZorkEmulator.get_player_state(player)
+            campaign_state = ZorkEmulator.get_campaign_state(campaign)
+
+            if persona is None:
+                current_persona = player_state.get("persona")
+                default_persona = campaign_state.get("default_persona")
+                message = (
+                    f"Your persona: `{current_persona}`\n"
+                    f"Campaign default persona: `{default_persona}`"
+                )
+                await DiscordBot.send_large_message(ctx, message)
+                return
+
+            persona = persona.strip()
+            if not persona:
+                await ctx.send("Persona cannot be empty.")
+                return
+            persona = persona[:400]
+            player_state["persona"] = persona
+            player.state_json = ZorkEmulator._dump_json(player_state)
+            player.updated = db.func.now()
+
+            campaign_state["default_persona"] = persona
+            campaign.state_json = ZorkEmulator._dump_json(campaign_state)
+            campaign.updated = db.func.now()
+
+            db.session.commit()
+            await ctx.send("Persona updated. Campaign default persona updated too.")
 
     @zork.command(name="thread")
     async def zork_thread(self, ctx, *, name: str = None):

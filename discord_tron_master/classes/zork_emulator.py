@@ -6,6 +6,7 @@ import re
 import threading
 from typing import Dict, List, Optional, Tuple
 
+import discord
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.models.base import db
@@ -42,6 +43,8 @@ class ZorkEmulator:
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
     PROCESSING_EMOJI = "🤔"
+    MAIN_PARTY_TOKEN = "main party"
+    NEW_PATH_TOKEN = "new path"
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
@@ -66,6 +69,7 @@ class ZorkEmulator:
         "- Treat each player's inventory as private and never copy items from other players.\n"
         "- For inventory changes, ONLY use player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
         "- Do not return player_state_update.inventory full lists.\n"
+        "- When a player must pick a path, accept only exact responses: 'main party' or 'new path'.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
@@ -590,6 +594,9 @@ class ZorkEmulator:
                 start_room = campaign_state.get("start_room")
                 if isinstance(start_room, dict):
                     player_state.update(start_room)
+                default_persona = campaign_state.get("default_persona")
+                if default_persona:
+                    player_state["persona"] = str(default_persona).strip()
             player = ZorkPlayer(
                 campaign_id=campaign_id,
                 user_id=user_id,
@@ -616,6 +623,36 @@ class ZorkEmulator:
             query = query.filter_by(user_id=user_id, kind="player")
         turns = query.order_by(ZorkTurn.id.desc()).limit(limit).all()
         return list(reversed(turns))
+
+    @classmethod
+    def _copy_identity_fields(cls, source_state: Dict[str, object], target_state: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(target_state, dict):
+            target_state = {}
+        if not isinstance(source_state, dict):
+            return target_state
+        for key in ("character_name", "persona"):
+            value = source_state.get(key)
+            if value:
+                target_state[key] = value
+        return target_state
+
+    @classmethod
+    def _sanitize_campaign_name_text(cls, text: str) -> str:
+        if not text:
+            return ""
+        text = text.strip()
+        text = re.sub(r"\s+", " ", text)
+        text = re.sub(r"[^a-zA-Z0-9 _-]", "", text)
+        return text[:48]
+
+    @classmethod
+    def _build_campaign_suggestion_text(cls, guild_id: int) -> str:
+        existing = cls.list_campaigns(guild_id)
+        names = [campaign.name for campaign in existing]
+        if not names:
+            return "No campaigns exist yet."
+        sample = ", ".join(names[:8])
+        return f"Existing campaigns: {sample}"
 
     @classmethod
     def get_player_attributes(cls, player: ZorkPlayer) -> Dict[str, int]:
@@ -806,6 +843,97 @@ class ZorkEmulator:
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
+                    is_thread_channel = isinstance(ctx.channel, discord.Thread)
+
+                    # Deterministic onboarding in non-thread channels: bypass LLM until explicit choice.
+                    onboarding_state = player_state.get("onboarding_state")
+                    party_status = player_state.get("party_status")
+                    if not is_thread_channel:
+                        if not party_status and not onboarding_state:
+                            player_state["onboarding_state"] = "await_party_choice"
+                            player.state_json = cls._dump_json(player_state)
+                            player.updated = db.func.now()
+                            db.session.commit()
+                            return (
+                                "Mission rejected until path is selected. Reply with exactly one option:\n"
+                                f"- `{cls.MAIN_PARTY_TOKEN}`\n"
+                                f"- `{cls.NEW_PATH_TOKEN}`"
+                            )
+
+                        if onboarding_state == "await_party_choice":
+                            if action_clean == cls.MAIN_PARTY_TOKEN:
+                                player_state["party_status"] = "main_party"
+                                player_state["onboarding_state"] = None
+                                player.state_json = cls._dump_json(player_state)
+                                player.updated = db.func.now()
+                                db.session.commit()
+                                return "Joined main party. Your next message will be treated as an in-world action."
+
+                            if action_clean == cls.NEW_PATH_TOKEN:
+                                player_state["onboarding_state"] = "await_campaign_name"
+                                player.state_json = cls._dump_json(player_state)
+                                player.updated = db.func.now()
+                                db.session.commit()
+                                options = cls._build_campaign_suggestion_text(ctx.guild.id)
+                                return (
+                                    "Reply next with your campaign name (letters/numbers/spaces).\n"
+                                    f"{options}\n"
+                                    f"Hint: `{command_prefix}zork thread <name>` also creates your own path thread."
+                                )
+
+                            return (
+                                "Mission rejected. Reply with exactly one option:\n"
+                                f"- `{cls.MAIN_PARTY_TOKEN}`\n"
+                                f"- `{cls.NEW_PATH_TOKEN}`"
+                            )
+
+                        if onboarding_state == "await_campaign_name":
+                            campaign_name = cls._sanitize_campaign_name_text(action)
+                            if not campaign_name:
+                                return "Mission rejected. Reply with a campaign name using letters/numbers/spaces."
+                            if len(campaign_name) < 2:
+                                return "Mission rejected. Campaign name must be at least 2 characters."
+                            if not isinstance(ctx.channel, discord.TextChannel):
+                                return f"Could not create a new path thread here. Use `{command_prefix}zork thread {campaign_name}`."
+                            thread_name = f"zork-{campaign_name}"[:90]
+                            try:
+                                thread = await ctx.channel.create_thread(
+                                    name=thread_name,
+                                    type=discord.ChannelType.public_thread,
+                                    auto_archive_duration=1440,
+                                )
+                            except Exception as e:
+                                return f"Could not create path thread: {e}"
+
+                            thread_channel, _ = cls.enable_channel(ctx.guild.id, thread.id, ctx.author.id)
+                            thread_campaign, _, _ = cls.set_active_campaign(
+                                thread_channel,
+                                ctx.guild.id,
+                                campaign_name,
+                                ctx.author.id,
+                                enforce_activity_window=False,
+                            )
+                            thread_player = cls.get_or_create_player(
+                                thread_campaign.id, ctx.author.id, campaign=thread_campaign
+                            )
+                            thread_state = cls.get_player_state(thread_player)
+                            thread_state = cls._copy_identity_fields(player_state, thread_state)
+                            thread_state["party_status"] = "new_path"
+                            thread_state["onboarding_state"] = None
+                            thread_player.state_json = cls._dump_json(thread_state)
+                            thread_player.updated = db.func.now()
+
+                            player_state["party_status"] = "new_path"
+                            player_state["onboarding_state"] = None
+                            player.state_json = cls._dump_json(player_state)
+                            player.updated = db.func.now()
+                            db.session.commit()
+                            return (
+                                f"Created your path thread: {thread.mention}\n"
+                                f"Campaign: `{thread_campaign.name}`\n"
+                                "Continue your adventure there."
+                            )
+
                     if action_clean in ("look", "l") and player_state.get("room_description"):
                         title = player_state.get("room_title") or "Unknown"
                         desc = player_state.get("room_description") or ""
