@@ -75,15 +75,27 @@ class Zork(commands.Cog):
         content = self._strip_bot_mention(message.content)
         if not content:
             return
+        campaign_id, error_text = await ZorkEmulator.begin_turn(message, command_prefix=self._prefix())
+        if error_text is not None:
+            return
+        if campaign_id is None:
+            return
         reaction_added = await ZorkEmulator._add_processing_reaction(message)
         try:
-            narration = await ZorkEmulator.play_action(message, content, command_prefix=self._prefix())
+            narration = await ZorkEmulator.play_action(
+                message,
+                content,
+                command_prefix=self._prefix(),
+                campaign_id=campaign_id,
+                manage_claim=False,
+            )
             if narration is None:
                 return
             await self._send_action_reply(message, narration)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(message)
+            ZorkEmulator.end_turn(campaign_id, message.author.id)
 
     @commands.group(name="zork", invoke_without_command=True)
     async def zork(self, ctx, *, action: str = None):
@@ -120,15 +132,28 @@ class Zork(commands.Cog):
                 )
                 return
 
+        campaign_id, error_text = await ZorkEmulator.begin_turn(ctx, command_prefix=self._prefix())
+        if error_text is not None:
+            await ctx.send(error_text)
+            return
+        if campaign_id is None:
+            return
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
         try:
-            narration = await ZorkEmulator.play_action(ctx, action, command_prefix=self._prefix())
+            narration = await ZorkEmulator.play_action(
+                ctx,
+                action,
+                command_prefix=self._prefix(),
+                campaign_id=campaign_id,
+                manage_claim=False,
+            )
             if narration is None:
                 return
             await self._send_action_reply(ctx, narration)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
+            ZorkEmulator.end_turn(campaign_id, ctx.author.id)
 
     @zork.command(name="help")
     async def zork_help(self, ctx):

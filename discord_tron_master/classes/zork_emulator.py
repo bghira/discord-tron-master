@@ -26,6 +26,7 @@ class ZorkEmulator:
     MAX_NARRATION_CHARS = 3500
     XP_BASE = 100
     XP_PER_LEVEL = 50
+    MAX_INVENTORY_CHANGES_PER_TURN = 2
     ROOM_STATE_KEYS = {
         "room_title",
         "room_description",
@@ -62,6 +63,8 @@ class ZorkEmulator:
         "- Use player_state_update.room_summary for a short one-line room summary for future context.\n"
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
+        "- Treat each player's inventory as private and never copy items from other players.\n"
+        "- For inventory changes, prefer player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
@@ -152,6 +155,37 @@ class ZorkEmulator:
         with cls._inflight_turns_lock:
             if key in cls._inflight_turns:
                 cls._inflight_turns.remove(key)
+
+    @classmethod
+    async def begin_turn(
+        cls,
+        ctx,
+        command_prefix: str = "!",
+    ) -> Tuple[Optional[int], Optional[str]]:
+        app = AppConfig.get_flask()
+        if app is None:
+            raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
+
+        with app.app_context():
+            channel = cls.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if not channel.enabled:
+                return None, f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it."
+            if channel.active_campaign_id is None:
+                _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+            else:
+                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+                if campaign is None:
+                    _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+            campaign_id = campaign.id
+
+        if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
+            await cls._delete_context_message(ctx)
+            return None, None
+        return campaign_id, None
+
+    @classmethod
+    def end_turn(cls, campaign_id: int, user_id: int):
+        cls._clear_inflight_turn(campaign_id, user_id)
 
     @classmethod
     async def _delete_context_message(cls, ctx):
@@ -293,6 +327,93 @@ class ZorkEmulator:
         return f"Inventory: {inv_text}"
 
     @classmethod
+    def _normalize_inventory_items(cls, value) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",")]
+        if not isinstance(value, list):
+            return []
+        cleaned = []
+        seen = set()
+        for item in value:
+            item_text = str(item).strip()
+            if not item_text:
+                continue
+            norm = item_text.lower()
+            if norm in seen:
+                continue
+            seen.add(norm)
+            cleaned.append(item_text)
+        return cleaned
+
+    @classmethod
+    def _apply_inventory_delta(
+        cls,
+        current: List[str],
+        adds: List[str],
+        removes: List[str],
+    ) -> List[str]:
+        out = []
+        remove_norm = {item.lower() for item in removes}
+        for item in current:
+            if item.lower() in remove_norm:
+                continue
+            out.append(item)
+        out_norm = {item.lower() for item in out}
+        for item in adds:
+            if item.lower() in out_norm:
+                continue
+            out.append(item)
+            out_norm.add(item.lower())
+        return out
+
+    @classmethod
+    def _sanitize_player_state_update(
+        cls,
+        previous_state: Dict[str, object],
+        update: Dict[str, object],
+    ) -> Dict[str, object]:
+        if not isinstance(update, dict):
+            return {}
+        cleaned = dict(update)
+        previous_inventory = cls._normalize_inventory_items(previous_state.get("inventory"))
+
+        inventory_add = cls._normalize_inventory_items(cleaned.pop("inventory_add", []))
+        inventory_remove = cls._normalize_inventory_items(cleaned.pop("inventory_remove", []))
+        candidate_inventory = None
+        if "inventory" in cleaned:
+            candidate_inventory = cls._normalize_inventory_items(cleaned.pop("inventory"))
+            # Legacy fallback: infer delta from full-list inventory if explicit delta absent.
+            if not inventory_add and not inventory_remove:
+                prev_norm = {item.lower() for item in previous_inventory}
+                cand_norm = {item.lower() for item in candidate_inventory}
+                inventory_add = [item for item in candidate_inventory if item.lower() not in prev_norm]
+                inventory_remove = [item for item in previous_inventory if item.lower() not in cand_norm]
+
+        if len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN or len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
+            logger.warning(
+                "Rejected suspicious inventory delta for user update: adds=%s removes=%s",
+                inventory_add,
+                inventory_remove,
+            )
+            inventory_add = []
+            inventory_remove = []
+
+        if inventory_add or inventory_remove:
+            cleaned["inventory"] = cls._apply_inventory_delta(
+                previous_inventory, inventory_add, inventory_remove
+            )
+        elif candidate_inventory is not None:
+            # Candidate matched previous inventory exactly; keep as-is to avoid data loss.
+            cleaned["inventory"] = previous_inventory
+
+        for key in list(cleaned.keys()):
+            if key != "inventory" and "inventory" in str(key).lower():
+                cleaned.pop(key, None)
+        return cleaned
+
+    @classmethod
     def _strip_inventory_from_narration(cls, narration: str) -> str:
         if not narration:
             return ""
@@ -304,6 +425,26 @@ class ZorkEmulator:
             kept_lines.append(line)
         cleaned = "\n".join(kept_lines).strip()
         return cleaned
+
+    @classmethod
+    def _strip_inventory_mentions(cls, text: str) -> str:
+        if not text:
+            return ""
+        return cls._strip_inventory_from_narration(text)
+
+    @classmethod
+    def _scrub_inventory_from_state(cls, value):
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, item in value.items():
+                key_str = str(key).lower()
+                if key_str == "inventory" or "inventory" in key_str:
+                    continue
+                cleaned[key] = cls._scrub_inventory_from_state(item)
+            return cleaned
+        if isinstance(value, list):
+            return [cls._scrub_inventory_from_state(item) for item in value]
+        return value
 
     @classmethod
     def total_points_for_level(cls, level: int) -> int:
@@ -511,8 +652,10 @@ class ZorkEmulator:
         action: str,
         turns: List[ZorkTurn],
     ) -> Tuple[str, str]:
-        summary = cls._trim_text(campaign.summary or "", cls.MAX_SUMMARY_CHARS)
+        summary = cls._strip_inventory_mentions(campaign.summary or "")
+        summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
         state = cls.get_campaign_state(campaign)
+        state = cls._scrub_inventory_from_state(state)
         model_state = cls._build_model_state(state)
         state_text = cls._dump_json(model_state)
         state_text = cls._trim_text(state_text, cls.MAX_STATE_CHARS)
@@ -535,6 +678,7 @@ class ZorkEmulator:
             if turn.kind != "player":
                 continue
             clipped = cls._trim_text(turn.content, cls.MAX_TURN_CHARS)
+            clipped = cls._strip_inventory_mentions(clipped)
             recent_lines.append(f"PLAYER: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
 
@@ -603,28 +747,26 @@ class ZorkEmulator:
         return state
 
     @classmethod
-    async def play_action(cls, ctx, action: str, command_prefix: str = "!") -> Optional[str]:
+    async def play_action(
+        cls,
+        ctx,
+        action: str,
+        command_prefix: str = "!",
+        campaign_id: Optional[int] = None,
+        manage_claim: bool = True,
+    ) -> Optional[str]:
         app = AppConfig.get_flask()
         if app is None:
             raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
-
-        with app.app_context():
-            channel = cls.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if not channel.enabled:
-                return f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it."
-            if channel.active_campaign_id is None:
-                _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
-            else:
-                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
-                if campaign is None:
-                    _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
-
-            campaign_id = campaign.id
-            lock = cls._get_lock(campaign_id)
-
-        if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
-            await cls._delete_context_message(ctx)
-            return None
+        should_clear_claim = manage_claim
+        if campaign_id is None:
+            campaign_id, error_text = await cls.begin_turn(ctx, command_prefix=command_prefix)
+            if error_text is not None:
+                return error_text
+            if campaign_id is None:
+                return None
+            should_clear_claim = True
+        lock = cls._get_lock(campaign_id)
 
         try:
             async with lock:
@@ -694,13 +836,16 @@ class ZorkEmulator:
                     state_update, player_state_update = cls._split_room_state(
                         state_update, player_state_update
                     )
+                    state_update = cls._scrub_inventory_from_state(state_update)
 
                     campaign_state = cls.get_campaign_state(campaign)
                     campaign_state = cls._apply_state_update(campaign_state, state_update)
+                    campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
                     if summary_update:
                         summary_update = summary_update.strip()
+                        summary_update = cls._strip_inventory_mentions(summary_update)
                         if campaign.summary:
                             campaign.summary = f"{campaign.summary}\n{summary_update}"
                         else:
@@ -708,6 +853,9 @@ class ZorkEmulator:
                         campaign.summary = cls._trim_text(campaign.summary, cls.MAX_SUMMARY_CHARS)
 
                     player_state = cls.get_player_state(player)
+                    player_state_update = cls._sanitize_player_state_update(
+                        player_state, player_state_update
+                    )
                     player_state = cls._apply_state_update(player_state, player_state_update)
                     player.state_json = cls._dump_json(player_state)
 
@@ -730,7 +878,8 @@ class ZorkEmulator:
 
                     return narration
         finally:
-            cls._clear_inflight_turn(campaign_id, ctx.author.id)
+            if should_clear_claim:
+                cls._clear_inflight_turn(campaign_id, ctx.author.id)
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:
