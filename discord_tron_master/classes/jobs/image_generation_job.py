@@ -23,21 +23,28 @@ class ImageGenerationJob(Job):
         if self.extra_payload is not None and "user_config" in self.extra_payload:
             user_config = self.extra_payload["user_config"]
             overridden_user_id = self.extra_payload["user_id"]
+            message_flags = self.extra_payload.get("message_flags", {})
         else:
             user_config = config.get_user_config(user_id=ctx.author.id)
+            message_flags = {}
+        discord_context = self.context_to_dict(ctx)
+        if isinstance(message_flags, dict) and message_flags.get("zork_scene"):
+            # Keep the marker on discord_context in case worker responses only echo this sub-object.
+            discord_context["zork_scene"] = True
         with flask.app_context():
             message = {
                 "job_type": self.job_type,
                 "job_id": self.id,
                 "module_name": self.module_name,
                 "module_command": self.module_command,
-                "discord_context": self.context_to_dict(ctx),
+                "discord_context": discord_context,
                 "overridden_user_id": overridden_user_id,
                 "image_prompt": prompt,
                 "prompt": prompt,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
-                "model_config": self.get_transformer_details(user_config)
+                "model_config": self.get_transformer_details(user_config),
+                "message_flags": message_flags,
             }
         return message
     async def execute(self):

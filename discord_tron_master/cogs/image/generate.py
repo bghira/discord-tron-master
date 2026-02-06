@@ -390,7 +390,7 @@ class Generate(commands.Cog):
                 f"{ctx.author.mention} {self.generic_error}."
             )
 
-    async def generate_from_user_config(self, ctx, user_config, user_id, prompt):
+    async def generate_from_user_config(self, ctx, user_config, user_id, prompt, job_metadata: dict = None):
         # If prompt has \n, we split:
         if '\n' in prompt:
             prompts = prompt.split('\n')
@@ -402,7 +402,10 @@ class Generate(commands.Cog):
                 # Generate a "Job" object that will be put into the queue.
                 discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="Queued: `" + _prompt + "`")
                 self.config.reload_config()
-                job = ImageGenerationJob(user_id, (self.bot, self.config, ctx, _prompt, discord_first_message), {"user_config": user_config, "user_id": user_id })
+                extra_payload = {"user_config": user_config, "user_id": user_id}
+                if isinstance(job_metadata, dict) and len(job_metadata) > 0:
+                    extra_payload["message_flags"] = job_metadata
+                job = ImageGenerationJob(user_id, (self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload)
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
                 if worker is None:

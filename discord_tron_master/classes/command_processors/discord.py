@@ -13,12 +13,80 @@ web_root = config.get_web_root()
 url_base = config.get_url_base()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.get_log_level())
+ZORK_SCENE_FLAG_KEYS = {
+    "zork_scene",
+    "suppress_image_reactions",
+    "suppress_image_details",
+}
+
+def _is_truthy(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+def _contains_flag(value, flag_keys):
+    if value is None:
+        return False
+    stack = [value]
+    visited = 0
+    max_nodes = 1200
+    while stack and visited < max_nodes:
+        current = stack.pop()
+        visited += 1
+        if isinstance(current, dict):
+            for key, nested_value in current.items():
+                if str(key).lower() in flag_keys and _is_truthy(nested_value):
+                    return True
+                stack.append(nested_value)
+        elif isinstance(current, list):
+            stack.extend(current)
+        elif isinstance(current, str):
+            # Workers occasionally send nested payload blobs as JSON strings.
+            try:
+                parsed = json.loads(current)
+                if isinstance(parsed, (dict, list)):
+                    stack.append(parsed)
+            except Exception:
+                pass
+    return False
+
+def _is_zork_scene_request(arguments, data):
+    return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(data, ZORK_SCENE_FLAG_KEYS)
+
+def _strip_worker_image_details(message: str) -> str:
+    if not isinstance(message, str):
+        return ""
+    detail_prefixes = (
+        "**Prompt**:",
+        "**Settings**:",
+        "**Model**:",
+        "**Hydra-",
+        "**GPU-",
+    )
+    cleaned_lines = []
+    for raw_line in message.splitlines():
+        line = raw_line.strip()
+        if any(line.startswith(prefix) for prefix in detail_prefixes):
+            continue
+        cleaned_lines.append(raw_line)
+    return "\n".join(cleaned_lines).strip()
 
 async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
     logger.debug(f"Entering send_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
+            zork_scene_mode = _is_zork_scene_request(arguments, data)
+            if zork_scene_mode and "message" in arguments:
+                logger.debug("Detected zork scene image payload in send_message; suppressing default reactions and worker detail text.")
+                arguments["message"] = _strip_worker_image_details(arguments["message"])
+                if not arguments["message"]:
+                    mention_id = arguments.get("mention") or data.get("author", {}).get("id")
+                    arguments["message"] = f"<@{mention_id}>" if mention_id else "Scene updated."
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             file = None
             embeds = None
@@ -31,7 +99,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
-                    if config.should_compare():
+                    if config.should_compare() and not zork_scene_mode:
                         # Use the comparison tool for DALLE3 and SD3.
                         logger.debug(f"Using comparison tool for DALLE3 and SD3.")
                         from discord_tron_master.cogs.image import generate_image
@@ -91,7 +159,8 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
 
             # Always add the '❌' reaction
             adding_reactions.append('❌')
-            await command_processor.discord.attach_default_reactions(message, adding_reactions)
+            if not zork_scene_mode:
+                await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
@@ -193,8 +262,15 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     logger.debug(f"Found channel? {channel}")
     wants_variations = 0
+    zork_scene_mode = _is_zork_scene_request(arguments, data)
     if channel is not None:
         try:
+            if zork_scene_mode and "message" in arguments:
+                logger.debug("Detected zork scene image payload in create_thread; suppressing default reactions and worker detail text.")
+                arguments["message"] = _strip_worker_image_details(arguments["message"])
+                if not arguments["message"]:
+                    mention_id = arguments.get("mention") or data.get("author", {}).get("id")
+                    arguments["message"] = f"<@{mention_id}>" if mention_id else "Scene updated."
             # Maybe channel is already a thread.
             if isinstance(channel, discord.Thread):
                 logger.debug(f"Channel is already a thread. Using it.")
@@ -231,7 +307,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logger.debug(f"Incoming message to send, has an image url list.")
-                    if config.should_compare():
+                    if config.should_compare() and not zork_scene_mode:
                         # Use the comparison tool for DALLE3 and SD3.
                         logger.debug(f"Using comparison tool for DALLE3 and SD3, arguments: {arguments}")
                         from discord_tron_master.cogs.image import generate_image
@@ -279,7 +355,8 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
 
             # Always add the '❌' reaction
             adding_reactions.append('❌')
-            await command_processor.discord.attach_default_reactions(message, adding_reactions)
+            if not zork_scene_mode:
+                await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logger.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logger.debug(f"Exiting create_thread")

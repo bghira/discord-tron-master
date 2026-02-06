@@ -690,6 +690,11 @@ class ZorkEmulator:
                 user_config=user_config,
                 user_id=ctx.author.id,
                 prompt=scene_image_prompt,
+                job_metadata={
+                    "zork_scene": True,
+                    "suppress_image_reactions": True,
+                    "suppress_image_details": True,
+                },
             )
         except Exception as e:
             logger.warning(f"Failed to enqueue scene image prompt: {e}")
