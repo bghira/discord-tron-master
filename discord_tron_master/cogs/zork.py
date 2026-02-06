@@ -53,6 +53,13 @@ class Zork(commands.Cog):
             .strip()
         )
 
+    async def _send_action_reply(self, ctx_like, narration: str):
+        mention = getattr(getattr(ctx_like, "author", None), "mention", None)
+        if mention:
+            await DiscordBot.send_large_message(ctx_like, f"{mention}\n{narration}")
+            return
+        await DiscordBot.send_large_message(ctx_like, narration)
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.guild is None:
@@ -71,7 +78,7 @@ class Zork(commands.Cog):
         narration = await ZorkEmulator.play_action(message, content, command_prefix=self._prefix())
         if narration is None:
             return
-        await DiscordBot.send_large_message(message, narration)
+        await self._send_action_reply(message, narration)
 
     @commands.group(name="zork", invoke_without_command=True)
     async def zork(self, ctx, *, action: str = None):
@@ -111,7 +118,7 @@ class Zork(commands.Cog):
         narration = await ZorkEmulator.play_action(ctx, action, command_prefix=self._prefix())
         if narration is None:
             return
-        await DiscordBot.send_large_message(ctx, narration)
+        await self._send_action_reply(ctx, narration)
 
     @zork.command(name="help")
     async def zork_help(self, ctx):
