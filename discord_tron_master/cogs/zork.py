@@ -7,7 +7,7 @@ from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.zork_emulator import ZorkEmulator
 from discord_tron_master.models.base import db
-from discord_tron_master.models.zork import ZorkCampaign, ZorkPlayer
+from discord_tron_master.models.zork import ZorkCampaign, ZorkChannel, ZorkPlayer, ZorkTurn
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -25,6 +25,13 @@ class Zork(commands.Cog):
         if ctx.guild is None:
             return False
         return True
+
+    async def _is_image_admin(self, ctx) -> bool:
+        user_roles = getattr(ctx.author, "roles", [])
+        for role in user_roles:
+            if role.name == "Image Admin":
+                return True
+        return False
 
     def _should_ignore_message(self, message) -> bool:
         if message.author.bot:
@@ -174,6 +181,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork stats` view player stats\n"
             f"- `{prefix}zork level` level up if you have enough XP\n"
             f"- `{prefix}zork map` draw an ASCII map for your location\n"
+            f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
             f"- `{prefix}zork disable` disable adventure mode in this channel\n"
         )
         await DiscordBot.send_large_message(ctx, message)
@@ -481,3 +489,63 @@ class Zork(commands.Cog):
             await DiscordBot.send_large_message(ctx, ascii_map)
             return
         await DiscordBot.send_large_message(ctx, f"```\n{ascii_map}\n```")
+
+    @zork.command(name="reset")
+    async def zork_reset(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        if not await self._is_image_admin(ctx):
+            await ctx.send("You are not an Image Admin.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                channel.active_campaign_id = None
+                channel.updated = db.func.now()
+                db.session.commit()
+                await ctx.send("Channel state cleared.")
+                return
+
+            shared_refs = (
+                ZorkChannel.query.filter(
+                    ZorkChannel.guild_id == ctx.guild.id,
+                    ZorkChannel.active_campaign_id == campaign.id,
+                    ZorkChannel.channel_id != ctx.channel.id,
+                )
+                .count()
+            )
+
+            if shared_refs > 0:
+                # Avoid wiping state for other channels still bound to this campaign.
+                reset_name = f"{campaign.name}-reset-{ctx.channel.id}-{int(datetime.datetime.utcnow().timestamp())}"
+                new_campaign = ZorkEmulator.get_or_create_campaign(
+                    ctx.guild.id, reset_name, ctx.author.id
+                )
+                channel.active_campaign_id = new_campaign.id
+                channel.enabled = True
+                channel.updated = db.func.now()
+                db.session.commit()
+                await ctx.send(
+                    f"Channel reset to fresh campaign `{new_campaign.name}` (shared campaign left untouched)."
+                )
+                return
+
+            ZorkTurn.query.filter_by(campaign_id=campaign.id).delete(synchronize_session=False)
+            ZorkPlayer.query.filter_by(campaign_id=campaign.id).delete(synchronize_session=False)
+            campaign.summary = ""
+            campaign.state_json = "{}"
+            campaign.last_narration = None
+            campaign.updated = db.func.now()
+            channel.enabled = True
+            channel.updated = db.func.now()
+            db.session.commit()
+            await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")
