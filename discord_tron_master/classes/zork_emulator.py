@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import re
+import threading
 from typing import Dict, List, Optional, Tuple
 
 from discord_tron_master.classes.app_config import AppConfig
@@ -37,6 +38,8 @@ class ZorkEmulator:
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description"}
 
     _locks: Dict[int, asyncio.Lock] = {}
+    _inflight_turns = set()
+    _inflight_turns_lock = threading.Lock()
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
@@ -131,6 +134,34 @@ class ZorkEmulator:
             lock = asyncio.Lock()
             cls._locks[campaign_id] = lock
         return lock
+
+    @classmethod
+    def _try_set_inflight_turn(cls, campaign_id: int, user_id: int) -> bool:
+        key = (campaign_id, user_id)
+        with cls._inflight_turns_lock:
+            if key in cls._inflight_turns:
+                return False
+            cls._inflight_turns.add(key)
+            return True
+
+    @classmethod
+    def _clear_inflight_turn(cls, campaign_id: int, user_id: int):
+        key = (campaign_id, user_id)
+        with cls._inflight_turns_lock:
+            if key in cls._inflight_turns:
+                cls._inflight_turns.remove(key)
+
+    @classmethod
+    async def _delete_context_message(cls, ctx):
+        try:
+            if hasattr(ctx, "delete"):
+                await ctx.delete()
+                return
+            if hasattr(ctx, "message") and hasattr(ctx.message, "delete"):
+                await ctx.message.delete()
+        except Exception:
+            # Ignore message delete failures (perms/race).
+            return
 
     @staticmethod
     def _now() -> datetime.datetime:
@@ -352,15 +383,18 @@ class ZorkEmulator:
         return player
 
     @classmethod
-    def get_recent_turns(cls, campaign_id: int, limit: int = None) -> List[ZorkTurn]:
+    def get_recent_turns(
+        cls,
+        campaign_id: int,
+        user_id: Optional[int] = None,
+        limit: int = None,
+    ) -> List[ZorkTurn]:
         if limit is None:
             limit = cls.MAX_RECENT_TURNS
-        turns = (
-            ZorkTurn.query.filter_by(campaign_id=campaign_id)
-            .order_by(ZorkTurn.id.desc())
-            .limit(limit)
-            .all()
-        )
+        query = ZorkTurn.query.filter_by(campaign_id=campaign_id)
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id, kind="player")
+        turns = query.order_by(ZorkTurn.id.desc()).limit(limit).all()
         return list(reversed(turns))
 
     @classmethod
@@ -454,6 +488,7 @@ class ZorkEmulator:
 
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
+            f"PLAYER_ID: {player.user_id}\n"
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {state_text}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
@@ -516,7 +551,7 @@ class ZorkEmulator:
         return state
 
     @classmethod
-    async def play_action(cls, ctx, action: str, command_prefix: str = "!") -> str:
+    async def play_action(cls, ctx, action: str, command_prefix: str = "!") -> Optional[str]:
         app = AppConfig.get_flask()
         if app is None:
             raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
@@ -535,108 +570,112 @@ class ZorkEmulator:
             campaign_id = campaign.id
             lock = cls._get_lock(campaign_id)
 
-        async with lock:
-            with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign_id)
-                player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
-                player.last_active = db.func.now()
-                player.updated = db.func.now()
-                db.session.commit()
+        if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
+            await cls._delete_context_message(ctx)
+            return None
 
-                state = cls.get_campaign_state(campaign)
-                player_state = cls.get_player_state(player)
-                action_clean = action.strip().lower()
-                if action_clean in ("look", "l") and (
-                    player_state.get("room_description") or state.get("room_description")
-                ):
-                    title = player_state.get("room_title") or state.get("room_title", "Unknown")
-                    desc = player_state.get("room_description") or state.get("room_description", "")
-                    exits = player_state.get("exits") or state.get("exits")
-                    exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
-                    narration = f"{title}\n{desc}{exits_text}"
+        try:
+            async with lock:
+                with app.app_context():
+                    campaign = ZorkCampaign.query.get(campaign_id)
+                    player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
+                    player.last_active = db.func.now()
+                    player.updated = db.func.now()
+                    db.session.commit()
+
+                    player_state = cls.get_player_state(player)
+                    action_clean = action.strip().lower()
+                    if action_clean in ("look", "l") and player_state.get("room_description"):
+                        title = player_state.get("room_title") or "Unknown"
+                        desc = player_state.get("room_description") or ""
+                        exits = player_state.get("exits")
+                        exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
+                        narration = f"{title}\n{desc}{exits_text}"
+                        inventory_line = cls._format_inventory(player_state)
+                        if inventory_line:
+                            narration = f"{narration}\n\n{inventory_line}"
+                        narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
+                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+                        campaign.last_narration = narration
+                        campaign.updated = db.func.now()
+                        db.session.commit()
+                        return narration
+                    if action_clean in ("inventory", "inv", "i"):
+                        narration = cls._format_inventory(player_state) or "Inventory: empty"
+                        narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
+                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+                        campaign.last_narration = narration
+                        campaign.updated = db.func.now()
+                        db.session.commit()
+                        return narration
+
+                    turns = cls.get_recent_turns(campaign.id, user_id=ctx.author.id)
+                    system_prompt, user_prompt = cls.build_prompt(campaign, player, action, turns)
+                    gpt = GPT()
+                    response = await gpt.turbo_completion(system_prompt, user_prompt, temperature=0.8, max_tokens=900)
+                    if not response:
+                        response = "A hollow silence answers. Try again."
+
+                    narration = response.strip()
+                    state_update = {}
+                    summary_update = None
+                    xp_awarded = 0
+                    player_state_update = {}
+
+                    json_text = cls._extract_json(response)
+                    if json_text:
+                        try:
+                            payload = json.loads(json_text)
+                            narration = payload.get("narration", narration).strip()
+                            state_update = payload.get("state_update", {}) or {}
+                            summary_update = payload.get("summary_update")
+                            xp_awarded = payload.get("xp_awarded", 0) or 0
+                            player_state_update = payload.get("player_state_update", {}) or {}
+                        except Exception as e:
+                            logger.warning(f"Failed to parse Zork JSON response: {e}")
+
+                    narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+
+                    state_update, player_state_update = cls._split_room_state(
+                        state_update, player_state_update
+                    )
+
+                    campaign_state = cls.get_campaign_state(campaign)
+                    campaign_state = cls._apply_state_update(campaign_state, state_update)
+                    campaign.state_json = cls._dump_json(campaign_state)
+
+                    if summary_update:
+                        summary_update = summary_update.strip()
+                        if campaign.summary:
+                            campaign.summary = f"{campaign.summary}\n{summary_update}"
+                        else:
+                            campaign.summary = summary_update
+                        campaign.summary = cls._trim_text(campaign.summary, cls.MAX_SUMMARY_CHARS)
+
+                    player_state = cls.get_player_state(player)
+                    player_state = cls._apply_state_update(player_state, player_state_update)
+                    player.state_json = cls._dump_json(player_state)
+
+                    if isinstance(xp_awarded, int) and xp_awarded > 0:
+                        player.xp += xp_awarded
+
                     inventory_line = cls._format_inventory(player_state)
-                    if inventory_line:
+                    if inventory_line and "Inventory:" not in narration:
                         narration = f"{narration}\n\n{inventory_line}"
-                    narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                    db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
-                    db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
-                    db.session.commit()
-                    return narration
-                if action_clean in ("inventory", "inv", "i"):
-                    narration = cls._format_inventory(player_state) or "Inventory: empty"
-                    narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                    player.updated = db.func.now()
+
                     db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
                     db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
-                    campaign.last_narration = narration
-                    campaign.updated = db.func.now()
                     db.session.commit()
+
                     return narration
-
-                turns = cls.get_recent_turns(campaign.id)
-                system_prompt, user_prompt = cls.build_prompt(campaign, player, action, turns)
-                gpt = GPT()
-                response = await gpt.turbo_completion(system_prompt, user_prompt, temperature=0.8, max_tokens=900)
-                if not response:
-                    response = "A hollow silence answers. Try again."
-
-                narration = response.strip()
-                state_update = {}
-                summary_update = None
-                xp_awarded = 0
-                player_state_update = {}
-
-                json_text = cls._extract_json(response)
-                if json_text:
-                    try:
-                        payload = json.loads(json_text)
-                        narration = payload.get("narration", narration).strip()
-                        state_update = payload.get("state_update", {}) or {}
-                        summary_update = payload.get("summary_update")
-                        xp_awarded = payload.get("xp_awarded", 0) or 0
-                        player_state_update = payload.get("player_state_update", {}) or {}
-                    except Exception as e:
-                        logger.warning(f"Failed to parse Zork JSON response: {e}")
-
-                narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-
-                state_update, player_state_update = cls._split_room_state(
-                    state_update, player_state_update
-                )
-
-                campaign_state = cls.get_campaign_state(campaign)
-                campaign_state = cls._apply_state_update(campaign_state, state_update)
-                campaign.state_json = cls._dump_json(campaign_state)
-
-                if summary_update:
-                    summary_update = summary_update.strip()
-                    if campaign.summary:
-                        campaign.summary = f"{campaign.summary}\n{summary_update}"
-                    else:
-                        campaign.summary = summary_update
-                    campaign.summary = cls._trim_text(campaign.summary, cls.MAX_SUMMARY_CHARS)
-
-                player_state = cls.get_player_state(player)
-                player_state = cls._apply_state_update(player_state, player_state_update)
-                player.state_json = cls._dump_json(player_state)
-
-                if isinstance(xp_awarded, int) and xp_awarded > 0:
-                    player.xp += xp_awarded
-
-                inventory_line = cls._format_inventory(player_state)
-                if inventory_line and "Inventory:" not in narration:
-                    narration = f"{narration}\n\n{inventory_line}"
-
-                campaign.last_narration = narration
-                campaign.updated = db.func.now()
-                player.updated = db.func.now()
-
-                db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
-                db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
-                db.session.commit()
-
-                return narration
+        finally:
+            cls._clear_inflight_turn(campaign_id, ctx.author.id)
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:

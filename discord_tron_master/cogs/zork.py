@@ -69,6 +69,8 @@ class Zork(commands.Cog):
         if not content:
             return
         narration = await ZorkEmulator.play_action(message, content, command_prefix=self._prefix())
+        if narration is None:
+            return
         await DiscordBot.send_large_message(message, narration)
 
     @commands.group(name="zork", invoke_without_command=True)
@@ -107,6 +109,8 @@ class Zork(commands.Cog):
                 return
 
         narration = await ZorkEmulator.play_action(ctx, action, command_prefix=self._prefix())
+        if narration is None:
+            return
         await DiscordBot.send_large_message(ctx, narration)
 
     @zork.command(name="help")
