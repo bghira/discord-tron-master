@@ -75,10 +75,15 @@ class Zork(commands.Cog):
         content = self._strip_bot_mention(message.content)
         if not content:
             return
-        narration = await ZorkEmulator.play_action(message, content, command_prefix=self._prefix())
-        if narration is None:
-            return
-        await self._send_action_reply(message, narration)
+        reaction_added = await ZorkEmulator._add_processing_reaction(message)
+        try:
+            narration = await ZorkEmulator.play_action(message, content, command_prefix=self._prefix())
+            if narration is None:
+                return
+            await self._send_action_reply(message, narration)
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(message)
 
     @commands.group(name="zork", invoke_without_command=True)
     async def zork(self, ctx, *, action: str = None):
@@ -115,10 +120,15 @@ class Zork(commands.Cog):
                 )
                 return
 
-        narration = await ZorkEmulator.play_action(ctx, action, command_prefix=self._prefix())
-        if narration is None:
-            return
-        await self._send_action_reply(ctx, narration)
+        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        try:
+            narration = await ZorkEmulator.play_action(ctx, action, command_prefix=self._prefix())
+            if narration is None:
+                return
+            await self._send_action_reply(ctx, narration)
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(ctx)
 
     @zork.command(name="help")
     async def zork_help(self, ctx):
