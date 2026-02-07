@@ -1,4 +1,5 @@
 from typing import Dict
+import json
 import websocket, discord, base64, logging, time, hashlib, gzip, os, requests
 from websockets.client import WebSocketClientProtocol
 from io import BytesIO
@@ -57,6 +58,52 @@ def _contains_flag(value, flag_keys):
 def _is_zork_scene_request(arguments, data):
     return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(data, ZORK_SCENE_FLAG_KEYS)
 
+def _is_zork_enabled_thread_channel(channel, data) -> bool:
+    if channel is None or not isinstance(channel, discord.Thread):
+        return False
+    try:
+        guild_id = None
+        if isinstance(data, dict):
+            guild_id = data.get("guild", {}).get("id")
+        if guild_id is None and getattr(channel, "guild", None) is not None:
+            guild_id = channel.guild.id
+        if guild_id is None:
+            return False
+        app = AppConfig.get_flask()
+        if app is None:
+            return False
+        from discord_tron_master.models.zork import ZorkChannel
+        with app.app_context():
+            row = ZorkChannel.query.filter_by(
+                guild_id=int(guild_id),
+                channel_id=int(channel.id),
+                enabled=True,
+            ).first()
+            return row is not None
+    except Exception:
+        return False
+
+def _has_media_payload(arguments: Dict) -> bool:
+    if not isinstance(arguments, dict):
+        return False
+    image_url_list = arguments.get("image_url_list")
+    if isinstance(image_url_list, list) and len(image_url_list) > 0:
+        return True
+    for key in ("image", "image_url", "video_url"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if value is not None and not isinstance(value, str):
+            return True
+    return False
+
+def _should_suppress_zork_image_body(channel, arguments: Dict, data: Dict, zork_scene_mode: bool) -> bool:
+    if zork_scene_mode:
+        return True
+    if not _has_media_payload(arguments):
+        return False
+    return _is_zork_enabled_thread_channel(channel, data)
+
 def _strip_worker_image_details(message: str) -> str:
     if not isinstance(message, str):
         return ""
@@ -81,6 +128,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
     if channel is not None:
         try:
             zork_scene_mode = _is_zork_scene_request(arguments, data)
+            suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
             if zork_scene_mode and "message" in arguments:
                 logger.debug("Detected zork scene image payload in send_message; suppressing default reactions and worker detail text.")
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
@@ -99,7 +147,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
-                    if config.should_compare() and not zork_scene_mode:
+                    if config.should_compare() and not suppress_body:
                         # Use the comparison tool for DALLE3 and SD3.
                         logger.debug(f"Using comparison tool for DALLE3 and SD3.")
                         from discord_tron_master.cogs.image import generate_image
@@ -117,7 +165,8 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
                         if 'mp4' in image_url:
-                            arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                            if not suppress_body:
+                                arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             embed = discord.Embed(url="http://tripleback.net")
@@ -128,13 +177,15 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             if "audio_url" in arguments:
                 if arguments["audio_url"] is not None:
                     logger.debug(f"Incoming message to send, has an audio url.")
-                    arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
+                    if not suppress_body:
+                        arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
                 else:
                     logger.debug(f"Incoming message to send, has zero audio url.")
             if "video_url" in arguments:
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
-                    arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                    if not suppress_body:
+                        arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
                     embed = discord.Embed(url='https://tripleback.net')
                     embed.set_image(url=arguments["video_url"])
                 else:
@@ -144,7 +195,10 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["audio_data"] is not None:
                     logger.debug(f"Incoming message had audio data. Embedding as a file.")
                     file=await get_audio_file(arguments["audio_data"])
-            message = await channel.send(content=arguments["message"], file=file, embeds=embeds)
+            content_to_send = arguments.get("message")
+            if suppress_body and (file is not None or embeds is not None):
+                content_to_send = None
+            message = await channel.send(content=content_to_send, file=file, embeds=embeds)
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
 
@@ -159,7 +213,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
 
             # Always add the '❌' reaction
             adding_reactions.append('❌')
-            if not zork_scene_mode:
+            if not suppress_body:
                 await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
@@ -265,6 +319,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     zork_scene_mode = _is_zork_scene_request(arguments, data)
     if channel is not None:
         try:
+            suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
             if zork_scene_mode and "message" in arguments:
                 logger.debug("Detected zork scene image payload in create_thread; suppressing default reactions and worker detail text.")
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
@@ -307,7 +362,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
                     logger.debug(f"Incoming message to send, has an image url list.")
-                    if config.should_compare() and not zork_scene_mode:
+                    if config.should_compare() and not suppress_body:
                         # Use the comparison tool for DALLE3 and SD3.
                         logger.debug(f"Using comparison tool for DALLE3 and SD3, arguments: {arguments}")
                         from discord_tron_master.cogs.image import generate_image
@@ -327,7 +382,8 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
                         if 'mp4' in image_url:
-                            arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                            if not suppress_body:
+                                arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             new_embed = discord.Embed(url="http://tripleback.net")
@@ -336,10 +392,13 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
             logger.debug(f"Sending message to thread: {arguments['message']}")
-            if "mention" in arguments:
+            if not suppress_body and "mention" in arguments:
                 logger.debug(f"Mentioning user: {arguments['mention']}")
                 arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
-            message = await thread.send(content=arguments["message"], embeds=embeds)
+            content_to_send = arguments.get("message")
+            if suppress_body and embeds is not None:
+                content_to_send = None
+            message = await thread.send(content=content_to_send, embeds=embeds)
 
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
@@ -355,7 +414,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
 
             # Always add the '❌' reaction
             adding_reactions.append('❌')
-            if not zork_scene_mode:
+            if not suppress_body:
                 await command_processor.discord.attach_default_reactions(message, adding_reactions)
         except Exception as e:
             logger.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
