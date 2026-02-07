@@ -401,7 +401,9 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel, _ = ZorkEmulator.enable_channel(ctx.guild.id, thread.id, ctx.author.id)
-            campaign_name = f"thread-{thread.id}"
+            campaign_name = (name or thread.name or f"thread-{thread.id}").strip()
+            if not campaign_name:
+                campaign_name = f"thread-{thread.id}"
             campaign, _, _ = ZorkEmulator.set_active_campaign(
                 channel,
                 ctx.guild.id,
