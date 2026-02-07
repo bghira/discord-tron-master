@@ -177,7 +177,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
-            f"- `{prefix}zork persona <text>` set your persona and campaign default persona\n"
+            f"- `{prefix}zork persona <text>` set your character persona\n"
+            f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
             f"- `{prefix}zork stats` view player stats\n"
@@ -334,7 +335,10 @@ class Zork(commands.Cog):
 
             if persona is None:
                 current_persona = player_state.get("persona")
-                default_persona = campaign_state.get("default_persona")
+                default_persona = ZorkEmulator.get_campaign_default_persona(
+                    campaign,
+                    campaign_state=campaign_state,
+                )
                 message = (
                     f"Your persona: `{current_persona}`\n"
                     f"Campaign default persona: `{default_persona}`"
@@ -350,13 +354,8 @@ class Zork(commands.Cog):
             player_state["persona"] = persona
             player.state_json = ZorkEmulator._dump_json(player_state)
             player.updated = db.func.now()
-
-            campaign_state["default_persona"] = persona
-            campaign.state_json = ZorkEmulator._dump_json(campaign_state)
-            campaign.updated = db.func.now()
-
             db.session.commit()
-            await ctx.send("Persona updated. Campaign default persona updated too.")
+            await ctx.send("Persona updated for your character.")
 
     @zork.command(name="thread")
     async def zork_thread(self, ctx, *, name: str = None):
@@ -417,6 +416,60 @@ class Zork(commands.Cog):
             f"{ctx.author.mention} Thread campaign ready: `{campaign.name}`.\n"
             f"Use `{self._prefix()}zork` or just type actions here."
         )
+
+    @zork.command(name="avatar")
+    async def zork_avatar(self, ctx, *, avatar_input: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            player = ZorkEmulator.get_or_create_player(campaign.id, ctx.author.id, campaign=campaign)
+            player_state = ZorkEmulator.get_player_state(player)
+
+            if avatar_input is None:
+                current_avatar = player_state.get("avatar_url")
+                pending_avatar = player_state.get("pending_avatar_url")
+                pending_prompt = player_state.get("pending_avatar_prompt")
+                lines = []
+                lines.append(f"Current avatar: {current_avatar if current_avatar else 'none'}")
+                lines.append(f"Pending avatar: {pending_avatar if pending_avatar else 'none'}")
+                if pending_prompt:
+                    lines.append(f"Pending prompt: `{pending_prompt}`")
+                lines.append(f"Use `{self._prefix()}zork avatar <prompt>` to generate a new candidate on white background.")
+                lines.append(f"Use `{self._prefix()}zork avatar accept` or `{self._prefix()}zork avatar decline`.")
+                await DiscordBot.send_large_message(ctx, "\n".join(lines))
+                return
+
+            clean_input = avatar_input.strip()
+            command = clean_input.lower()
+            if command == "accept":
+                ok, message = ZorkEmulator.accept_pending_avatar(campaign.id, ctx.author.id)
+                await ctx.send(message)
+                return
+            if command == "decline":
+                ok, message = ZorkEmulator.decline_pending_avatar(campaign.id, ctx.author.id)
+                await ctx.send(message)
+                return
+
+            ok, message = await ZorkEmulator.enqueue_avatar_generation(
+                ctx,
+                campaign=campaign,
+                player=player,
+                requested_prompt=clean_input,
+            )
+            await ctx.send(message)
 
     @zork.command(name="attributes")
     async def zork_attributes(self, ctx, *args):

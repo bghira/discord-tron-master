@@ -19,6 +19,10 @@ ZORK_SCENE_FLAG_KEYS = {
     "suppress_image_reactions",
     "suppress_image_details",
 }
+ZORK_STORE_FLAG_KEYS = {
+    "zork_store_image",
+    "zork_store_avatar",
+}
 
 def _is_truthy(value):
     if isinstance(value, bool):
@@ -57,6 +61,122 @@ def _contains_flag(value, flag_keys):
 
 def _is_zork_scene_request(arguments, data):
     return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(data, ZORK_SCENE_FLAG_KEYS)
+
+def _find_first_key(value, target_key: str):
+    if value is None:
+        return None
+    stack = [value]
+    visited = 0
+    max_nodes = 1200
+    target_key = str(target_key).lower()
+    while stack and visited < max_nodes:
+        current = stack.pop()
+        visited += 1
+        if isinstance(current, dict):
+            for key, nested_value in current.items():
+                if str(key).lower() == target_key:
+                    return nested_value
+                stack.append(nested_value)
+        elif isinstance(current, list):
+            stack.extend(current)
+        elif isinstance(current, str):
+            try:
+                parsed = json.loads(current)
+                if isinstance(parsed, (dict, list)):
+                    stack.append(parsed)
+            except Exception:
+                pass
+    return None
+
+def _extract_primary_image_url(arguments: Dict):
+    if not isinstance(arguments, dict):
+        return None
+    image_url_list = arguments.get("image_url_list")
+    if isinstance(image_url_list, list):
+        for item in image_url_list:
+            if not isinstance(item, str):
+                continue
+            value = item.strip()
+            if not value:
+                continue
+            if value.lower().endswith(".mp4"):
+                continue
+            return value
+    image_url = arguments.get("image_url")
+    if isinstance(image_url, str) and image_url.strip():
+        return image_url.strip()
+    return None
+
+def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
+    image_url = _extract_primary_image_url(arguments)
+    if not image_url:
+        return
+    has_store_flags = _contains_flag(arguments, ZORK_STORE_FLAG_KEYS) or _contains_flag(data, ZORK_STORE_FLAG_KEYS)
+    if not has_store_flags:
+        return
+    guild_id = None
+    if isinstance(data, dict):
+        guild_id = data.get("guild", {}).get("id")
+    if guild_id is None and getattr(channel, "guild", None) is not None:
+        guild_id = channel.guild.id
+    if guild_id is None:
+        return
+
+    campaign_id = _find_first_key(arguments, "zork_campaign_id")
+    if campaign_id is None:
+        campaign_id = _find_first_key(data, "zork_campaign_id")
+    room_key = _find_first_key(arguments, "zork_room_key")
+    if room_key is None:
+        room_key = _find_first_key(data, "zork_room_key")
+
+    avatar_user_id = _find_first_key(arguments, "zork_avatar_user_id")
+    if avatar_user_id is None:
+        avatar_user_id = _find_first_key(data, "zork_avatar_user_id")
+    if avatar_user_id is None:
+        avatar_user_id = _find_first_key(arguments, "zork_user_id")
+    if avatar_user_id is None:
+        avatar_user_id = _find_first_key(data, "zork_user_id")
+
+    store_scene = _is_truthy(_find_first_key(arguments, "zork_store_image")) or _is_truthy(
+        _find_first_key(data, "zork_store_image")
+    )
+    store_avatar = _is_truthy(_find_first_key(arguments, "zork_store_avatar")) or _is_truthy(
+        _find_first_key(data, "zork_store_avatar")
+    )
+
+    try:
+        campaign_id = int(campaign_id) if campaign_id is not None else None
+    except Exception:
+        campaign_id = None
+    try:
+        avatar_user_id = int(avatar_user_id) if avatar_user_id is not None else None
+    except Exception:
+        avatar_user_id = None
+
+    if not campaign_id:
+        return
+    from discord_tron_master.classes.zork_emulator import ZorkEmulator
+
+    if store_scene and isinstance(room_key, str) and room_key.strip():
+        ZorkEmulator.record_room_scene_image_url_for_channel(
+            guild_id=int(guild_id),
+            channel_id=int(channel.id),
+            room_key=room_key.strip(),
+            image_url=image_url,
+            campaign_id=campaign_id,
+            scene_prompt=arguments.get("image_prompt"),
+        )
+    if store_avatar and avatar_user_id:
+        app = AppConfig.get_flask()
+        if app is None:
+            return
+        with app.app_context():
+            ZorkEmulator.record_pending_avatar_image_for_campaign(
+                campaign_id=campaign_id,
+                user_id=avatar_user_id,
+                image_url=image_url,
+                avatar_prompt=arguments.get("image_prompt"),
+            )
 
 def _is_zork_enabled_thread_channel(channel, data) -> bool:
     if channel is None or not isinstance(channel, discord.Thread):
@@ -199,6 +319,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             if suppress_body and (file is not None or embeds is not None):
                 content_to_send = None
             message = await channel.send(content=content_to_send, file=file, embeds=embeds)
+            _record_zork_generated_image(channel, arguments, data)
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
 
@@ -399,6 +520,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if suppress_body and embeds is not None:
                 content_to_send = None
             message = await thread.send(content=content_to_send, embeds=embeds)
+            _record_zork_generated_image(thread, arguments, data)
 
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']

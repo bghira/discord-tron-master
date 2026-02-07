@@ -7,6 +7,7 @@ import threading
 from typing import Dict, List, Optional, Tuple
 
 import discord
+import requests
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.bot import DiscordBot
@@ -29,9 +30,23 @@ class ZorkEmulator:
     MAX_PARTY_CONTEXT_PLAYERS = 6
     MAX_SCENE_PROMPT_CHARS = 900
     MAX_PERSONA_PROMPT_CHARS = 140
+    MAX_SCENE_REFERENCE_IMAGES = 10
     XP_BASE = 100
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 2
+    ROOM_IMAGE_STATE_KEY = "room_scene_images"
+    DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
+    DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-9b"
+    DEFAULT_CAMPAIGN_PERSONA = (
+        "A cooperative, curious adventurer: observant, resourceful, and willing to "
+        "engage with absurd situations in-character."
+    )
+    PRESET_DEFAULT_PERSONAS = {
+        "alice": (
+            "A curious and polite wanderer with dry wit, dream-logic intuition, and "
+            "quiet courage in whimsical danger."
+        ),
+    }
     ROOM_STATE_KEYS = {
         "room_title",
         "room_description",
@@ -284,6 +299,24 @@ class ZorkEmulator:
         return cls.PRESET_CAMPAIGNS.get(key)
 
     @classmethod
+    def get_campaign_default_persona(
+        cls,
+        campaign: Optional[ZorkCampaign],
+        campaign_state: Optional[Dict[str, object]] = None,
+    ) -> str:
+        if campaign is None:
+            return cls.DEFAULT_CAMPAIGN_PERSONA
+        normalized = cls._normalize_campaign_name(campaign.name or "")
+        alias_key = cls.PRESET_ALIASES.get(normalized)
+        if alias_key and alias_key in cls.PRESET_DEFAULT_PERSONAS:
+            return cls.PRESET_DEFAULT_PERSONAS[alias_key]
+        if isinstance(campaign_state, dict):
+            setting_text = str(campaign_state.get("setting") or "").strip().lower()
+            if "alice" in setting_text or "wonderland" in setting_text:
+                return cls.PRESET_DEFAULT_PERSONAS["alice"]
+        return cls.DEFAULT_CAMPAIGN_PERSONA
+
+    @classmethod
     def _trim_text(cls, text: str, max_chars: int) -> str:
         if text is None:
             return ""
@@ -335,6 +368,249 @@ class ZorkEmulator:
         text = str(value).strip().lower()
         text = re.sub(r"\s+", " ", text)
         return text
+
+    @classmethod
+    def _room_key_from_player_state(cls, player_state: Dict[str, object]) -> str:
+        if not isinstance(player_state, dict):
+            return "unknown-room"
+        for key in ("room_id", "location", "room_title", "room_summary"):
+            raw = player_state.get(key)
+            normalized = cls._normalize_match_text(raw)
+            if normalized:
+                return normalized[:120]
+        return "unknown-room"
+
+    @classmethod
+    def _extract_room_image_url(cls, room_image_entry) -> Optional[str]:
+        if isinstance(room_image_entry, str):
+            value = room_image_entry.strip()
+            return value if value else None
+        if isinstance(room_image_entry, dict):
+            raw = room_image_entry.get("url")
+            if isinstance(raw, str):
+                value = raw.strip()
+                return value if value else None
+        return None
+
+    @classmethod
+    def _is_image_url_404(cls, image_url: str) -> bool:
+        if not isinstance(image_url, str):
+            return False
+        url = image_url.strip()
+        if not url:
+            return False
+        try:
+            response = requests.head(url, timeout=6, allow_redirects=True)
+            if response.status_code == 404:
+                return True
+            if response.status_code in (405, 501):
+                probe = requests.get(url, timeout=8, allow_redirects=True, stream=True)
+                return probe.status_code == 404
+            return False
+        except Exception:
+            return False
+
+    @classmethod
+    def get_room_scene_image_url(
+        cls,
+        campaign: Optional[ZorkCampaign],
+        room_key: str,
+    ) -> Optional[str]:
+        if campaign is None or not room_key:
+            return None
+        campaign_state = cls.get_campaign_state(campaign)
+        room_images = campaign_state.get(cls.ROOM_IMAGE_STATE_KEY, {})
+        if not isinstance(room_images, dict):
+            return None
+        return cls._extract_room_image_url(room_images.get(room_key))
+
+    @classmethod
+    def clear_room_scene_image_url(
+        cls,
+        campaign: Optional[ZorkCampaign],
+        room_key: str,
+    ) -> bool:
+        if campaign is None or not room_key:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        room_images = campaign_state.get(cls.ROOM_IMAGE_STATE_KEY, {})
+        if not isinstance(room_images, dict):
+            return False
+        if room_key not in room_images:
+            return False
+        room_images.pop(room_key, None)
+        campaign_state[cls.ROOM_IMAGE_STATE_KEY] = room_images
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
+    def record_room_scene_image_url_for_channel(
+        cls,
+        guild_id: int,
+        channel_id: int,
+        room_key: str,
+        image_url: str,
+        campaign_id: Optional[int] = None,
+        scene_prompt: Optional[str] = None,
+    ) -> bool:
+        app = AppConfig.get_flask()
+        if app is None:
+            return False
+        with app.app_context():
+            if campaign_id is None:
+                channel = ZorkChannel.query.filter_by(guild_id=guild_id, channel_id=channel_id).first()
+                if channel is None or channel.active_campaign_id is None:
+                    return False
+                campaign_id = channel.active_campaign_id
+            campaign = ZorkCampaign.query.get(campaign_id)
+            if campaign is None:
+                return False
+            if not room_key:
+                room_key = "unknown-room"
+            if not isinstance(image_url, str) or not image_url.strip():
+                return False
+            campaign_state = cls.get_campaign_state(campaign)
+            room_images = campaign_state.get(cls.ROOM_IMAGE_STATE_KEY, {})
+            if not isinstance(room_images, dict):
+                room_images = {}
+            room_images[room_key] = {
+                "url": image_url.strip(),
+                "updated": datetime.datetime.utcnow().isoformat() + "Z",
+                "prompt": cls._trim_text(scene_prompt or "", 600),
+            }
+            campaign_state[cls.ROOM_IMAGE_STATE_KEY] = room_images
+            campaign.state_json = cls._dump_json(campaign_state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return True
+
+    @classmethod
+    def record_pending_avatar_image_for_campaign(
+        cls,
+        campaign_id: int,
+        user_id: int,
+        image_url: str,
+        avatar_prompt: Optional[str] = None,
+    ) -> bool:
+        if not campaign_id or not user_id:
+            return False
+        if not isinstance(image_url, str) or not image_url.strip():
+            return False
+        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        if player is None:
+            return False
+        player_state = cls.get_player_state(player)
+        player_state["pending_avatar_url"] = image_url.strip()
+        if isinstance(avatar_prompt, str) and avatar_prompt.strip():
+            player_state["pending_avatar_prompt"] = cls._trim_text(avatar_prompt.strip(), 500)
+        player_state["pending_avatar_generated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+        player.state_json = cls._dump_json(player_state)
+        player.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
+    def accept_pending_avatar(cls, campaign_id: int, user_id: int) -> Tuple[bool, str]:
+        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        if player is None:
+            return False, "Player not found."
+        player_state = cls.get_player_state(player)
+        pending_url = player_state.get("pending_avatar_url")
+        if not isinstance(pending_url, str) or not pending_url.strip():
+            return False, "No pending avatar to accept."
+        player_state["avatar_url"] = pending_url.strip()
+        player_state.pop("pending_avatar_url", None)
+        player_state.pop("pending_avatar_prompt", None)
+        player_state.pop("pending_avatar_generated_at", None)
+        player.state_json = cls._dump_json(player_state)
+        player.updated = db.func.now()
+        db.session.commit()
+        return True, f"Avatar accepted: {player_state.get('avatar_url')}"
+
+    @classmethod
+    def decline_pending_avatar(cls, campaign_id: int, user_id: int) -> Tuple[bool, str]:
+        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        if player is None:
+            return False, "Player not found."
+        player_state = cls.get_player_state(player)
+        had_pending = bool(player_state.get("pending_avatar_url"))
+        player_state.pop("pending_avatar_url", None)
+        player_state.pop("pending_avatar_prompt", None)
+        player_state.pop("pending_avatar_generated_at", None)
+        player.state_json = cls._dump_json(player_state)
+        player.updated = db.func.now()
+        db.session.commit()
+        if had_pending:
+            return True, "Pending avatar discarded."
+        return False, "No pending avatar to discard."
+
+    @classmethod
+    def _build_scene_avatar_references(
+        cls,
+        campaign: Optional[ZorkCampaign],
+        actor: Optional[ZorkPlayer],
+        actor_state: Dict[str, object],
+    ) -> List[Dict[str, object]]:
+        if campaign is None or actor is None:
+            return []
+        refs = []
+        seen_urls = set()
+        players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.last_active.desc()).all()
+        for entry in players:
+            state = cls.get_player_state(entry)
+            if entry.user_id != actor.user_id and not cls._same_scene(actor_state, state):
+                continue
+            avatar_url = state.get("avatar_url")
+            if not isinstance(avatar_url, str):
+                continue
+            avatar_url = avatar_url.strip()
+            if not avatar_url or avatar_url in seen_urls:
+                continue
+            if cls._is_image_url_404(avatar_url):
+                continue
+            seen_urls.add(avatar_url)
+            identity = str(state.get("character_name") or f"Adventurer-{str(entry.user_id)[-4:]}").strip()
+            refs.append(
+                {
+                    "user_id": entry.user_id,
+                    "name": identity,
+                    "url": avatar_url,
+                    "is_actor": entry.user_id == actor.user_id,
+                }
+            )
+            if len(refs) >= cls.MAX_SCENE_REFERENCE_IMAGES - 1:
+                break
+        return refs
+
+    @classmethod
+    def _compose_scene_prompt_with_references(
+        cls,
+        scene_prompt: str,
+        has_room_reference: bool,
+        avatar_refs: List[Dict[str, object]],
+    ) -> str:
+        prompt = (scene_prompt or "").strip()
+        if not prompt:
+            return ""
+        directives = []
+        image_index = 1
+        if has_room_reference:
+            directives.append(
+                f"Use the environment from image {image_index} as the persistent room layout and lighting anchor."
+            )
+            image_index += 1
+        for ref in avatar_refs:
+            name = str(ref.get("name") or "character").strip()
+            directives.append(
+                f"Render {name} to match the person in image {image_index}."
+            )
+            image_index += 1
+        if directives:
+            prompt = f"{' '.join(directives)} {prompt}"
+        prompt = re.sub(r"\s+", " ", prompt).strip()
+        return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
 
     @classmethod
     def _same_scene(cls, actor_state: Dict[str, object], other_state: Dict[str, object]) -> bool:
@@ -789,9 +1065,10 @@ class ZorkEmulator:
                 start_room = campaign_state.get("start_room")
                 if isinstance(start_room, dict):
                     player_state.update(start_room)
-                default_persona = campaign_state.get("default_persona")
-                if default_persona:
-                    player_state["persona"] = str(default_persona).strip()
+                player_state["persona"] = cls.get_campaign_default_persona(
+                    campaign,
+                    campaign_state=campaign_state,
+                )
             player = ZorkPlayer(
                 campaign_id=campaign_id,
                 user_id=user_id,
@@ -858,7 +1135,13 @@ class ZorkEmulator:
         return worker is not None
 
     @classmethod
-    async def _enqueue_scene_image(cls, ctx, scene_image_prompt: str):
+    async def _enqueue_scene_image(
+        cls,
+        ctx,
+        scene_image_prompt: str,
+        campaign_id: Optional[int] = None,
+        room_key: Optional[str] = None,
+    ):
         if not scene_image_prompt:
             return
         if not cls._gpu_worker_available():
@@ -869,27 +1152,165 @@ class ZorkEmulator:
         generator = discord_wrapper.bot.get_cog("Generate")
         if generator is None:
             return
+        reference_images = []
+        avatar_refs = []
+        selected_model = cls.DEFAULT_SCENE_IMAGE_MODEL
+        prompt_for_generation = scene_image_prompt
+        app = AppConfig.get_flask()
+        if app is not None and campaign_id is not None:
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign_id)
+                if campaign is not None:
+                    campaign_state = cls.get_campaign_state(campaign)
+                    model_override = campaign_state.get("scene_image_model")
+                    if isinstance(model_override, str) and model_override.strip():
+                        selected_model = model_override.strip()
+                    player = ZorkPlayer.query.filter_by(campaign_id=campaign.id, user_id=ctx.author.id).first()
+                    player_state = cls.get_player_state(player) if player is not None else {}
+                    if not room_key:
+                        room_key = cls._room_key_from_player_state(player_state)
+                    if room_key:
+                        cached_url = cls.get_room_scene_image_url(campaign, room_key)
+                        if cached_url and cls._is_image_url_404(cached_url):
+                            cls.clear_room_scene_image_url(campaign, room_key)
+                            cached_url = None
+                        if cached_url:
+                            reference_images.append(cached_url)
+                    if player is not None:
+                        avatar_refs = cls._build_scene_avatar_references(campaign, player, player_state)
+                        for ref in avatar_refs:
+                            ref_url = str(ref.get("url") or "").strip()
+                            if not ref_url:
+                                continue
+                            if ref_url in reference_images:
+                                continue
+                            reference_images.append(ref_url)
+                            if len(reference_images) >= cls.MAX_SCENE_REFERENCE_IMAGES:
+                                break
+                    prompt_for_generation = cls._compose_scene_prompt_with_references(
+                        scene_image_prompt,
+                        has_room_reference=len(reference_images) > 0 and bool(
+                            cls.get_room_scene_image_url(campaign, room_key)
+                        ),
+                        avatar_refs=avatar_refs[: max(cls.MAX_SCENE_REFERENCE_IMAGES - 1, 0)],
+                    )
         cfg = AppConfig()
         user_config = cfg.get_user_config(user_id=ctx.author.id)
         user_config["auto_model"] = False
-        user_config["model"] = "Tongyi-MAI/Z-Image-Turbo"
-        user_config["steps"] = 8
-        user_config["guidance_scaling"] = 1.0
-        user_config["guidance_scale"] = 1.0
+        user_config["model"] = selected_model
+        user_config["steps"] = 12
+        user_config["guidance_scaling"] = 2.5
+        user_config["guidance_scale"] = 2.5
         try:
             await generator.generate_from_user_config(
                 ctx=ctx,
                 user_config=user_config,
                 user_id=ctx.author.id,
-                prompt=scene_image_prompt,
+                prompt=prompt_for_generation,
                 job_metadata={
                     "zork_scene": True,
                     "suppress_image_reactions": True,
                     "suppress_image_details": True,
+                    "zork_store_image": True,
+                    "zork_campaign_id": campaign_id,
+                    "zork_room_key": room_key,
                 },
+                image_data=reference_images if reference_images else None,
             )
         except Exception as e:
             logger.warning(f"Failed to enqueue scene image prompt: {e}")
+
+    @classmethod
+    def _compose_avatar_prompt(
+        cls,
+        player_state: Dict[str, object],
+        requested_prompt: str,
+        fallback_name: str,
+    ) -> str:
+        identity = str(player_state.get("character_name") or fallback_name or "adventurer").strip()
+        persona = str(player_state.get("persona") or "").strip()
+        prompt_parts = [
+            f"Single-character concept portrait of {identity}.",
+            requested_prompt.strip(),
+            "pure white seamless background",
+            "isolated subject",
+            "full body",
+            "centered composition",
+            "crisp silhouette",
+            "no text",
+            "no watermark",
+            "no extra characters",
+        ]
+        if persona:
+            prompt_parts.insert(1, f"Persona/style notes: {persona}.")
+        composed = " ".join([piece for piece in prompt_parts if piece])
+        composed = re.sub(r"\s+", " ", composed).strip()
+        return cls._trim_text(composed, 900)
+
+    @classmethod
+    async def enqueue_avatar_generation(
+        cls,
+        ctx,
+        campaign: ZorkCampaign,
+        player: ZorkPlayer,
+        requested_prompt: str,
+    ) -> Tuple[bool, str]:
+        if not requested_prompt or not requested_prompt.strip():
+            return False, "Avatar prompt cannot be empty."
+        if not cls._gpu_worker_available():
+            return False, "No GPU workers available right now."
+        discord_wrapper = DiscordBot.get_instance()
+        if discord_wrapper is None or discord_wrapper.bot is None:
+            return False, "Bot runtime is not ready."
+        generator = discord_wrapper.bot.get_cog("Generate")
+        if generator is None:
+            return False, "Image generation cog is not loaded."
+
+        player_state = cls.get_player_state(player)
+        composed_prompt = cls._compose_avatar_prompt(
+            player_state,
+            requested_prompt=requested_prompt,
+            fallback_name=getattr(getattr(ctx, "author", None), "display_name", "adventurer"),
+        )
+
+        campaign_state = cls.get_campaign_state(campaign)
+        selected_model = campaign_state.get("avatar_image_model")
+        if not isinstance(selected_model, str) or not selected_model.strip():
+            selected_model = cls.DEFAULT_AVATAR_IMAGE_MODEL
+
+        player_state["pending_avatar_prompt"] = cls._trim_text(requested_prompt.strip(), 500)
+        player_state.pop("pending_avatar_url", None)
+        player.state_json = cls._dump_json(player_state)
+        player.updated = db.func.now()
+        db.session.commit()
+
+        cfg = AppConfig()
+        user_config = cfg.get_user_config(user_id=ctx.author.id)
+        user_config["auto_model"] = False
+        user_config["model"] = selected_model
+        user_config["steps"] = 16
+        user_config["guidance_scaling"] = 3.0
+        user_config["guidance_scale"] = 3.0
+        user_config["resolution"] = {"width": 768, "height": 768}
+
+        try:
+            await generator.generate_from_user_config(
+                ctx=ctx,
+                user_config=user_config,
+                user_id=ctx.author.id,
+                prompt=composed_prompt,
+                job_metadata={
+                    "zork_scene": True,
+                    "suppress_image_reactions": True,
+                    "suppress_image_details": True,
+                    "zork_store_avatar": True,
+                    "zork_campaign_id": campaign.id,
+                    "zork_avatar_user_id": player.user_id,
+                },
+            )
+        except Exception as e:
+            return False, f"Failed to queue avatar generation: {e}"
+        return True, "Avatar candidate queued. Use `!zork avatar accept` or `!zork avatar decline` after it arrives."
 
     @classmethod
     def get_player_attributes(cls, player: ZorkPlayer) -> Dict[str, int]:
@@ -1292,7 +1713,12 @@ class ZorkEmulator:
                             party_snapshot=refreshed_party_snapshot,
                         )
                         if cleaned_scene_prompt:
-                            await cls._enqueue_scene_image(ctx, cleaned_scene_prompt)
+                            await cls._enqueue_scene_image(
+                                ctx,
+                                cleaned_scene_prompt,
+                                campaign_id=campaign.id,
+                                room_key=cls._room_key_from_player_state(player_state),
+                            )
 
                     return narration
         finally:

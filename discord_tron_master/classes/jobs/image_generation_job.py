@@ -24,9 +24,11 @@ class ImageGenerationJob(Job):
             user_config = self.extra_payload["user_config"]
             overridden_user_id = self.extra_payload["user_id"]
             message_flags = self.extra_payload.get("message_flags", {})
+            image_data = self.extra_payload.get("image_data")
         else:
             user_config = config.get_user_config(user_id=ctx.author.id)
             message_flags = {}
+            image_data = None
         discord_context = self.context_to_dict(ctx)
         if isinstance(message_flags, dict) and message_flags.get("zork_scene"):
             # Keep the marker on discord_context in case worker responses only echo this sub-object.
@@ -46,6 +48,19 @@ class ImageGenerationJob(Job):
                 "model_config": self.get_transformer_details(user_config),
                 "message_flags": message_flags,
             }
+            if isinstance(image_data, str) and image_data.strip():
+                message["image_data"] = image_data.strip()
+            elif isinstance(image_data, list):
+                cleaned = []
+                for item in image_data:
+                    if not isinstance(item, str):
+                        continue
+                    value = item.strip()
+                    if not value:
+                        continue
+                    cleaned.append(value)
+                if cleaned:
+                    message["image_data"] = cleaned
         return message
     async def execute(self):
         if self.executed:
@@ -67,4 +82,7 @@ class ImageGenerationJob(Job):
         app = AppConfig.flask
         with app.app_context():
             transformer = Transformers.get_by_full_model_id(model_id)
+        if transformer is None:
+            logging.warning(f"No transformer row found for model '{model_id}'. Sending empty model_config.")
+            return {}
         return transformer.to_dict()

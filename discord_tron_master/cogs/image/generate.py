@@ -390,7 +390,15 @@ class Generate(commands.Cog):
                 f"{ctx.author.mention} {self.generic_error}."
             )
 
-    async def generate_from_user_config(self, ctx, user_config, user_id, prompt, job_metadata: dict = None):
+    async def generate_from_user_config(
+        self,
+        ctx,
+        user_config,
+        user_id,
+        prompt,
+        job_metadata: dict = None,
+        image_data = None,
+    ):
         # If prompt has \n, we split:
         if '\n' in prompt:
             prompts = prompt.split('\n')
@@ -405,6 +413,19 @@ class Generate(commands.Cog):
                 extra_payload = {"user_config": user_config, "user_id": user_id}
                 if isinstance(job_metadata, dict) and len(job_metadata) > 0:
                     extra_payload["message_flags"] = job_metadata
+                if isinstance(image_data, str) and image_data.strip():
+                    extra_payload["image_data"] = image_data.strip()
+                elif isinstance(image_data, list):
+                    cleaned_images = []
+                    for image_item in image_data:
+                        if not isinstance(image_item, str):
+                            continue
+                        value = image_item.strip()
+                        if not value:
+                            continue
+                        cleaned_images.append(value)
+                    if cleaned_images:
+                        extra_payload["image_data"] = cleaned_images
                 job = ImageGenerationJob(user_id, (self.bot, self.config, ctx, _prompt, discord_first_message), extra_payload)
                 # Get the worker that will process the job.
                 worker = discord.worker_manager.find_best_fit_worker(job)
