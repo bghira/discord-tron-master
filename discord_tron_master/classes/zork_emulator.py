@@ -36,7 +36,7 @@ class ZorkEmulator:
     MAX_INVENTORY_CHANGES_PER_TURN = 2
     ROOM_IMAGE_STATE_KEY = "room_scene_images"
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
-    DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-9b"
+    DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_CAMPAIGN_PERSONA = (
         "A cooperative, curious adventurer: observant, resourceful, and willing to "
         "engage with absurd situations in-character."
