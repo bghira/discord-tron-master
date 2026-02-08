@@ -1232,7 +1232,6 @@ class ZorkEmulator:
         prompt_parts = [
             f"Single-character concept portrait of {identity}.",
             requested_prompt.strip(),
-            "pure white seamless background",
             "isolated subject",
             "full body",
             "centered composition",
