@@ -1235,10 +1235,6 @@ class ZorkEmulator:
             "isolated subject",
             "full body",
             "centered composition",
-            "crisp silhouette",
-            "no text",
-            "no watermark",
-            "no extra characters",
         ]
         if persona:
             prompt_parts.insert(1, f"Persona/style notes: {persona}.")
