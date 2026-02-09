@@ -62,6 +62,15 @@ def _contains_flag(value, flag_keys):
 def _is_zork_scene_request(arguments, data):
     return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(data, ZORK_SCENE_FLAG_KEYS)
 
+def _is_zork_seed_room_scene(arguments, data):
+    seed_flag = _is_truthy(_find_first_key(arguments, "zork_seed_room_image")) or _is_truthy(
+        _find_first_key(data, "zork_seed_room_image")
+    )
+    store_flag = _is_truthy(_find_first_key(arguments, "zork_store_image")) or _is_truthy(
+        _find_first_key(data, "zork_store_image")
+    )
+    return seed_flag and store_flag
+
 def _find_first_key(value, target_key: str):
     if value is None:
         return None
@@ -107,7 +116,7 @@ def _extract_primary_image_url(arguments: Dict):
         return image_url.strip()
     return None
 
-def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
+async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
     image_url = _extract_primary_image_url(arguments)
     if not image_url:
         return
@@ -140,6 +149,12 @@ def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
     store_scene = _is_truthy(_find_first_key(arguments, "zork_store_image")) or _is_truthy(
         _find_first_key(data, "zork_store_image")
     )
+    seed_room_scene = _is_truthy(_find_first_key(arguments, "zork_seed_room_image")) or _is_truthy(
+        _find_first_key(data, "zork_seed_room_image")
+    )
+    scene_prompt = _find_first_key(arguments, "zork_scene_prompt")
+    if scene_prompt is None:
+        scene_prompt = _find_first_key(data, "zork_scene_prompt")
     store_avatar = _is_truthy(_find_first_key(arguments, "zork_store_avatar")) or _is_truthy(
         _find_first_key(data, "zork_store_avatar")
     )
@@ -152,19 +167,41 @@ def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
         avatar_user_id = int(avatar_user_id) if avatar_user_id is not None else None
     except Exception:
         avatar_user_id = None
+    try:
+        scene_actor_user_id = int(avatar_user_id) if avatar_user_id is not None else None
+    except Exception:
+        scene_actor_user_id = None
 
     if not campaign_id:
         return
     from discord_tron_master.classes.zork_emulator import ZorkEmulator
 
+    scene_stored = False
     if store_scene and isinstance(room_key, str) and room_key.strip():
-        ZorkEmulator.record_room_scene_image_url_for_channel(
+        scene_stored = ZorkEmulator.record_room_scene_image_url_for_channel(
             guild_id=int(guild_id),
             channel_id=int(channel.id),
             room_key=room_key.strip(),
             image_url=image_url,
             campaign_id=campaign_id,
             scene_prompt=arguments.get("image_prompt"),
+        )
+    if (
+        seed_room_scene
+        and scene_stored
+        and isinstance(room_key, str)
+        and room_key.strip()
+        and scene_actor_user_id
+        and isinstance(scene_prompt, str)
+        and scene_prompt.strip()
+    ):
+        await ZorkEmulator.enqueue_scene_composite_from_seed(
+            channel=channel,
+            campaign_id=campaign_id,
+            room_key=room_key.strip(),
+            user_id=scene_actor_user_id,
+            scene_prompt=scene_prompt.strip(),
+            base_image_url=image_url,
         )
     if store_avatar and avatar_user_id:
         app = AppConfig.get_flask()
@@ -248,7 +285,13 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
     if channel is not None:
         try:
             zork_scene_mode = _is_zork_scene_request(arguments, data)
+            zork_seed_scene = _is_zork_seed_room_scene(arguments, data)
             suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
+            if zork_seed_scene and _has_media_payload(arguments):
+                # Seed image is cached for room continuity and followed by an auto-composite pass;
+                # suppress this intermediate render from user-facing chat output.
+                await _record_zork_generated_image(channel, arguments, data)
+                return {"success": True, "result": "Seed scene cached."}
             if zork_scene_mode and "message" in arguments:
                 logger.debug("Detected zork scene image payload in send_message; suppressing default reactions and worker detail text.")
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
@@ -319,7 +362,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
             if suppress_body and (file is not None or embeds is not None):
                 content_to_send = None
             message = await channel.send(content=content_to_send, file=file, embeds=embeds)
-            _record_zork_generated_image(channel, arguments, data)
+            await _record_zork_generated_image(channel, arguments, data)
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
 
@@ -438,9 +481,13 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     logger.debug(f"Found channel? {channel}")
     wants_variations = 0
     zork_scene_mode = _is_zork_scene_request(arguments, data)
+    zork_seed_scene = _is_zork_seed_room_scene(arguments, data)
     if channel is not None:
         try:
             suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
+            if zork_seed_scene and _has_media_payload(arguments):
+                await _record_zork_generated_image(channel, arguments, data)
+                return {"success": True, "result": "Seed scene cached."}
             if zork_scene_mode and "message" in arguments:
                 logger.debug("Detected zork scene image payload in create_thread; suppressing default reactions and worker detail text.")
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
@@ -520,7 +567,7 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if suppress_body and embeds is not None:
                 content_to_send = None
             message = await thread.send(content=content_to_send, embeds=embeds)
-            _record_zork_generated_image(thread, arguments, data)
+            await _record_zork_generated_image(thread, arguments, data)
 
             # List of number emojis
             number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
