@@ -100,6 +100,16 @@ class ZorkEmulator:
         "- Include at least one concrete prop or action beat tied to the acting player.\n"
         "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
     )
+    GUARDRAILS_SYSTEM_PROMPT = (
+        "\nSTRICT RAILS MODE IS ENABLED.\n"
+        "- Treat this as deterministic parser mode, not freeform improvisation.\n"
+        "- Allow only actions that are immediately supported by current room facts, exits, inventory, and known actors.\n"
+        "- Never permit teleportation, sudden scene jumps, retcons, instant mastery, or world-breaking powers unless explicitly present in WORLD_STATE.\n"
+        "- If an action is invalid or unavailable, do not advance the world; return a short failure narration, and suggest concrete valid options.\n"
+        "- For invalid actions, keep state_update as {} and player_state_update as {} and xp_awarded as 0.\n"
+        "- Do not create new key items, exits, NPCs, or mechanics just to satisfy a request.\n"
+        "- Use the provided RAILS_CONTEXT as hard constraints.\n"
+    )
     MAP_SYSTEM_PROMPT = (
         "You draw compact ASCII maps for text adventures.\n"
         "Return ONLY the ASCII map (no markdown, no code fences).\n"
@@ -1472,6 +1482,49 @@ class ZorkEmulator:
         return data if isinstance(data, dict) else {}
 
     @classmethod
+    def is_guardrails_enabled(cls, campaign: Optional[ZorkCampaign]) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        return bool(campaign_state.get("guardrails_enabled", False))
+
+    @classmethod
+    def set_guardrails_enabled(cls, campaign: Optional[ZorkCampaign], enabled: bool) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        campaign_state["guardrails_enabled"] = bool(enabled)
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
+    def _build_rails_context(
+        cls,
+        player_state: Dict[str, object],
+        party_snapshot: List[Dict[str, object]],
+    ) -> Dict[str, object]:
+        exits = player_state.get("exits")
+        if not isinstance(exits, list):
+            exits = []
+        known_names = []
+        for entry in party_snapshot:
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            known_names.append(name)
+        return {
+            "room_title": player_state.get("room_title"),
+            "room_summary": player_state.get("room_summary"),
+            "location": player_state.get("location"),
+            "exits": exits[:12],
+            "inventory": cls._normalize_inventory_items(player_state.get("inventory"))[:20],
+            "known_characters": known_names[:12],
+            "strict_action_shape": "one concrete action grounded in current room and items",
+        }
+
+    @classmethod
     def points_spent(cls, attributes: Dict[str, int]) -> int:
         total = 0
         for value in attributes.values():
@@ -1523,6 +1576,7 @@ class ZorkEmulator:
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
         state = cls.get_campaign_state(campaign)
         state = cls._scrub_inventory_from_state(state)
+        guardrails_enabled = bool(state.get("guardrails_enabled", False))
         model_state = cls._build_model_state(state)
         state_text = cls._dump_json(model_state)
         state_text = cls._trim_text(state_text, cls.MAX_STATE_CHARS)
@@ -1550,10 +1604,13 @@ class ZorkEmulator:
             clipped = cls._strip_inventory_mentions(clipped)
             recent_lines.append(f"PLAYER: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
+        rails_context = cls._build_rails_context(player_state, party_snapshot)
 
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
+            f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
+            f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {state_text}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
@@ -1561,7 +1618,10 @@ class ZorkEmulator:
             f"RECENT_TURNS:\n{recent_text}\n"
             f"PLAYER_ACTION: {action}\n"
         )
-        return cls.SYSTEM_PROMPT, user_prompt
+        system_prompt = cls.SYSTEM_PROMPT
+        if guardrails_enabled:
+            system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
+        return system_prompt, user_prompt
 
     @classmethod
     def _extract_json(cls, text: str) -> Optional[str]:

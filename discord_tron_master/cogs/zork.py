@@ -178,6 +178,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
             f"- `{prefix}zork persona <text>` set your character persona\n"
+            f"- `{prefix}zork rails` show strict guardrails mode status for active campaign\n"
+            f"- `{prefix}zork rails enable|disable` toggle strict on-rails action validation for active campaign\n"
             f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
@@ -270,6 +272,73 @@ class Zork(commands.Cog):
                 await ctx.send(f"Cannot switch campaigns: {reason}.")
                 return
             await ctx.send(f"Active campaign set to `{campaign.name}`.")
+
+    @zork.group(name="rails", invoke_without_command=True)
+    async def zork_rails(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            rails_on = ZorkEmulator.is_guardrails_enabled(campaign)
+            mode = "enabled" if rails_on else "disabled"
+            await ctx.send(
+                f"Rails mode is `{mode}` for campaign `{campaign.name}`.\n"
+                f"Use `{self._prefix()}zork rails enable` or `{self._prefix()}zork rails disable`."
+            )
+
+    @zork_rails.command(name="enable")
+    async def zork_rails_enable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            ZorkEmulator.set_guardrails_enabled(campaign, True)
+            await ctx.send(f"Rails mode enabled for campaign `{campaign.name}`.")
+
+    @zork_rails.command(name="disable")
+    async def zork_rails_disable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            ZorkEmulator.set_guardrails_enabled(campaign, False)
+            await ctx.send(f"Rails mode disabled for campaign `{campaign.name}`.")
 
     @zork.command(name="identity")
     async def zork_identity(self, ctx, *, character_name: str = None):
