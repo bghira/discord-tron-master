@@ -14,25 +14,36 @@ async def send_large_messages(ctx, text, max_chars=2000, delete_delay=None):
 
     lines = text.split("\n")
     buffer = ""
+    last_response = None
     for line in lines:
         if len(buffer) + len(line) + 1 > max_chars:
-            if hasattr(ctx, "channel"):
-                response = await ctx.channel.send(buffer)
-            elif hasattr(ctx, "send"):
-                response = await ctx.send(buffer)
-
-            if delete_delay is not None:
-                await response.delete(delay=delete_delay)
+            if buffer.strip():
+                if hasattr(ctx, "channel"):
+                    last_response = await ctx.channel.send(buffer.rstrip())
+                elif hasattr(ctx, "send"):
+                    last_response = await ctx.send(buffer.rstrip())
+                if delete_delay is not None and last_response:
+                    await last_response.delete(delay=delete_delay)
             buffer = ""
-        buffer += line + "\n"
-    if buffer:
+        if len(line) > max_chars:
+            for i in range(0, len(line), max_chars):
+                chunk = line[i : i + max_chars]
+                if hasattr(ctx, "channel"):
+                    last_response = await ctx.channel.send(chunk)
+                elif hasattr(ctx, "send"):
+                    last_response = await ctx.send(chunk)
+                if delete_delay is not None and last_response:
+                    await last_response.delete(delay=delete_delay)
+        else:
+            buffer += line + "\n"
+    if buffer.strip():
         if hasattr(ctx, "channel"):
-            response = await ctx.channel.send(buffer)
+            last_response = await ctx.channel.send(buffer.rstrip())
         elif hasattr(ctx, "send"):
-            response = await ctx.send(buffer)
-        if delete_delay is not None:
-            await response.delete(delay=delete_delay)
-    return response
+            last_response = await ctx.send(buffer.rstrip())
+        if delete_delay is not None and last_response:
+            await last_response.delete(delay=delete_delay)
+    return last_response
 
 
 async def fix_onmessage_context(ctx, bot=None):

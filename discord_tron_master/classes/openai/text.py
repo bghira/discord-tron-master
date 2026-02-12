@@ -223,6 +223,9 @@ class GPT:
         async with semaphore:
             response = await asyncio.to_thread(self.send_request, message_log)
 
+        if response is None:
+            return None
+
         for choice in response.choices:
             if "text" in choice:
                 return choice.text

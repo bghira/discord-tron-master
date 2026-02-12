@@ -499,8 +499,9 @@ class Zork(commands.Cog):
                     campaign.state_json = ZorkEmulator._dump_json(campaign_state)
                     campaign.updated = db.func.now()
                     db.session.commit()
+                resolved_campaign_name = campaign.name
             await ctx.send(
-                f"Thread mode enabled here. Active campaign: `{campaign.name}`. "
+                f"Thread mode enabled here. Active campaign: `{resolved_campaign_name}`. "
                 f"This thread is tracked independently."
             )
             return
@@ -540,10 +541,11 @@ class Zork(commands.Cog):
                 campaign.state_json = ZorkEmulator._dump_json(campaign_state)
                 campaign.updated = db.func.now()
                 db.session.commit()
+            resolved_campaign_name = campaign.name
 
         await ctx.send(f"Created Zork thread: {thread.mention}")
         await thread.send(
-            f"{ctx.author.mention} Thread campaign ready: `{campaign.name}`.\n"
+            f"{ctx.author.mention} Thread campaign ready: `{resolved_campaign_name}`.\n"
             f"Use `{self._prefix()}zork` or just type actions here."
         )
 
