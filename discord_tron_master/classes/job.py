@@ -90,7 +90,7 @@ class Job:
         try:
             logging.debug(f"Trying to format context to dict: {ctx}")
             message_id = None
-            if hasattr(ctx, "message"):
+            if hasattr(ctx, "message") and ctx.message is not None:
                 message_id = ctx.message.id
             return {
                 "author": {
