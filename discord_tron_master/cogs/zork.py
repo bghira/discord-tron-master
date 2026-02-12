@@ -484,6 +484,15 @@ class Zork(commands.Cog):
                     ctx.author.id,
                     enforce_activity_window=False,
                 )
+                campaign_state = ZorkEmulator.get_campaign_state(campaign)
+                if not campaign_state.get("default_persona"):
+                    persona = await ZorkEmulator.generate_campaign_persona(
+                        campaign_name
+                    )
+                    campaign_state["default_persona"] = persona
+                    campaign.state_json = ZorkEmulator._dump_json(campaign_state)
+                    campaign.updated = db.func.now()
+                    db.session.commit()
             await ctx.send(
                 f"Thread mode enabled here. Active campaign: `{campaign.name}`. "
                 f"This thread is tracked independently."
@@ -518,6 +527,13 @@ class Zork(commands.Cog):
                 ctx.author.id,
                 enforce_activity_window=False,
             )
+            campaign_state = ZorkEmulator.get_campaign_state(campaign)
+            if not campaign_state.get("default_persona"):
+                persona = await ZorkEmulator.generate_campaign_persona(campaign_name)
+                campaign_state["default_persona"] = persona
+                campaign.state_json = ZorkEmulator._dump_json(campaign_state)
+                campaign.updated = db.func.now()
+                db.session.commit()
 
         await ctx.send(f"Created Zork thread: {thread.mention}")
         await thread.send(

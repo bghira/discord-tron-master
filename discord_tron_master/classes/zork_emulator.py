@@ -339,6 +339,33 @@ class ZorkEmulator:
             setting_text = str(campaign_state.get("setting") or "").strip().lower()
             if "alice" in setting_text or "wonderland" in setting_text:
                 return cls.PRESET_DEFAULT_PERSONAS["alice"]
+        stored_persona = (
+            campaign_state.get("default_persona")
+            if isinstance(campaign_state, dict)
+            else None
+        )
+        if isinstance(stored_persona, str) and stored_persona.strip():
+            return stored_persona.strip()
+        return cls.DEFAULT_CAMPAIGN_PERSONA
+
+    @classmethod
+    async def generate_campaign_persona(cls, campaign_name: str) -> str:
+        gpt = GPT()
+        prompt = (
+            f"Generate a brief character persona (1-2 sentences, max 140 chars) for a player "
+            f"entering this text adventure setting: '{campaign_name}'. "
+            f"Describe their likely disposition, traits, or attitude that fits this world. "
+            f"Return ONLY the persona text, no quotes or explanation."
+        )
+        try:
+            response = await gpt.turbo_completion(
+                prompt, "", temperature=0.9, max_tokens=80
+            )
+            if response:
+                persona = response.strip().strip('"').strip("'")
+                return cls._trim_text(persona, cls.MAX_PERSONA_PROMPT_CHARS)
+        except Exception as e:
+            logger.warning(f"Failed to generate campaign persona: {e}")
         return cls.DEFAULT_CAMPAIGN_PERSONA
 
     @classmethod
