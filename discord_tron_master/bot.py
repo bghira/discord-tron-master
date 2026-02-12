@@ -9,10 +9,13 @@ from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.custom_help import CustomHelp
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.discord import message_helpers as helper
+
 config = AppConfig()
+
 
 class DiscordBot:
     discord_instance = None
+
     def __init__(self, token):
         self.token = token
         self.websocket_hub = None
@@ -22,9 +25,11 @@ class DiscordBot:
         intents.members = True
         intents.message_content = True
         intents.presences = True
-        websocket_logger = logging.getLogger('discord')
-        websocket_logger.setLevel(logging.WARNING) 
-        self.bot = commands.Bot(command_prefix=config.get_command_prefix(), intents=intents)
+        websocket_logger = logging.getLogger("discord")
+        websocket_logger.setLevel(logging.WARNING)
+        self.bot = commands.Bot(
+            command_prefix=config.get_command_prefix(), intents=intents
+        )
         DiscordBot.discord_instance = self
 
     @classmethod
@@ -49,18 +54,23 @@ class DiscordBot:
         self.bot.event(self.on_ready)
         await self.bot.start(self.token)
 
-
     async def load_cogs(self, cogs_path="discord_tron_master/cogs"):
         import logging
+
         logging.info("Loading cogs! Path: " + cogs_path)
         try:
             for root, _, files in os.walk(cogs_path):
                 logging.info("Found cogs: " + str(files))
                 for file in files:
                     if file.endswith(".py") and not file.startswith("__"):
-                        cog_path = os.path.join(root, file).replace("/", ".").replace("\\", ".")[:-3]
+                        cog_path = (
+                            os.path.join(root, file)
+                            .replace("/", ".")
+                            .replace("\\", ".")[:-3]
+                        )
                         try:
                             import importlib
+
                             cog_module = importlib.import_module(cog_path)
                             cog_class_name = getattr(cog_module, file[:-3].capitalize())
                             await self.bot.add_cog(cog_class_name(self.bot))
@@ -98,9 +108,13 @@ class DiscordBot:
                     try:
                         await member.send(message)
                     except discord.Forbidden:
-                        logging.info(f"Bot doesn't have permission to send messages to {member.name} ({member.id})")
+                        logging.info(
+                            f"Bot doesn't have permission to send messages to {member.name} ({member.id})"
+                        )
                     except Exception as e:
-                        logging.info(f"Error sending message to {member.name} ({member.id}): {e}")
+                        logging.info(
+                            f"Error sending message to {member.name} ({member.id}): {e}"
+                        )
 
     async def search_message_history(self, channel_id, search_term):
         channel = await self.find_channel(channel_id)
@@ -110,9 +124,13 @@ class DiscordBot:
                     if search_term in message.content:
                         return message
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
+                logging.info(
+                    f"Error searching message history in {channel.name} ({channel.id}): {e}"
+                )
         return None
 
     async def send_random_emojis(self, channel_id, count):
@@ -126,10 +144,13 @@ class DiscordBot:
             try:
                 await channel.send(emoji_string)
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to send messages to {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to send messages to {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error sending message to {channel.name} ({channel.id}): {e}")
-                
+                logging.info(
+                    f"Error sending message to {channel.name} ({channel.id}): {e}"
+                )
 
     async def get_random_emojis(self, count):
         emojis = []
@@ -137,22 +158,30 @@ class DiscordBot:
             for emoji in guild.emojis:
                 emojis.append(emoji)
         import random
+
         return random.sample(emojis, count)
 
     async def get_messages_after_timestamp(self, channel_id, start_time):
         # end_time is now:
         import datetime
+
         end_time = datetime.datetime.now()
 
         channel = await self.find_channel(channel_id)
         if channel is not None:
             try:
-                async for message in channel.history(limit=100, after=start_time, before=end_time):
+                async for message in channel.history(
+                    limit=100, after=start_time, before=end_time
+                ):
                     return message
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
+                logging.info(
+                    f"Error searching message history in {channel.name} ({channel.id}): {e}"
+                )
         return None
 
     async def find_message_by_reaction(self, channel_id, emoji):
@@ -164,10 +193,15 @@ class DiscordBot:
                         if reaction.emoji == emoji:
                             return message
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
+                logging.info(
+                    f"Error searching message history in {channel.name} ({channel.id}): {e}"
+                )
         return None
+
     async def find_message_by_id(self, message_id):
         for guild in self.bot.guilds:
             for channel in guild.channels:
@@ -177,45 +211,76 @@ class DiscordBot:
                         if message is not None:
                             return message
                     except discord.Forbidden:
-                        logging.info(f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})")
+                        logging.info(
+                            f"Bot doesn't have permission to search message history in {channel.name} ({channel.id})"
+                        )
                     except Exception as e:
-                        logging.info(f"Error searching message history in {channel.name} ({channel.id}): {e}")
+                        logging.info(
+                            f"Error searching message history in {channel.name} ({channel.id}): {e}"
+                        )
         return None
+
     async def set_thread_topic(self, channel_id, topic):
         channel = await self.find_channel(channel_id)
         if channel is not None:
             try:
                 await channel.edit(topic=topic)
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to edit topic in {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to edit topic in {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error editing topic in {channel.name} ({channel.id}): {e}")
+                logging.info(
+                    f"Error editing topic in {channel.name} ({channel.id}): {e}"
+                )
 
-    async def attach_default_reactions(self, message, reactions = None):
+    async def attach_default_reactions(self, message, reactions=None):
         if reactions is None:
-            reactions = [ '♻️', '📋', '🌱', '📜', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '❌' ]  # Maybe: '👍', '👎'
+            reactions = [
+                "♻️",
+                "📋",
+                "🌱",
+                "📜",
+                "1️⃣",
+                "2️⃣",
+                "3️⃣",
+                "4️⃣",
+                "❌",
+            ]  # Maybe: '👍', '👎'
 
         if message is not None:
             for reaction in reactions:
                 try:
                     await message.add_reaction(reaction)
                 except discord.Forbidden:
-                    logging.info(f"Bot doesn't have permission to add reactions to {message.channel.name} ({message.channel.id})")
+                    logging.info(
+                        f"Bot doesn't have permission to add reactions to {message.channel.name} ({message.channel.id})"
+                    )
                 except Exception as e:
-                    logging.info(f"Error adding reactions to {message.channel.name} ({message.channel.id}): {e}")
+                    logging.info(
+                        f"Error adding reactions to {message.channel.name} ({message.channel.id}): {e}"
+                    )
 
-    async def delete_previous_errors(self, channel_id, exclude_id = None, prefix="seems we had an error"):
+    async def delete_previous_errors(
+        self, channel_id, exclude_id=None, prefix="seems we had an error"
+    ):
         # Find any previous messages containing "seems we had an error" from this bot, and delete all except the most recent.
         channel = await self.find_channel(channel_id)
         if channel is not None:
             try:
                 async for message in channel.history(limit=100):
-                    if prefix in message.content and (exclude_id is None or message.id != exclude_id):
+                    if prefix in message.content and (
+                        exclude_id is None or message.id != exclude_id
+                    ):
                         await message.delete()
             except discord.Forbidden:
-                logging.info(f"Bot doesn't have permission to delete messages in {channel.name} ({channel.id})")
+                logging.info(
+                    f"Bot doesn't have permission to delete messages in {channel.name} ({channel.id})"
+                )
             except Exception as e:
-                logging.info(f"Error deleting messages in {channel.name} ({channel.id}): {e}")
+                logging.info(
+                    f"Error deleting messages in {channel.name} ({channel.id}): {e}"
+                )
 
     @staticmethod
     async def fix_onmessage_context(ctx):
@@ -232,10 +297,15 @@ class DiscordBot:
                     try:
                         await channel.send(message)
                     except discord.Forbidden:
-                        logging.info(f"Bot doesn't have permission to send messages in {channel.name} ({channel.id})")
+                        logging.info(
+                            f"Bot doesn't have permission to send messages in {channel.name} ({channel.id})"
+                        )
                     except Exception as e:
-                        logging.info(f"Error sending message to {channel.name} ({channel.id}): {e}")
-    
+                        logging.info(
+                            f"Error sending message to {channel.name} ({channel.id}): {e}"
+                        )
+
+
 async def clean_traceback(trace: str):
     lines = trace.split("\n")
     new_lines = []

@@ -1,7 +1,16 @@
 import uuid, logging, json, time
 from typing import Dict, Any
+
+
 class Job:
-    def __init__(self, job_type: str, module_name: str, command_name: str, author_id: str, payload: Dict[str, Any]):
+    def __init__(
+        self,
+        job_type: str,
+        module_name: str,
+        command_name: str,
+        author_id: str,
+        payload: Dict[str, Any],
+    ):
         self.id = str(uuid.uuid4())
         self.job_id = self.id
         self.job_type = job_type
@@ -9,9 +18,11 @@ class Job:
         self.payload = payload
         self.module_name = module_name
         self.module_command = command_name
-        self.discord_first_message = payload[4]  # Store the discord_first_message object
+        self.discord_first_message = payload[
+            4
+        ]  # Store the discord_first_message object
         self.worker = None
-        self.author_id = author_id   # Store the author id
+        self.author_id = author_id  # Store the author id
         self.migrated = False
         self.migrated_date = None
         self.executed = False
@@ -22,7 +33,7 @@ class Job:
 
     def is_migrated(self):
         return (self.migrated, self.migrated_date)
-    
+
     def migrate(self):
         self.migrated = True
         self.migrated_date = time.time()
@@ -49,7 +60,9 @@ class Job:
 
     def payload_text(self):
         dict_version = self.format_payload()
-        return dict_version["prompt"] or "Unknown prompt for job: " + self.module_command
+        return (
+            dict_version["prompt"] or "Unknown prompt for job: " + self.module_command
+        )
 
     async def format_payload(self):
         # Format payload into a message format for WebSocket handling.
@@ -68,9 +81,9 @@ class Job:
             "discord_context": self.context_to_dict(ctx),
             "prompt": prompt,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": user_config
+            "config": user_config,
         }
-        return message      
+        return message
 
     def context_to_dict(self, ctx):
         # Format context into a dict for WebSocket handling.
@@ -83,21 +96,16 @@ class Job:
                 "author": {
                     "id": ctx.author.id,
                     "name": ctx.author.name,
-                    "discriminator": ctx.author.discriminator
+                    "discriminator": ctx.author.discriminator,
                 },
-                "channel": {
-                    "id": ctx.channel.id,
-                    "name": ctx.channel.name
-                },
-                "guild": {
-                    "id": ctx.guild.id,
-                    "name": ctx.guild.name
-                },
+                "channel": {"id": ctx.channel.id, "name": ctx.channel.name},
+                "guild": {"id": ctx.guild.id, "name": ctx.guild.name},
                 "message_id": message_id,
             }
         except Exception as e:
             logging.error("Error formatting context to dict: " + str(e))
             raise e
+
     def discordmsg_to_dict(self, discordmsg):
         # Format discord message into a dict for WebSocket handling.
         try:
@@ -105,17 +113,14 @@ class Job:
                 "author": {
                     "id": discordmsg.author.id,
                     "name": discordmsg.author.name,
-                    "discriminator": discordmsg.author.discriminator
+                    "discriminator": discordmsg.author.discriminator,
                 },
                 "channel": {
                     "id": discordmsg.channel.id,
-                    "name": discordmsg.channel.name
+                    "name": discordmsg.channel.name,
                 },
-                "guild": {
-                    "id": discordmsg.guild.id,
-                    "name": discordmsg.guild.name
-                },
-                "message_id": discordmsg.id
+                "guild": {"id": discordmsg.guild.id, "name": discordmsg.guild.name},
+                "message_id": discordmsg.id,
             }
         except Exception as e:
             logging.error("Error formatting discord message to dict: " + str(e))
@@ -132,23 +137,41 @@ class Job:
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
-            logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
+            await self.discord_first_message.edit(
+                content="Sorry, hossicle. We had an error sending your "
+                + self.module_command
+                + " job to worker: "
+                + str(e)
+            )
+            logging.error(
+                "Error sending websocket message: "
+                + str(e)
+                + " traceback: "
+                + str(e.__traceback__)
+            )
             return False
 
-    async def job_reassign(self, new_worker: str, reassignment_stage:str = "begin"):
+    async def job_reassign(self, new_worker: str, reassignment_stage: str = "begin"):
         try:
             if reassignment_stage == "begin":
-                await self.discord_first_message.edit(content=f"Reassigned job to worker, '{new_worker}'. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
+                await self.discord_first_message.edit(
+                    content=f"Reassigned job to worker, '{new_worker}'. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️"
+                )
             elif reassignment_stage == "complete":
-                await self.discord_first_message.edit(content=f"Reassigned job to worker, '{new_worker}', from '{self.worker.worker_id}'. Let's hope this shit works..")
+                await self.discord_first_message.edit(
+                    content=f"Reassigned job to worker, '{new_worker}', from '{self.worker.worker_id}'. Let's hope this shit works.."
+                )
             return True
         except Exception as e:
             logging.error("Error updating the discord message on job lost: " + str(e))
 
     async def job_lost(self):
         try:
-            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error reassigning your " + self.module_command + f" job to another worker. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️")
+            await self.discord_first_message.edit(
+                content="Sorry, hossicle. We had an error reassigning your "
+                + self.module_command
+                + f" job to another worker. Press F in chat for {self.worker.worker_id}. 😢😞😔😟😩😫😭😓😥😰❤️❤️"
+            )
             await self.discord_first_message.delete(delay=15)
             return True
         except Exception as e:

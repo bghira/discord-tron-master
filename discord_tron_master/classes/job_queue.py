@@ -4,8 +4,10 @@ from discord_tron_master.classes.job import Job
 from typing import List
 import logging
 
-logger = logging.getLogger('JobQueue')
-logger.setLevel('DEBUG')
+logger = logging.getLogger("JobQueue")
+logger.setLevel("DEBUG")
+
+
 class JobQueue:
     def __init__(self, worker_id: str):
         self.queue = deque()
@@ -30,7 +32,7 @@ class JobQueue:
     async def preview(self) -> Job:
         """
         Like get(), but we don't mark it in progress or pop it. We simply show what WOULD come with get().
-        
+
         Returns None if the queue is empty.
         Returns the job if the queue is not empty.
         """
@@ -78,7 +80,9 @@ class JobQueue:
         logger.debug(f"Got job! Queue size: {len(self.queue)}")
         job = self.queue.popleft()
         self.in_progress[job.id] = job
-        logger.debug(f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}")
+        logger.debug(
+            f"Job {job.id} retrieved from queue, now kept as self.in_progress: {self.in_progress}"
+        )
         return job
 
     async def remove(self, job: Job):
@@ -90,33 +94,51 @@ class JobQueue:
 
     async def view_payloads(self) -> List[dict]:
         return [await job.format_payload() for job in self.view()]
-    
-    async def view_payload_prompts(self, truncate_length = 40):
-        payload_prompts = [job["job_type"] + ' job: `' + job["prompt"][:truncate_length] + '`, id: `' + job['job_id'] + '`' for job in await self.view_payloads()]
+
+    async def view_payload_prompts(self, truncate_length=40):
+        payload_prompts = [
+            job["job_type"]
+            + " job: `"
+            + job["prompt"][:truncate_length]
+            + "`, id: `"
+            + job["job_id"]
+            + "`"
+            for job in await self.view_payloads()
+        ]
         # Return a string form of the payload_prompts list, with each item on a new line:
         if len(payload_prompts) == 0:
-            return 'No jobs in queue.'
-        output = ''
+            return "No jobs in queue."
+        output = ""
         for prompt in payload_prompts:
-            output += prompt + '\n';
+            output += prompt + "\n"
         return output
 
     def done(self, job_id: int):
-        logger.info(f"(JobQueue.done) received job_id: {job_id}. We have {len(self.in_progress)} jobs in progress.")
+        logger.info(
+            f"(JobQueue.done) received job_id: {job_id}. We have {len(self.in_progress)} jobs in progress."
+        )
         if self.queue is not None and len(self.queue) > 0:
             for job in list(self.queue):
-                logger.info(f"(JobQueue.done) Looking for job {job_id} in queue: {job.id}")
+                logger.info(
+                    f"(JobQueue.done) Looking for job {job_id} in queue: {job.id}"
+                )
                 if job_id == job.id:
                     self.queue.remove(job)
                     logger.debug(f"(JobQueue.done) Job {job.id} removed from queue")
         else:
             logger.debug(f"(JobQueue.done) No jobs in queue")
-        logger.info(f"(JobQueue.done) Looking for job id {job_id} in in_progress: {self.in_progress}")
+        logger.info(
+            f"(JobQueue.done) Looking for job id {job_id} in in_progress: {self.in_progress}"
+        )
         if job_id in self.in_progress:
             del self.in_progress[job_id]
-            logger.debug(f"(JobQueue.done) Job {job_id} marked as done, removed from in progress")
+            logger.debug(
+                f"(JobQueue.done) Job {job_id} marked as done, removed from in progress"
+            )
         else:
-            logger.debug(f"(JobQueue.done) Job {job_id} not found in in progress: {self.in_progress}. We have {len(self.queue)} jobs in queue.")
+            logger.debug(
+                f"(JobQueue.done) Job {job_id} not found in in progress: {self.in_progress}. We have {len(self.queue)} jobs in queue."
+            )
 
     def qsize(self) -> int:
         return len(self.queue) + len(self.in_progress)

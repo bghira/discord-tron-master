@@ -3,6 +3,7 @@ import logging, base64, time
 from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
 
+
 class ImageUpscalingJob(Job):
     def __init__(self, author_id: str, payload):
         super().__init__("gpu", "image_upscaling", "upscale", author_id, payload)
@@ -14,7 +15,7 @@ class ImageUpscalingJob(Job):
         logging.info(f"Formatting message for img2img payload")
         logging.debug(f"{self.payload}")
         user_config = config.get_user_config(user_id=ctx.author.id)
-        user_config["model"] = 'Img2Img/Model'
+        user_config["model"] = "Img2Img/Model"
         flask = AppConfig.get_flask()
         with flask.app_context():
             message = {
@@ -28,6 +29,6 @@ class ImageUpscalingJob(Job):
                 "image_data": image,
                 "discord_first_message": self.discordmsg_to_dict(discord_first_message),
                 "config": user_config,
-                "upscaler": True
+                "upscaler": True,
             }
         return message

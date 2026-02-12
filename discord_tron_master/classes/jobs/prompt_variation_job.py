@@ -3,9 +3,12 @@ from discord_tron_master.models.schedulers import Schedulers
 from discord_tron_master.classes.app_config import AppConfig
 import logging, base64, time
 
+
 class PromptVariationJob(Job):
-    def __init__(self, author_id: str, payload, extra_payload:dict = None):
-        super().__init__("gpu", "image_variation", "prompt_variation", author_id, payload)
+    def __init__(self, author_id: str, payload, extra_payload: dict = None):
+        super().__init__(
+            "gpu", "image_variation", "prompt_variation", author_id, payload
+        )
         self.extra_payload = extra_payload
         self.date_created = time.time()
 

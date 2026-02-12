@@ -1,9 +1,11 @@
 import logging
 
-from flask import ( Flask, request, jsonify )
+from flask import Flask, request, jsonify
 from flask_restful import Api, Resource
 from discord_tron_master.classes.database_handler import DatabaseHandler
-from discord_tron_master.classes.command_processors import discord as DiscordCommandProcessor
+from discord_tron_master.classes.command_processors import (
+    discord as DiscordCommandProcessor,
+)
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from discord_tron_master.classes.app_config import AppConfig
@@ -13,6 +15,7 @@ import io, asyncio
 from scipy.io.wavfile import read as read_wav
 from scipy.io.wavfile import write as write_wav
 import base64
+
 
 class API:
     def __init__(self):
@@ -26,7 +29,13 @@ class API:
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
         from discord_tron_master.models.schedulers import Schedulers
-        from discord_tron_master.models.zork import ZorkCampaign, ZorkChannel, ZorkPlayer, ZorkTurn
+        from discord_tron_master.models.zork import (
+            ZorkCampaign,
+            ZorkChannel,
+            ZorkPlayer,
+            ZorkTurn,
+        )
+
         self.migrate = Migrate(self.app, self.db)
         self.register_routes()
         self.auth = None
@@ -34,12 +43,18 @@ class API:
     def add_resource(self, resource, route):
         self.api.add_resource(resource, route)
 
-    def run(self, host='0.0.0.0', port=5000):
+    def run(self, host="0.0.0.0", port=5000):
         import ssl
+
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        ssl_context.load_cert_chain(self.config.project_root + '/config/server_cert.pem', self.config.project_root + '/config/server_key.pem')
+        ssl_context.load_cert_chain(
+            self.config.project_root + "/config/server_cert.pem",
+            self.config.project_root + "/config/server_key.pem",
+        )
         # Set the correct SSL/TLS version (You can change PROTOCOL_TLS to the appropriate version if needed)
-        ssl_context.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+        ssl_context.options |= (
+            ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+        )
         self.app.run(host=host, port=port, ssl_context=ssl_context)
 
     def set_auth(self, auth):
@@ -54,15 +69,19 @@ class API:
             if not refresh_token:
                 return jsonify({"error": "refresh_token is required"}), 400
             from discord_tron_master.models import OAuthToken
+
             token_data = OAuthToken.query.filter_by(refresh_token=refresh_token).first()
             if not token_data:
                 return jsonify({"error": "Invalid refresh token"}), 400
-            logging.debug(f"Refreshed access token requested from {token_data.client_id}")
+            logging.debug(
+                f"Refreshed access token requested from {token_data.client_id}"
+            )
             # Logic to refresh the access token using the provided refresh_token
             new_ticket = self.auth.refresh_access_token(token_data)
             response = new_ticket.to_dict()
 
             return jsonify(response)
+
         @self.app.route("/authorize", methods=["POST"])
         def authorize():
             logging.debug("authorize endpoint hit")
@@ -73,20 +92,27 @@ class API:
                 return jsonify({"error": "client_id and api_key are required"}), 400
 
             from discord_tron_master.models import OAuthClient
+
             client = OAuthClient.query.filter_by(client_id=client_id).first()
             if not client:
                 return jsonify({"error": "Invalid client_id"}), 400
 
             from discord_tron_master.models import ApiKey
+
             api_key_data = ApiKey.query.filter_by(api_key=api_key).first()
             if not api_key_data:
                 return jsonify({"error": "Invalid api_key", "api_key": api_key}), 401
 
             user_id = api_key_data.user_id
             from discord_tron_master.models import OAuthToken
-            token_data = OAuthToken.query.filter_by(client_id=client_id, user_id=user_id).first()
+
+            token_data = OAuthToken.query.filter_by(
+                client_id=client_id, user_id=user_id
+            ).first()
             if not token_data:
-                logging.debug(f"Could not find token_data for client_id {client_id} and user_id {user_id}")
+                logging.debug(
+                    f"Could not find token_data for client_id {client_id} and user_id {user_id}"
+                )
                 return jsonify({"error": "No token data found"}), 401
             new_token = self.auth.refresh_access_token(token_data)
 
@@ -98,6 +124,7 @@ class API:
             image_metadata = {}
             if "user_config" in request.args:
                 import json
+
                 image_metadata["user_config"] = json.loads(request.args["user_config"])
             if "parameters" in request.args:
                 image_metadata["parameters"] = request.args["parameters"]
@@ -116,20 +143,32 @@ class API:
             # Read the image and convert it to a base64-encoded string
             try:
                 img = Image.open(image.stream)
-                logging.debug(f'Image metadata: {image_metadata}')
+                logging.debug(f"Image metadata: {image_metadata}")
                 # Create pnginfo:
                 pnginfo = PngImagePlugin.PngInfo()
                 for key, value in image_metadata.items():
-                    logging.debug(f'Adding {key} to pnginfo with value: {value}')
+                    logging.debug(f"Adding {key} to pnginfo with value: {value}")
                     pnginfo.add_text(key, json.dumps(value), 0)
             except UnidentifiedImageError as e:
-                logging.debug(f'Malformed image was supplied: {image.stream}')
+                logging.debug(f"Malformed image was supplied: {image.stream}")
                 logging.error(f"Could not open image: {e}")
-                return jsonify({"error": "Malformed image was supplied", "error_class": "UnidentifiedImageError"}), 400
+                return (
+                    jsonify(
+                        {
+                            "error": "Malformed image was supplied",
+                            "error_class": "UnidentifiedImageError",
+                        }
+                    ),
+                    400,
+                )
             buffered = BytesIO()
             img.save(buffered, format="PNG", pnginfo=pnginfo)
-            base64_encoded_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            image_url = asyncio.run(DiscordCommandProcessor.get_image_embed(base64_encoded_image, pnginfo, create_embed=False))
+            base64_encoded_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            image_url = asyncio.run(
+                DiscordCommandProcessor.get_image_embed(
+                    base64_encoded_image, pnginfo, create_embed=False
+                )
+            )
             return jsonify({"image_url": image_url.strip()})
 
         @self.app.route("/upload_audio", methods=["POST"])
@@ -140,7 +179,9 @@ class API:
             audio_buffer = request.files.get("audio_buffer")
             if not audio_buffer:
                 return jsonify({"error": "audio_buffer is required"}), 400
-            audio_url = asyncio.run(DiscordCommandProcessor.get_audio_url(audio_buffer.read()))
+            audio_url = asyncio.run(
+                DiscordCommandProcessor.get_audio_url(audio_buffer.read())
+            )
             return jsonify({"audio_url": audio_url.strip()})
 
         @self.app.route("/upload_video", methods=["POST"])
@@ -151,7 +192,9 @@ class API:
             video_buffer = request.files.get("file")
             if not video_buffer:
                 return jsonify({"error": "file is required"}), 400
-            video_url = asyncio.run(DiscordCommandProcessor.get_video_url(video_buffer.read()))
+            video_url = asyncio.run(
+                DiscordCommandProcessor.get_video_url(video_buffer.read())
+            )
             return jsonify({"video_url": video_url.strip()})
 
     def check_auth(self, request):
@@ -160,13 +203,15 @@ class API:
             if access_token is None:
                 raise Exception("No access token provided")
             logging.debug(f"Checking auth for access_token: {access_token}")
-            token_type, access_token = access_token.split(' ', 1)
+            token_type, access_token = access_token.split(" ", 1)
             if token_type.lower() != "bearer":
                 # Invalid token type
                 return
 
             if not access_token or not self.auth.validate_access_token(access_token):
-                logging.error(f"Client provided invalid access token to REST API: {access_token}")
+                logging.error(
+                    f"Client provided invalid access token to REST API: {access_token}"
+                )
                 return False
             return True
         except Exception as e:

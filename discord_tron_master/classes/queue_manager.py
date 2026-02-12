@@ -6,19 +6,25 @@ from discord_tron_master.classes.worker import Worker
 from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.job_queue import JobQueue
 
-logger = logging.getLogger('QueueManager')
-logger.setLevel('DEBUG')
+logger = logging.getLogger("QueueManager")
+logger.setLevel("DEBUG")
+
 
 class QueueManager:
     def __init__(self, worker_manager: WorkerManager):
-        self.queues = {}  # {"worker_id": {"queue": asyncio.Queue(), "supported_job_types": [...]}, ...}
+        self.queues = (
+            {}
+        )  # {"worker_id": {"queue": asyncio.Queue(), "supported_job_types": [...]}, ...}
         self.worker_manager = worker_manager
 
     def set_worker_manager(self, worker_manager):
         self.worker_manager = worker_manager
 
     def get_all_queues(self) -> Dict[str, List[str]]:
-        return {worker_id: self.get_queue_contents_by_worker(worker_id) for worker_id in self.queues}
+        return {
+            worker_id: self.get_queue_contents_by_worker(worker_id)
+            for worker_id in self.queues
+        }
 
     # Remove all jobs from a given worker
     def remove_jobs_by_worker(self, worker_id):
@@ -33,7 +39,11 @@ class QueueManager:
 
     # Get all queued tasks by job type
     def get_queues_by_job_type(self, job_type) -> List[str]:
-        return [worker_id for worker_id, worker_info in self.queues.items() if job_type in worker_info["supported_job_types"]]
+        return [
+            worker_id
+            for worker_id, worker_info in self.queues.items()
+            if job_type in worker_info["supported_job_types"]
+        ]
 
     # Remove all jobs of a given type from all workers
     def remove_jobs_by_job_type(self, job_type):
@@ -42,7 +52,10 @@ class QueueManager:
                 worker_info["queue"].queue.clear()
 
     async def register_worker(self, worker_id, supported_job_types: List[str]):
-        self.queues[worker_id] = {"queue": JobQueue(worker_id), "supported_job_types": supported_job_types}
+        self.queues[worker_id] = {
+            "queue": JobQueue(worker_id),
+            "supported_job_types": supported_job_types,
+        }
 
     def worker_queue_length(self, worker: Worker):
         try:
@@ -50,7 +63,12 @@ class QueueManager:
             return self.queues[worker_id]["queue"].qsize()
         except Exception as e:
             import traceback
-            logger.error(f"Error retrieving the queue length for worker '" + str(worker_id) + f"': {e} traceback: {traceback.format_exc()}")
+
+            logger.error(
+                f"Error retrieving the queue length for worker '"
+                + str(worker_id)
+                + f"': {e} traceback: {traceback.format_exc()}"
+            )
             return -1
 
     async def unregister_worker(self, worker_id):
@@ -61,7 +79,9 @@ class QueueManager:
         if worker_data:
             # Get the jobs from the worker's queue.
             queued_jobs = self.queue_contents_by_worker(worker_id)
-            logger.info(f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}")
+            logger.info(
+                f"Unregistering worker {worker_id} with {len(queued_jobs)} queued jobs: {queued_jobs}"
+            )
             # Re-queue the jobs to another worker.
             for job in queued_jobs:
                 job_type = job.job_type

@@ -22,7 +22,7 @@ facts = [
     "the Great Barrier Reef is the largest living structure on Earth and can be seen from space",
     "the Eiffel Tower can be 15 cm taller during the summer due to the expansion of the metal",
     "the deepest part of the ocean is the Mariana Trench, which is deeper than Mount Everest is tall",
-    "the Basenji dog breed is known as the \"barkless dog\" due to its unique larynx",
+    'the Basenji dog breed is known as the "barkless dog" due to its unique larynx',
     "the average person walks the equivalent of five times around the world in their lifetime",
     "the average lifespan of a taste bud is 10 days",
     "the Andromeda Galaxy is on a collision course with the Milky Way, expected to occur in about 4 billion years",
@@ -100,8 +100,9 @@ facts = [
     "a group of zebras is called a 'dazzle.'",
     "the shortest complete sentence in the English language is 'Go.'",
     "a group of goats is called a 'trip.'",
-    "the world's largest amphibian is the Chinese giant salamander, which can grow up to 6 feet in length."
+    "the world's largest amphibian is the Chinese giant salamander, which can grow up to 6 feet in length.",
 ]
+
 
 def return_random():
     return random.choice(facts)

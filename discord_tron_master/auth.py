@@ -7,6 +7,7 @@ import datetime
 from .models import OAuthClient, OAuthToken, ApiKey
 from .models.base import db
 
+
 class Auth:
     def __init__(self):
         self._clientgetter = None
@@ -37,13 +38,20 @@ class Auth:
                     return jsonify({"error": "Unauthorized access"}), 401
 
                 return f(*args, **kwargs)
+
             return decorated_function
+
         return wrapper
 
     def create_api_key(self, client_id, user_id):
         api_key = str(uuid.uuid4())
         with self.app.app_context():
-            new_api_key = ApiKey(api_key=api_key, client_id=client_id, user_id=user_id, expires=datetime.datetime.utcnow() + datetime.timedelta(days=30))
+            new_api_key = ApiKey(
+                api_key=api_key,
+                client_id=client_id,
+                user_id=user_id,
+                expires=datetime.datetime.utcnow() + datetime.timedelta(days=30),
+            )
             db.session.add(new_api_key)
             db.session.commit()
             return api_key
@@ -67,7 +75,14 @@ class Auth:
             if token_data and token_data.expires_in is None:
                 # We found a perpetual token. This is probably bad.
                 raise Exception("Token is perpetually active.")
-            elif token_data and (datetime.datetime.timestamp(token_data.issued_at)*1000 + token_data.expires_in) > datetime.datetime.utcnow().timestamp():
+            elif (
+                token_data
+                and (
+                    datetime.datetime.timestamp(token_data.issued_at) * 1000
+                    + token_data.expires_in
+                )
+                > datetime.datetime.utcnow().timestamp()
+            ):
                 logging.debug("The token has not expired yet.")
                 return True
         logging.error("Access token was Invalid: %s" % access_token)
@@ -76,6 +91,7 @@ class Auth:
     # As far as I can tell, this is the most important aspect.
     def create_refresh_token(self, client_id, user_id, scopes=None, expires_in=None):
         import secrets
+
         # Don't do this method if you have a token already.
         token = OAuthToken.query.filter_by(client_id=client_id, user_id=user_id).first()
         if not token:
@@ -92,10 +108,15 @@ class Auth:
     def refresh_authorization(self, token_data, expires_in=None):
         logging.debug("Refreshing access token!")
         token_data.access_token = OAuthToken.make_token()
-        logging.debug("Updating token for client_id: %s, user_id: %s, previous issued_at was %s" % (token_data.client_id, token_data.user_id, token_data.issued_at))
+        logging.debug(
+            "Updating token for client_id: %s, user_id: %s, previous issued_at was %s"
+            % (token_data.client_id, token_data.user_id, token_data.issued_at)
+        )
         token_data.set_issue_timestamp()
         logging.debug("After update, access_token is now %s" % token_data.access_token)
-        logging.debug("After setting timestamp, issued_at is now %s" % token_data.issued_at)
+        logging.debug(
+            "After setting timestamp, issued_at is now %s" % token_data.issued_at
+        )
         db.session.add(token_data)
         db.session.commit()
         return token_data
@@ -104,9 +125,14 @@ class Auth:
     def refresh_access_token(self, token_data):
         logging.debug("Refreshing access token!")
         token_data.access_token = OAuthToken.make_token()
-        logging.debug("Updating token for client_id: %s, user_id: %s, previous issued_at was %s" % (token_data.client_id, token_data.user_id, token_data.issued_at))
+        logging.debug(
+            "Updating token for client_id: %s, user_id: %s, previous issued_at was %s"
+            % (token_data.client_id, token_data.user_id, token_data.issued_at)
+        )
         token_data.set_issue_timestamp()
-        logging.debug("After setting timestamp, issued_at is now %s" % token_data.issued_at)
+        logging.debug(
+            "After setting timestamp, issued_at is now %s" % token_data.issued_at
+        )
         db.session.add(token_data)
         db.session.commit()
         return token_data

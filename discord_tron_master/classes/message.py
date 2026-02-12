@@ -1,7 +1,15 @@
 import time, logging
 
+
 class WebsocketMessage:
-    def __init__(self, message_type: str, module_name: str, module_command, data=None, arguments=None):
+    def __init__(
+        self,
+        message_type: str,
+        module_name: str,
+        module_command,
+        data=None,
+        arguments=None,
+    ):
         logging.info("Creating a new WebSocketMessage")
         self._message_type = message_type
         self._module_name = module_name
@@ -61,8 +69,8 @@ class WebsocketMessage:
             "module_command": self.module_command,
             "timestamp": self.timestamp,
             "data": self.data,
-            "arguments": self.arguments
+            "arguments": self.arguments,
         }
-    
+
     def to_json(self):
         return self.to_dict()

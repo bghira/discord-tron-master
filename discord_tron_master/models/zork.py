@@ -37,12 +37,16 @@ class ZorkChannel(db.Model):
     guild_id = db.Column(db.BigInteger(), nullable=False)
     channel_id = db.Column(db.BigInteger(), nullable=False)
     enabled = db.Column(db.Boolean(), nullable=False, default=False)
-    active_campaign_id = db.Column(db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=True)
+    active_campaign_id = db.Column(
+        db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=True
+    )
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
 
     __table_args__ = (
-        db.UniqueConstraint("guild_id", "channel_id", name="uq_zork_channel_guild_channel"),
+        db.UniqueConstraint(
+            "guild_id", "channel_id", name="uq_zork_channel_guild_channel"
+        ),
     )
 
     def to_dict(self):
@@ -60,7 +64,9 @@ class ZorkChannel(db.Model):
 class ZorkPlayer(db.Model):
     __tablename__ = "zork_players"
     id = db.Column(db.Integer, primary_key=True)
-    campaign_id = db.Column(db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False)
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False
+    )
     user_id = db.Column(db.BigInteger(), nullable=False)
     level = db.Column(db.Integer, nullable=False, default=1)
     xp = db.Column(db.Integer, nullable=False, default=0)
@@ -71,7 +77,9 @@ class ZorkPlayer(db.Model):
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
 
     __table_args__ = (
-        db.UniqueConstraint("campaign_id", "user_id", name="uq_zork_player_campaign_user"),
+        db.UniqueConstraint(
+            "campaign_id", "user_id", name="uq_zork_player_campaign_user"
+        ),
     )
 
     def to_dict(self):
@@ -92,7 +100,9 @@ class ZorkPlayer(db.Model):
 class ZorkTurn(db.Model):
     __tablename__ = "zork_turns"
     id = db.Column(db.Integer, primary_key=True)
-    campaign_id = db.Column(db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False)
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False
+    )
     user_id = db.Column(db.BigInteger(), nullable=True)
     kind = db.Column(db.String(32), nullable=False)  # player, narrator, system
     content = db.Column(db.Text(), nullable=False)

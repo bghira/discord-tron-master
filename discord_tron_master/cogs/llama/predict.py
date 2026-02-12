@@ -4,9 +4,12 @@ from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.llama_prediction_job import LlamaPredictionJob
 from discord_tron_master.bot import clean_traceback
+
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
 logging.debug(f"Loading StableLM predict helper")
+
+
 # Commands used for Stable Diffusion image gen.
 class Predict(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -17,19 +20,29 @@ class Predict(commands.Cog):
     async def l(self, ctx, *, prompt):
         self.llama(ctx, prompt=prompt)
 
-    @commands.command(name="llama", help="Generates an image based on the given prompt.")
+    @commands.command(
+        name="llama", help="Generates an image based on the given prompt."
+    )
     async def llama(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="A worker has been selected for your query: `" + prompt + "`")
+            discord_first_message = await DiscordBot.send_large_message(
+                ctx=ctx,
+                text="A worker has been selected for your query: `" + prompt + "`",
+            )
 
             self.config.reload_config()
 
-            job = LlamaPredictionJob(ctx.author.id, (self.bot, self.config, ctx, prompt, discord_first_message))
+            job = LlamaPredictionJob(
+                ctx.author.id,
+                (self.bot, self.config, ctx, prompt, discord_first_message),
+            )
             # Get the worker that will process the job.
             worker = discord.worker_manager.find_best_fit_worker(job)
             if worker is None:
-                await discord_first_message.edit(content="No workers available. Llama query was **not** added to queue. 😭 aw, how sad. 😭")
+                await discord_first_message.edit(
+                    content="No workers available. Llama query was **not** added to queue. 😭 aw, how sad. 😭"
+                )
                 # Wait a few seconds before deleting:
                 await discord_first_message.delete(delay=10)
                 return

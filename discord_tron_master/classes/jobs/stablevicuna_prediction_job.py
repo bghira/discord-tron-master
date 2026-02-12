@@ -2,6 +2,7 @@ import logging, json, time
 from discord_tron_master.classes.job import Job
 from discord_tron_master.classes.app_config import AppConfig
 
+
 class StableVicunaPredictionJob(Job):
     def __init__(self, author_id: str, payload):
         super().__init__("stablevicuna", "stablevicuna", "predict", author_id, payload)
@@ -24,7 +25,7 @@ class StableVicunaPredictionJob(Job):
             "discord_context": self.context_to_dict(ctx),
             "prompt": prompt,
             "discord_first_message": self.discordmsg_to_dict(discord_first_message),
-            "config": user_config
+            "config": user_config,
         }
         return message
 
@@ -40,6 +41,16 @@ class StableVicunaPredictionJob(Job):
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
-            logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
+            await self.discord_first_message.edit(
+                content="Sorry, hossicle. We had an error sending your "
+                + self.module_command
+                + " job to worker: "
+                + str(e)
+            )
+            logging.error(
+                "Error sending websocket message: "
+                + str(e)
+                + " traceback: "
+                + str(e.__traceback__)
+            )
             return False

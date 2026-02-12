@@ -1,12 +1,13 @@
 from .base import db
 import datetime, json
 
+
 class Conversations(db.Model):
-    __tablename__ = 'conversations'
+    __tablename__ = "conversations"
     id = db.Column(db.Integer, primary_key=True)
     owner = db.Column(db.BigInteger(), unique=False, nullable=False)
     role = db.Column(db.String(255), nullable=False)
-    history = db.Column(db.Text(), nullable=False, default='{}')
+    history = db.Column(db.Text(), nullable=False, default="{}")
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
 
@@ -25,6 +26,7 @@ class Conversations(db.Model):
     def clear_history_by_owner(owner: int):
         conversation = Conversations.get_by_owner(owner)
         import logging
+
         logging.debug(f"Conversation before clearing: {conversation.history}")
         conversation.history = json.dumps(Conversations.get_new_history())
         logging.debug(f"Cleared conversation. New history: {conversation.history}")
@@ -38,7 +40,9 @@ class Conversations(db.Model):
         if existing_definition is not None:
             return existing_definition
         if history is None:
-            raise ValueError("History must be provided when creating a new conversation")
+            raise ValueError(
+                "History must be provided when creating a new conversation"
+            )
         conversation = Conversations(owner=owner, role="", history=json.dumps(history))
         db.session.add(conversation)
         db.session.commit()
@@ -49,7 +53,7 @@ class Conversations(db.Model):
         conversation = Conversations.query.filter_by(owner=owner).first()
         conversation.history = json.loads(conversation.history)
         return conversation
-    
+
     @staticmethod
     def set_history(owner: int, history: dict):
         conversation = Conversations.get_by_owner(owner)
@@ -71,15 +75,15 @@ class Conversations(db.Model):
         if isinstance(conversation.history, str):
             conversation.history = json.loads(conversation.history)
         return conversation.history
-    
+
     @staticmethod
     def set_role(owner: int, role: str):
         conversation = Conversations.get_by_owner(owner)
         conversation.role = role
         conversation.updated = db.func.now()
         db.session.commit()
-        return conversation    
-     
+        return conversation
+
     @staticmethod
     def get_role(owner: int):
         conversation = Conversations.get_by_owner(owner)
@@ -87,12 +91,14 @@ class Conversations(db.Model):
 
     def to_dict(self):
         return {
-            'owner': self.owner,
-            'role': self.role,
-            'history': self.history,
-            'created': self.created,
-            'updated': self.updated
-        }    
+            "owner": self.owner,
+            "role": self.role,
+            "history": self.history,
+            "created": self.created,
+            "updated": self.updated,
+        }
+
     def to_json(self):
         import json
+
         return json.dumps(self.to_dict())

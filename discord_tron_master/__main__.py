@@ -16,6 +16,7 @@ config = AppConfig()
 
 api = API()
 from discord_tron_master.auth import Auth
+
 auth = Auth()
 
 # Provide references to each instance.
@@ -24,6 +25,7 @@ api.set_auth(auth)
 import discord
 from discord_tron_master.websocket_hub import WebSocketHub
 from discord_tron_master.bot import DiscordBot
+
 # Initialize the worker manager and add a few workers
 worker_manager = WorkerManager()
 # Initialize the Queue manager
@@ -35,17 +37,20 @@ intents = discord.Intents.default()
 intents.typing = False
 intents.presences = False
 intents.message_content = True
-PREFIX="!"
+PREFIX = "!"
 discord_bot = DiscordBot(token=config.get_discord_api_key())
 
 # Initialize the command processor
 command_processor = CommandProcessor(queue_manager, worker_manager, discord_bot)
 # Now, the WebSocket Hub.
-websocket_hub = WebSocketHub(auth_instance=auth, command_processor=command_processor, discord_bot=discord_bot)
+websocket_hub = WebSocketHub(
+    auth_instance=auth, command_processor=command_processor, discord_bot=discord_bot
+)
 
 
 import asyncio, concurrent
 from concurrent.futures import ThreadPoolExecutor
+
 asyncio.run(websocket_hub.set_queue_manager(queue_manager))
 asyncio.run(websocket_hub.set_worker_manager(worker_manager))
 
@@ -77,14 +82,17 @@ def main():
             except Exception as e:
                 logging.error("An error occurred: %s", e)
 
+
 # A simple wrapper to run Flask in a thread.
 def run_flask_api():
     logging.info("Startup! Begin API.")
     api.run()
 
-def create_worker_user(username: str, password: str, email = None):
+
+def create_worker_user(username: str, password: str, email=None):
     from discord_tron_master.models.base import db
     from discord_tron_master.models.user import User
+
     # Check if a user with the same username or email already exists
     with api.app.app_context():
         existing_user = User.query.filter_by(username=username).first()
@@ -96,23 +104,30 @@ def create_worker_user(username: str, password: str, email = None):
 
         # Create a new user record if one did not already exist.
         if email is None:
-            email=username + "@example.com"
+            email = username + "@example.com"
         import bcrypt
+
         # Hash the password using bcrypt
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
         new_user = User(username=username, password=hashed_password, email=email)
         db.session.add(new_user)
         db.session.commit()
+
+
 def delete_worker_user(username: str):
     from discord_tron_master.models.base import db
     from discord_tron_master.models.user import User
+
     # Check if a user with the same username or email already exists
     with api.app.app_context():
         existing_user = User.query.filter_by(username=username).first()
         db.session.delete(existing_user)
         db.session.commit()
 
+
 from discord_tron_master.utils import generate_config_file
+
+
 def create_client_tokens(username: str):
     from discord_tron_master.models.user import User
     from discord_tron_master.models.oauth_token import OAuthToken
@@ -120,6 +135,7 @@ def create_client_tokens(username: str):
 
     with api.app.app_context():
         import json
+
         # Do we have a user at all?
         existing_user = User.query.filter_by(username=username).first()
         if existing_user is None:
@@ -128,22 +144,33 @@ def create_client_tokens(username: str):
         # Does it have a client?
         client = existing_user.has_client()
         if not client:
-            logging.info(f"Client does not exist for user {existing_user.username} - we will try to create one.")
+            logging.info(
+                f"Client does not exist for user {existing_user.username} - we will try to create one."
+            )
             client = existing_user.create_client()
         else:
-            logging.info(f"User already had an OAuth Client registered. Using that: {client}")
+            logging.info(
+                f"User already had an OAuth Client registered. Using that: {client}"
+            )
         # Did we deploy them an API Key?
         logging.info("Checking for API Key...")
-        api_key = ApiKey.query.filter_by(client_id=client.client_id, user_id=client.user_id).first()
+        api_key = ApiKey.query.filter_by(
+            client_id=client.client_id, user_id=client.user_id
+        ).first()
         if api_key is None:
             logging.info("No API Key found, generating one...")
             api_key = ApiKey.generate_by_user_id(existing_user.id)
-        logging.info(f"API key for client/user:\n" + json.dumps(api_key.to_dict(), indent=4))
+        logging.info(
+            f"API key for client/user:\n" + json.dumps(api_key.to_dict(), indent=4)
+        )
         # Do we have tokens for this user?
         logging.info("Checking for existing tokens...")
         existing_tokens = OAuthToken.query.filter_by(user_id=existing_user.id).first()
         if existing_tokens is not None:
-            logging.info(f"Tokens already exist for user {username}:\n" + json.dumps(existing_tokens.to_dict(), indent=4))
+            logging.info(
+                f"Tokens already exist for user {username}:\n"
+                + json.dumps(existing_tokens.to_dict(), indent=4)
+            )
             return existing_tokens
     # It seems like we can proceed.
     logging.info(f"Creating tokens for user {username}")
@@ -157,7 +184,7 @@ def create_client_tokens(username: str):
         protocol = "wss"
     config_data = {
         "hub_url": f"{protocol}://{host}:{port}",
-        "refresh_token": refresh_token
+        "refresh_token": refresh_token,
         # "server_cert_path": "path/to/server_cert.pem"
     }
     generate_config_file("client_config.json", config_data)
@@ -166,6 +193,7 @@ def create_client_tokens(username: str):
 if __name__ == "__main__":
     try:
         import argparse
+
         # Parse command-line arguments
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -196,5 +224,6 @@ if __name__ == "__main__":
         exit(0)
     except Exception as e:
         import traceback
+
         logging.error(f"Stack trace: {traceback.format_exc()}")
         exit(1)

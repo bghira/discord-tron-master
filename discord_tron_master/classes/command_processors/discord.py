@@ -6,9 +6,11 @@ from io import BytesIO
 from discord_tron_master.classes.app_config import AppConfig
 from PIL import Image, PngImagePlugin
 from websockets import WebSocketClientProtocol
+
 config = AppConfig()
 from scipy.io.wavfile import write as write_wav
 from scipy.io.wavfile import read as read_wav
+
 BARK_SAMPLE_RATE = 24_000
 web_root = config.get_web_root()
 url_base = config.get_url_base()
@@ -24,6 +26,7 @@ ZORK_STORE_FLAG_KEYS = {
     "zork_store_avatar",
 }
 
+
 def _is_truthy(value):
     if isinstance(value, bool):
         return value
@@ -32,6 +35,7 @@ def _is_truthy(value):
     if isinstance(value, (int, float)):
         return value != 0
     return False
+
 
 def _contains_flag(value, flag_keys):
     if value is None:
@@ -59,17 +63,22 @@ def _contains_flag(value, flag_keys):
                 pass
     return False
 
+
 def _is_zork_scene_request(arguments, data):
-    return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(data, ZORK_SCENE_FLAG_KEYS)
+    return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(
+        data, ZORK_SCENE_FLAG_KEYS
+    )
+
 
 def _is_zork_seed_room_scene(arguments, data):
-    seed_flag = _is_truthy(_find_first_key(arguments, "zork_seed_room_image")) or _is_truthy(
-        _find_first_key(data, "zork_seed_room_image")
-    )
-    store_flag = _is_truthy(_find_first_key(arguments, "zork_store_image")) or _is_truthy(
-        _find_first_key(data, "zork_store_image")
-    )
+    seed_flag = _is_truthy(
+        _find_first_key(arguments, "zork_seed_room_image")
+    ) or _is_truthy(_find_first_key(data, "zork_seed_room_image"))
+    store_flag = _is_truthy(
+        _find_first_key(arguments, "zork_store_image")
+    ) or _is_truthy(_find_first_key(data, "zork_store_image"))
     return seed_flag and store_flag
+
 
 def _find_first_key(value, target_key: str):
     if value is None:
@@ -97,6 +106,7 @@ def _find_first_key(value, target_key: str):
                 pass
     return None
 
+
 def _extract_primary_image_url(arguments: Dict):
     if not isinstance(arguments, dict):
         return None
@@ -116,11 +126,14 @@ def _extract_primary_image_url(arguments: Dict):
         return image_url.strip()
     return None
 
+
 async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
     image_url = _extract_primary_image_url(arguments)
     if not image_url:
         return
-    has_store_flags = _contains_flag(arguments, ZORK_STORE_FLAG_KEYS) or _contains_flag(data, ZORK_STORE_FLAG_KEYS)
+    has_store_flags = _contains_flag(arguments, ZORK_STORE_FLAG_KEYS) or _contains_flag(
+        data, ZORK_STORE_FLAG_KEYS
+    )
     if not has_store_flags:
         return
     guild_id = None
@@ -146,18 +159,18 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
     if avatar_user_id is None:
         avatar_user_id = _find_first_key(data, "zork_user_id")
 
-    store_scene = _is_truthy(_find_first_key(arguments, "zork_store_image")) or _is_truthy(
-        _find_first_key(data, "zork_store_image")
-    )
-    seed_room_scene = _is_truthy(_find_first_key(arguments, "zork_seed_room_image")) or _is_truthy(
-        _find_first_key(data, "zork_seed_room_image")
-    )
+    store_scene = _is_truthy(
+        _find_first_key(arguments, "zork_store_image")
+    ) or _is_truthy(_find_first_key(data, "zork_store_image"))
+    seed_room_scene = _is_truthy(
+        _find_first_key(arguments, "zork_seed_room_image")
+    ) or _is_truthy(_find_first_key(data, "zork_seed_room_image"))
     scene_prompt = _find_first_key(arguments, "zork_scene_prompt")
     if scene_prompt is None:
         scene_prompt = _find_first_key(data, "zork_scene_prompt")
-    store_avatar = _is_truthy(_find_first_key(arguments, "zork_store_avatar")) or _is_truthy(
-        _find_first_key(data, "zork_store_avatar")
-    )
+    store_avatar = _is_truthy(
+        _find_first_key(arguments, "zork_store_avatar")
+    ) or _is_truthy(_find_first_key(data, "zork_store_avatar"))
 
     try:
         campaign_id = int(campaign_id) if campaign_id is not None else None
@@ -168,7 +181,9 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
     except Exception:
         avatar_user_id = None
     try:
-        scene_actor_user_id = int(avatar_user_id) if avatar_user_id is not None else None
+        scene_actor_user_id = (
+            int(avatar_user_id) if avatar_user_id is not None else None
+        )
     except Exception:
         scene_actor_user_id = None
 
@@ -215,6 +230,7 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
                 avatar_prompt=arguments.get("image_prompt"),
             )
 
+
 def _is_zork_enabled_thread_channel(channel, data) -> bool:
     if channel is None or not isinstance(channel, discord.Thread):
         return False
@@ -230,6 +246,7 @@ def _is_zork_enabled_thread_channel(channel, data) -> bool:
         if app is None:
             return False
         from discord_tron_master.models.zork import ZorkChannel
+
         with app.app_context():
             row = ZorkChannel.query.filter_by(
                 guild_id=int(guild_id),
@@ -239,6 +256,7 @@ def _is_zork_enabled_thread_channel(channel, data) -> bool:
             return row is not None
     except Exception:
         return False
+
 
 def _has_media_payload(arguments: Dict) -> bool:
     if not isinstance(arguments, dict):
@@ -254,12 +272,16 @@ def _has_media_payload(arguments: Dict) -> bool:
             return True
     return False
 
-def _should_suppress_zork_image_body(channel, arguments: Dict, data: Dict, zork_scene_mode: bool) -> bool:
+
+def _should_suppress_zork_image_body(
+    channel, arguments: Dict, data: Dict, zork_scene_mode: bool
+) -> bool:
     if zork_scene_mode:
         return True
     if not _has_media_payload(arguments):
         return False
     return _is_zork_enabled_thread_channel(channel, data)
+
 
 def _strip_worker_image_details(message: str) -> str:
     if not isinstance(message, str):
@@ -279,25 +301,36 @@ def _strip_worker_image_details(message: str) -> str:
         cleaned_lines.append(raw_line)
     return "\n".join(cleaned_lines).strip()
 
-async def send_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def send_message(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     logger.debug(f"Entering send_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
             zork_scene_mode = _is_zork_scene_request(arguments, data)
             zork_seed_scene = _is_zork_seed_room_scene(arguments, data)
-            suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
+            suppress_body = _should_suppress_zork_image_body(
+                channel, arguments, data, zork_scene_mode
+            )
             if zork_seed_scene and _has_media_payload(arguments):
                 # Seed image is cached for room continuity and followed by an auto-composite pass;
                 # suppress this intermediate render from user-facing chat output.
                 await _record_zork_generated_image(channel, arguments, data)
                 return {"success": True, "result": "Seed scene cached."}
             if zork_scene_mode and "message" in arguments:
-                logger.debug("Detected zork scene image payload in send_message; suppressing default reactions and worker detail text.")
+                logger.debug(
+                    "Detected zork scene image payload in send_message; suppressing default reactions and worker detail text."
+                )
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
                 if not arguments["message"]:
-                    mention_id = arguments.get("mention") or data.get("author", {}).get("id")
-                    arguments["message"] = f"<@{mention_id}>" if mention_id else "Scene updated."
+                    mention_id = arguments.get("mention") or data.get("author", {}).get(
+                        "id"
+                    )
+                    arguments["message"] = (
+                        f"<@{mention_id}>" if mention_id else "Scene updated."
+                    )
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
             file = None
             embeds = None
@@ -306,7 +339,7 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["image"] is not None:
                     base64_decoded_image = base64.b64decode(arguments["image"])
                     buffer = BytesIO(base64_decoded_image)
-                    file=discord.File(buffer, "image.png")
+                    file = discord.File(buffer, "image.png")
                     wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
@@ -314,22 +347,27 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                         # Use the comparison tool for DALLE3 and SD3.
                         logger.debug(f"Using comparison tool for DALLE3 and SD3.")
                         from discord_tron_master.cogs.image import generate_image
+
                         await generate_image(
                             channel,
                             arguments["image_prompt"],
                             extra_image={
                                 "label": arguments["image_model"],
-                                "data": requests.get(arguments["image_url_list"][0]).content
-                            }
+                                "data": requests.get(
+                                    arguments["image_url_list"][0]
+                                ).content,
+                            },
                         )
 
                     logger.debug(f"Incoming message to send, has an image url list.")
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
-                        if 'mp4' in image_url:
+                        if "mp4" in image_url:
                             if not suppress_body:
-                                arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                                arguments["message"] = (
+                                    f"{arguments['message']}\nVideo URL: {image_url}"
+                                )
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             embed = discord.Embed(url="http://tripleback.net")
@@ -341,61 +379,83 @@ async def send_message(command_processor, arguments: Dict, data: Dict, websocket
                 if arguments["audio_url"] is not None:
                     logger.debug(f"Incoming message to send, has an audio url.")
                     if not suppress_body:
-                        arguments["message"] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
+                        arguments["message"] = (
+                            f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
+                        )
                 else:
                     logger.debug(f"Incoming message to send, has zero audio url.")
             if "video_url" in arguments:
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
                     if not suppress_body:
-                        arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
-                    embed = discord.Embed(url='https://tripleback.net')
+                        arguments["message"] = (
+                            f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                        )
+                    embed = discord.Embed(url="https://tripleback.net")
                     embed.set_image(url=arguments["video_url"])
                 else:
                     logger.debug(f"Incoming message to send, has zero video url.")
 
             if "audio_data" in arguments:
                 if arguments["audio_data"] is not None:
-                    logger.debug(f"Incoming message had audio data. Embedding as a file.")
-                    file=await get_audio_file(arguments["audio_data"])
+                    logger.debug(
+                        f"Incoming message had audio data. Embedding as a file."
+                    )
+                    file = await get_audio_file(arguments["audio_data"])
             content_to_send = arguments.get("message")
             if suppress_body and (file is not None or embeds is not None):
                 content_to_send = None
-            message = await channel.send(content=content_to_send, file=file, embeds=embeds)
+            message = await channel.send(
+                content=content_to_send, file=file, embeds=embeds
+            )
             await _record_zork_generated_image(channel, arguments, data)
             # List of number emojis
-            number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+            number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
 
             # Add reactions
             adding_reactions = []
             if wants_variations > 0:
-                adding_reactions = [ '♻️', '📋', '🌱', '📜' ]
+                adding_reactions = ["♻️", "📋", "🌱", "📜"]
 
             # Add the appropriate number of emojis based on wants_variations
             if wants_variations > 0:
                 adding_reactions.extend(number_emojis[:wants_variations])
 
             # Always add the '❌' reaction
-            adding_reactions.append('❌')
+            adding_reactions.append("❌")
             if not suppress_body:
-                await command_processor.discord.attach_default_reactions(message, adding_reactions)
+                await command_processor.discord.attach_default_reactions(
+                    message, adding_reactions
+                )
         except Exception as e:
             logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message sent."}
 
-async def send_large_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def send_large_message(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     logger.debug(f"Entering send_large_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
-            await command_processor.discord.send_large_message(channel, arguments["message"])
+            await command_processor.discord.send_large_message(
+                channel, arguments["message"]
+            )
         except Exception as e:
-            logger.error(f"Error sending large message to {channel.name} ({channel.id}): {e}")
+            logger.error(
+                f"Error sending large message to {channel.name} ({channel.id}): {e}"
+            )
     return {"success": True, "result": "Large message sent."}
 
 
-async def send_image(command_processor, arguments: Dict[str, str], data: Dict[str, str], websocket: WebSocketClientProtocol):
+async def send_image(
+    command_processor,
+    arguments: Dict[str, str],
+    data: Dict[str, str],
+    websocket: WebSocketClientProtocol,
+):
     logger.debug(f"Entering send_image: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
@@ -413,26 +473,38 @@ async def send_image(command_processor, arguments: Dict[str, str], data: Dict[st
     return {"success": False, "result": "Channel not found."}
 
 
-async def delete_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+async def delete_message(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
             message = await channel.fetch_message(data["message_id"])
             await message.delete()
         except Exception as e:
-            logger.warning(f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!")
+            logger.warning(
+                f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!"
+            )
             return {"success": True, "result": "Message deleted, but not by us."}
         return {"success": True, "result": "Message deleted."}
     return {"error": "Channel could not be found."}
 
-async def delete_previous_errors(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def delete_previous_errors(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     try:
-        await command_processor.discord.delete_previous_errors(data["channel"]["id"], prefix="seems we had an error")
+        await command_processor.discord.delete_previous_errors(
+            data["channel"]["id"], prefix="seems we had an error"
+        )
     except Exception as e:
         return {"error": f"Could not delete previous messages: {e}"}
     return {"success": True, "result": "Message deleted."}
 
-async def edit_message(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def edit_message(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     logger.debug(f"Received command data: {data}")
     logger.debug(f"Received command arguments: {arguments}")
     if "message" not in arguments:
@@ -446,7 +518,10 @@ async def edit_message(command_processor, arguments: Dict, data: Dict, websocket
             logger.error(f"Error editing message in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Message edited."}
 
-async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def send_embed(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     logger.debug(f"Entering send_embed: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
@@ -456,8 +531,13 @@ async def send_embed(command_processor, arguments: Dict, data: Dict, websocket: 
             logger.error(f"Error sending embed to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Embed sent."}
 
-async def send_file(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
-    logger.debug(f"Entering send_file: {arguments} {data} {websocket} {command_processor}")
+
+async def send_file(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
+    logger.debug(
+        f"Entering send_file: {arguments} {data} {websocket} {command_processor}"
+    )
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -466,7 +546,10 @@ async def send_file(command_processor, arguments: Dict, data: Dict, websocket: W
             logger.error(f"Error sending file to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "File sent."}
 
-async def send_files(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def send_files(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -475,8 +558,13 @@ async def send_files(command_processor, arguments: Dict, data: Dict, websocket: 
             logger.error(f"Error sending files to {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Files sent."}
 
-async def create_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
-    logger.debug(f"Entering create_thread: {arguments} {data} {websocket} {command_processor}")
+
+async def create_thread(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
+    logger.debug(
+        f"Entering create_thread: {arguments} {data} {websocket} {command_processor}"
+    )
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     logger.debug(f"Found channel? {channel}")
     wants_variations = 0
@@ -484,25 +572,37 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
     zork_seed_scene = _is_zork_seed_room_scene(arguments, data)
     if channel is not None:
         try:
-            suppress_body = _should_suppress_zork_image_body(channel, arguments, data, zork_scene_mode)
+            suppress_body = _should_suppress_zork_image_body(
+                channel, arguments, data, zork_scene_mode
+            )
             if zork_seed_scene and _has_media_payload(arguments):
                 await _record_zork_generated_image(channel, arguments, data)
                 return {"success": True, "result": "Seed scene cached."}
             if zork_scene_mode and "message" in arguments:
-                logger.debug("Detected zork scene image payload in create_thread; suppressing default reactions and worker detail text.")
+                logger.debug(
+                    "Detected zork scene image payload in create_thread; suppressing default reactions and worker detail text."
+                )
                 arguments["message"] = _strip_worker_image_details(arguments["message"])
                 if not arguments["message"]:
-                    mention_id = arguments.get("mention") or data.get("author", {}).get("id")
-                    arguments["message"] = f"<@{mention_id}>" if mention_id else "Scene updated."
+                    mention_id = arguments.get("mention") or data.get("author", {}).get(
+                        "id"
+                    )
+                    arguments["message"] = (
+                        f"<@{mention_id}>" if mention_id else "Scene updated."
+                    )
             # Maybe channel is already a thread.
             if isinstance(channel, discord.Thread):
                 logger.debug(f"Channel is already a thread. Using it.")
                 thread = channel
             elif isinstance(channel, discord.TextChannel):
                 logger.debug(f"Channel is a text channel. Creating thread.")
-                thread = await channel.create_thread(name=arguments["name"], type=discord.ChannelType.public_thread)
+                thread = await channel.create_thread(
+                    name=arguments["name"], type=discord.ChannelType.public_thread
+                )
             else:
-                raise Exception(f"Channel is not a text channel or thread. It is a {type(channel)}")
+                raise Exception(
+                    f"Channel is not a text channel or thread. It is a {type(channel)}"
+                )
             embed = None
             embeds = None
             if "image" in arguments:
@@ -517,14 +617,18 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             if "video_url" in arguments:
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
-                    arguments["message"] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
-                    embed = discord.Embed(url='https://tripleback.net')
+                    arguments["message"] = (
+                        f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
+                    )
+                    embed = discord.Embed(url="https://tripleback.net")
                     embed.set_image(url=arguments["video_url"])
                 else:
                     logger.debug(f"Incoming message to send, has zero video url.")
             if "image_url" in arguments:
-                logger.debug(f"Found image URL inside arguments: {arguments['image_url']}")
-                embed = discord.Embed(url='https://tripleback.net')
+                logger.debug(
+                    f"Found image URL inside arguments: {arguments['image_url']}"
+                )
+                embed = discord.Embed(url="https://tripleback.net")
                 embed.set_image(url=arguments["image_url"])
                 wants_variations = 1
             if "image_url_list" in arguments:
@@ -532,8 +636,11 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                     logger.debug(f"Incoming message to send, has an image url list.")
                     if config.should_compare() and not suppress_body:
                         # Use the comparison tool for DALLE3 and SD3.
-                        logger.debug(f"Using comparison tool for DALLE3 and SD3, arguments: {arguments}")
+                        logger.debug(
+                            f"Using comparison tool for DALLE3 and SD3, arguments: {arguments}"
+                        )
                         from discord_tron_master.cogs.image import generate_image
+
                         try:
                             await generate_image(
                                 channel,
@@ -541,17 +648,25 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
                                 user_id=arguments["user_id"],
                                 extra_image={
                                     "label": arguments["image_model"],
-                                    "data": Image.open(BytesIO(requests.get(arguments["image_url_list"][0]).content))
-                                }
+                                    "data": Image.open(
+                                        BytesIO(
+                                            requests.get(
+                                                arguments["image_url_list"][0]
+                                            ).content
+                                        )
+                                    ),
+                                },
                             )
                         except Exception as e:
                             logger.error(f"Error comparing images: {e}")
                     embeds = []
                     wants_variations = len(arguments["image_url_list"])
                     for image_url in arguments["image_url_list"]:
-                        if 'mp4' in image_url:
+                        if "mp4" in image_url:
                             if not suppress_body:
-                                arguments["message"] = f"{arguments['message']}\nVideo URL: {image_url}"
+                                arguments["message"] = (
+                                    f"{arguments['message']}\nVideo URL: {image_url}"
+                                )
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             new_embed = discord.Embed(url="http://tripleback.net")
@@ -562,7 +677,9 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             logger.debug(f"Sending message to thread: {arguments['message']}")
             if not suppress_body and "mention" in arguments:
                 logger.debug(f"Mentioning user: {arguments['mention']}")
-                arguments["message"] = f"<@{arguments['mention']}> {arguments['message']}"
+                arguments["message"] = (
+                    f"<@{arguments['mention']}> {arguments['message']}"
+                )
             content_to_send = arguments.get("message")
             if suppress_body and embeds is not None:
                 content_to_send = None
@@ -570,27 +687,32 @@ async def create_thread(command_processor, arguments: Dict, data: Dict, websocke
             await _record_zork_generated_image(thread, arguments, data)
 
             # List of number emojis
-            number_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+            number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
 
             # Add reactions
             adding_reactions = []
             if wants_variations > 0:
-                adding_reactions = [ '♻️', '📋', '🌱', '📜', '💾' ]
+                adding_reactions = ["♻️", "📋", "🌱", "📜", "💾"]
 
             # Add the appropriate number of emojis based on wants_variations
             if wants_variations > 0:
                 adding_reactions.extend(number_emojis[:wants_variations])
 
             # Always add the '❌' reaction
-            adding_reactions.append('❌')
+            adding_reactions.append("❌")
             if not suppress_body:
-                await command_processor.discord.attach_default_reactions(message, adding_reactions)
+                await command_processor.discord.attach_default_reactions(
+                    message, adding_reactions
+                )
         except Exception as e:
             logger.error(f"Error creating thread in {channel.name} ({channel.id}): {e}")
     logger.debug(f"Exiting create_thread")
     return {"success": True, "result": "Thread created."}
 
-async def delete_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def delete_thread(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
@@ -599,24 +721,30 @@ async def delete_thread(command_processor, arguments: Dict, data: Dict, websocke
             logger.error(f"Error deleting thread in {channel.name} ({channel.id}): {e}")
     return {"success": True, "result": "Thread deleted."}
 
-async def send_message_to_thread(command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol):
+
+async def send_message_to_thread(
+    command_processor, arguments: Dict, data: Dict, websocket: WebSocketClientProtocol
+):
     logger.debug(f"Entering send_message_to_thread: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
         try:
             await discord.send(content=arguments["message"])
         except Exception as e:
-            logger.error(f"Error sending message to thread in {channel.name} ({channel.id}): {e}")
+            logger.error(
+                f"Error sending message to thread in {channel.name} ({channel.id}): {e}"
+            )
     return {"success": True, "result": "Message sent."}
 
-async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True):
+
+async def get_image_embed(image_data, pnginfo=None, create_embed: bool = True):
     base64_decoded_image = base64.b64decode(image_data)
     buffer = BytesIO(base64_decoded_image)
     filename = f"{time.time()}{hashlib.md5(buffer.read()).hexdigest()}.png"
     buffer.seek(0)
     image = Image.open(buffer)
     if pnginfo is not None:
-        logger.debug(f'Saving with pnginfo: {pnginfo}')
+        logger.debug(f"Saving with pnginfo: {pnginfo}")
         image.save(f"{web_root}/{filename}", format="PNG", pnginfo=pnginfo)
     else:
         image.save(f"{web_root}/{filename}")
@@ -627,12 +755,14 @@ async def get_image_embed(image_data, pnginfo = None, create_embed: bool = True)
         return embed
     return image_url
 
+
 async def get_audio_file(audio_data):
     base64_decoded_audio = base64.b64decode(audio_data)
     buffer = BytesIO(base64_decoded_audio)
     buffer.seek(0)
-    file = discord.File(filename='audio.mp3', fp=buffer, spoiler=False)
+    file = discord.File(filename="audio.mp3", fp=buffer, spoiler=False)
     return file
+
 
 async def get_audio_url(audio_data):
     sample_rate, audio_array = extract_wav(audio_data)
@@ -642,29 +772,33 @@ async def get_audio_url(audio_data):
     audio_url = f"\n{url_base}/{filename}"
     return audio_url
 
+
 def extract_wav(audio_data):
     wav_binary_stream = BytesIO(audio_data)
     return read_wav(wav_binary_stream)
+
 
 async def get_audio_url_from_numpy(audio_array):
     audio_base64 = base64.b64encode(audio_array)
     return get_audio_url(audio_base64)
 
+
 async def get_video_url(video_data):
     filename = f"{time.time()}{hashlib.md5(video_data).hexdigest()}.mp4"
     # Save the video mp4 file and get its URL
     os.makedirs(web_root, exist_ok=True)
-    with open(os.path.join(web_root, filename), 'wb') as f:
+    with open(os.path.join(web_root, filename), "wb") as f:
         f.write(video_data)
-    
+
     video_url = f"\n{url_base}/{filename}"
     return video_url
+
 
 async def get_message_txt_file(text):
     # write to file
     with open("result.txt", "w") as file:
-        file.write('arg1 = {0}, arg2 = {1}'.format(arg1, arg2))
-    
+        file.write("arg1 = {0}, arg2 = {1}".format(arg1, arg2))
+
     # send file to Discord in message
     with open("result.txt", "rb") as file:
         await ctx.send("Your file is:", file=discord.File(file, "result.txt"))

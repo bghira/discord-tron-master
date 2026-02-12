@@ -4,10 +4,15 @@ from discord_tron_master.models.transformers import Transformers
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.models.schedulers import Schedulers
 import time
+
 flask = AppConfig.get_flask()
+
+
 class ImageGenerationJob(Job):
-    def __init__(self, author_id: str, payload, extra_payload:dict = None):
-        super().__init__("gpu", "image_generation", "generate_image", author_id, payload)
+    def __init__(self, author_id: str, payload, extra_payload: dict = None):
+        super().__init__(
+            "gpu", "image_generation", "generate_image", author_id, payload
+        )
         self.extra_payload = extra_payload
         self.date_created = time.time()
 
@@ -62,6 +67,7 @@ class ImageGenerationJob(Job):
                 if cleaned:
                     message["image_data"] = cleaned
         return message
+
     async def execute(self):
         if self.executed:
             logging.warning(f"Job {self.job_id} has already been executed. Ignoring.")
@@ -74,15 +80,28 @@ class ImageGenerationJob(Job):
         try:
             await self.worker.send_websocket_message(json.dumps(message))
         except Exception as e:
-            await self.discord_first_message.edit(content="Sorry, hossicle. We had an error sending your " + self.module_command + " job to worker: " + str(e))
-            logging.error("Error sending websocket message: " + str(e) + " traceback: " + str(e.__traceback__))
+            await self.discord_first_message.edit(
+                content="Sorry, hossicle. We had an error sending your "
+                + self.module_command
+                + " job to worker: "
+                + str(e)
+            )
+            logging.error(
+                "Error sending websocket message: "
+                + str(e)
+                + " traceback: "
+                + str(e.__traceback__)
+            )
             return False
+
     def get_transformer_details(self, user_config):
-        model_id = user_config['model']
+        model_id = user_config["model"]
         app = AppConfig.flask
         with app.app_context():
             transformer = Transformers.get_by_full_model_id(model_id)
         if transformer is None:
-            logging.warning(f"No transformer row found for model '{model_id}'. Sending empty model_config.")
+            logging.warning(
+                f"No transformer row found for model '{model_id}'. Sending empty model_config."
+            )
             return {}
         return transformer.to_dict()

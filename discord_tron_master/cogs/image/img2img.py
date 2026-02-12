@@ -23,7 +23,6 @@ discord_wrapper = DiscordBot.get_instance()
 from discord_tron_master.classes.openai.text import GPT
 
 
-
 # Commands used for Stable Diffusion image gen.
 class Img2img(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -44,12 +43,20 @@ class Img2img(commands.Cog):
         self.config.reload_config()
 
         # Ignore bot messages
-        if 'SimpleTuner has launched. Hold onto your butts!' not in message.content and (message.author == self.bot.user or message.author.bot):
+        if (
+            "SimpleTuner has launched. Hold onto your butts!" not in message.content
+            and (message.author == self.bot.user or message.author.bot)
+        ):
             logging.debug("Ignoring message from this or another bot.")
             return
-        elif 'SimpleTuner has launched. Hold onto your butts!' in message.content and message.author.bot:
+        elif (
+            "SimpleTuner has launched. Hold onto your butts!" in message.content
+            and message.author.bot
+        ):
             # An application has posted a ST update. Let's remove previous updates and return.
-            logging.info(f"Found a SimpleTuner update message from {message.author}. Removing previous messages.")
+            logging.info(
+                f"Found a SimpleTuner update message from {message.author}. Removing previous messages."
+            )
             await self._clear_previous_simpletuner_messages(message)
 
             return
@@ -58,10 +65,16 @@ class Img2img(commands.Cog):
             app = AppConfig.get_flask()
             if app is not None:
                 with app.app_context():
-                    if ZorkEmulator.is_channel_enabled(message.guild.id, message.channel.id):
+                    if ZorkEmulator.is_channel_enabled(
+                        message.guild.id, message.channel.id
+                    ):
                         return
 
-        if isinstance(message.channel, discord.Thread) and message.channel.owner_id == self.bot.user.id and not self.bot.user in message.mentions:
+        if (
+            isinstance(message.channel, discord.Thread)
+            and message.channel.owner_id == self.bot.user.id
+            and not self.bot.user in message.mentions
+        ):
             await self._handle_thread_message(message)
         elif self.bot.user in message.mentions:
             await self._handle_mentioned_message(message)
@@ -69,6 +82,7 @@ class Img2img(commands.Cog):
     async def _clear_previous_simpletuner_messages(self, message):
         # Look for the contents inside the `.*` at the beginning of the string. this is the search identifier.
         import re
+
         logging.info(f"Running regex identifier search")
         search_identifier = re.search(r"`.*`", message.content)
         logging.info(f"Search identifier: {search_identifier}")
@@ -81,7 +95,6 @@ class Img2img(commands.Cog):
                     continue
                 await msg.delete()
 
-
     async def _handle_thread_message(self, message):
         if message.content.startswith("!") or message.content.startswith("+"):
             return
@@ -93,7 +106,11 @@ class Img2img(commands.Cog):
 
     async def _handle_mentioned_message(self, message):
         # Clean the message content
-        message.content = message.content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip()
+        message.content = (
+            message.content.replace(f"<@{self.bot.user.id}>", "")
+            .replace(f"<@!{self.bot.user.id}>", "")
+            .strip()
+        )
         # Log the content
         logging.debug(f"Message content: {message.content}")
         # Handle image attachments
@@ -110,15 +127,23 @@ class Img2img(commands.Cog):
 
         # There might be URLs in the message body, grab them via regex and check if they're images. The images may be surrounded by <> or () or [] or nothing.
         import re
-        url_list = re.findall(r'(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?', message.content)
-        
+
+        url_list = re.findall(
+            r"(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?", message.content
+        )
+
         if len(url_list) > 0:
             # Remove the URLs from the original string:
-            message.content = re.sub(r'(https?://[^\s]+)', '', message.content).strip()
+            message.content = re.sub(r"(https?://[^\s]+)", "", message.content).strip()
             for url in url_list:
                 # Remove any ?query=string from the URL:
                 test_url = url.split("?")[0]
-                if test_url.endswith(".png") or test_url.endswith(".jpg") or test_url.endswith(".jpeg") or test_url.endswith(".webp"):
+                if (
+                    test_url.endswith(".png")
+                    or test_url.endswith(".jpg")
+                    or test_url.endswith(".jpeg")
+                    or test_url.endswith(".webp")
+                ):
                     try:
                         return await self._handle_image_attachment(message, url)
                     except Exception as e:
@@ -190,7 +215,7 @@ class Img2img(commands.Cog):
                     message.content,
                     discord_first_message,
                     attachment.url,
-                )
+                ),
             )
         elif message.content != "" or prompt_override is not None:
             prompt = message.content
@@ -224,7 +249,7 @@ class Img2img(commands.Cog):
                     message.content,
                     discord_first_message,
                     attachment.url,
-                )
+                ),
             )
         # Get the worker that will process the job.
         worker = discord_wrapper.worker_manager.find_best_fit_worker(job)

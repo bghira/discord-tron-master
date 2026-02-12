@@ -13,12 +13,15 @@ guild_config = GuildConfig()
 resolution_helper = ResolutionHelper()
 available_resolutions = resolution_helper.list_available_resolutions()
 
+
 class Settings(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = AppConfig()
 
-    @commands.command(name="disallow", help="Bans a channel from generating.", hidden=True)
+    @commands.command(
+        name="disallow", help="Bans a channel from generating.", hidden=True
+    )
     async def disallow_channel(self, ctx):
         is_channel_banned = guild_config.is_channel_banned(ctx.guild.id, ctx.channel.id)
         if is_channel_banned:
@@ -53,7 +56,11 @@ class Settings(commands.Cog):
         return False
 
     # Other commands in your user_commands cog...
-    @commands.command(name="home", help="Sets the home guild for this bot.  This is where the bot will have warm and fuzzy feelings.", hidden=True)
+    @commands.command(
+        name="home",
+        help="Sets the home guild for this bot.  This is where the bot will have warm and fuzzy feelings.",
+        hidden=True,
+    )
     async def home_guild(self, ctx):
         if not guild_config.is_guild_home_defined():
             guild_config.set_guild_home(ctx.guild.id)
@@ -61,12 +68,22 @@ class Settings(commands.Cog):
         else:
             await ctx.send(f"Are you fucking lost?")
 
-    @commands.command(name="best-of", help="Sets the best-of channel ID for this guild.  This is where the bot will forward thumbs-up images.", hidden=True)
+    @commands.command(
+        name="best-of",
+        help="Sets the best-of channel ID for this guild.  This is where the bot will forward thumbs-up images.",
+        hidden=True,
+    )
     async def best_of_channel(self, ctx):
-        guild_config.set_guild_setting(ctx.guild.id, 'best_of_channel_id', ctx.channel.id)
-        await ctx.send(f"This is now the channel for best-of posts in {ctx.guild.name} ({ctx.guild.id}).")
+        guild_config.set_guild_setting(
+            ctx.guild.id, "best_of_channel_id", ctx.channel.id
+        )
+        await ctx.send(
+            f"This is now the channel for best-of posts in {ctx.guild.name} ({ctx.guild.id})."
+        )
 
-    @commands.command(name="settings", help="Shows your current settings.", hidden=False)
+    @commands.command(
+        name="settings", help="Shows your current settings.", hidden=False
+    )
     async def my_settings(self, ctx, *args):
         user_id = ctx.author.id
         user_config = self.config.get_user_config(user_id=user_id)
@@ -74,37 +91,48 @@ class Settings(commands.Cog):
             logging.info(f"Here are the args: {args}")
             setting_key = args[0]
             if setting_key not in user_config:
-                mappable_options = { "positive": "positive_prompt", "negative": "negative_prompt" }
+                mappable_options = {
+                    "positive": "positive_prompt",
+                    "negative": "negative_prompt",
+                }
                 if setting_key in mappable_options:
                     setting_key = mappable_options[setting_key]
                 else:
-                    await ctx.send(f"That setting does not exist.  Did you know {random_fact()}?")
+                    await ctx.send(
+                        f"That setting does not exist.  Did you know {random_fact()}?"
+                    )
                     return
             # Does args[1] exist?
             try:
                 # Join all of the items in args[1:]
-                setting_value = ' '.join(args[1:])
-                nullable_options = [ 'positive_prompt', 'negative_prompt' ]
+                setting_value = " ".join(args[1:])
+                nullable_options = ["positive_prompt", "negative_prompt"]
                 if setting_key in nullable_options and setting_value == "none":
                     setting_value = str("")
 
             except IndexError:
-                await ctx.send(f"You did not provide a setting for me to update.  Did you know {random_fact()}?")
+                await ctx.send(
+                    f"You did not provide a setting for me to update.  Did you know {random_fact()}?"
+                )
                 return
             # Check whether the new value type is the same type as their old value.
             # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
             same_type = compare_setting_types(user_config[setting_key], setting_value)
             if same_type is None and setting_key != "skip_guidance_layers":
-                await ctx.send(f"Dude, do not fuck with me. Are you trying to override {user_config[setting_key]} with {setting_value}? Seriously? They're not even the same data type. Keep it similar. Everything goes through the square hole though, right? Amateurs.")
+                await ctx.send(
+                    f"Dude, do not fuck with me. Are you trying to override {user_config[setting_key]} with {setting_value}? Seriously? They're not even the same data type. Keep it similar. Everything goes through the square hole though, right? Amateurs."
+                )
                 return
             # Same type comes back as the cast value.
             if same_type is not None:
                 setting_value = same_type
 
             # We are given valid option, value checks out. Is it a forbidden fruit?
-            unforgivable_curses = [ 'model', 'resolution', 'seed' ]
+            unforgivable_curses = ["model", "resolution", "seed"]
             if setting_key in unforgivable_curses:
-                await ctx.send(f"Well, well, well. If it isn't that user that thought they could go around whatever roadblocks I've put in the way of their fun. You cannot set {unforgivable_curses} on your settings profile through this option. Use `{self.config.get_command_prefix()}help` to discover your own asshole and finger your way out of this mess.")
+                await ctx.send(
+                    f"Well, well, well. If it isn't that user that thought they could go around whatever roadblocks I've put in the way of their fun. You cannot set {unforgivable_curses} on your settings profile through this option. Use `{self.config.get_command_prefix()}help` to discover your own asshole and finger your way out of this mess."
+                )
                 return
             setting_text = setting_value
             if setting_value == "none":
@@ -113,7 +141,9 @@ class Settings(commands.Cog):
             self.config.set_user_setting(user_id, setting_key, setting_value)
             if setting_value == "":
                 setting_text = "literally nothing"
-            await ctx.send(f"{ctx.author.mention} your setting, `{setting_key}` has been updated to `{setting_text}`.  Did you know {random_fact()}?")
+            await ctx.send(
+                f"{ctx.author.mention} your setting, `{setting_key}` has been updated to `{setting_text}`.  Did you know {random_fact()}?"
+            )
             return
 
         model_id = user_config.get("model")
@@ -142,12 +172,8 @@ class Settings(commands.Cog):
             "negative_prompt",
             "(child, baby, deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation",
         )
-        positive_prompt = self.config.get_user_setting(
-            user_id, "positive_prompt"
-        )
-        resolution = self.config.get_user_setting(
-            user_id, "resolution"
-        )
+        positive_prompt = self.config.get_user_setting(user_id, "positive_prompt")
+        resolution = self.config.get_user_setting(user_id, "resolution")
         if positive_prompt == "":
             positive_prompt = "literally nothing. fly free, birdie."
         if negative_prompt == "":
@@ -176,25 +202,32 @@ class Settings(commands.Cog):
             try:
                 await ctx.message.delete()
             except:
-                logging.warning(f"Could not delete message, it was likely deleted by another worker or a moderator.")
+                logging.warning(
+                    f"Could not delete message, it was likely deleted by another worker or a moderator."
+                )
         elif hasattr(ctx, "delete"):
             await ctx.delete()
         await DiscordBot.send_large_message(ctx, message)
-    @commands.command(name="defaults", help="Set defaults for all users (admin only).", hidden=False)
+
+    @commands.command(
+        name="defaults", help="Set defaults for all users (admin only).", hidden=False
+    )
     async def default_settings(self, ctx, *args):
         user_id = ctx.author.id
         user_config = self.config.get_user_config(user_id=user_id)
-        default_config = self.config.get_user_config(user_id='default')
+        default_config = self.config.get_user_config(user_id="default")
         if args:
             setting_key = args[0]
             setting_value = " ".join(args[1:])
-            self.config.set_user_setting('default', setting_key, setting_value)
+            self.config.set_user_setting("default", setting_key, setting_value)
             if setting_value == "":
                 setting_value = "literally nothing"
-            await ctx.send(f"{ctx.author.mention} the default user setting, `{setting_key}` has been updated to `{setting_value}`.  Did you know {random_fact()}?")
+            await ctx.send(
+                f"{ctx.author.mention} the default user setting, `{setting_key}` has been updated to `{setting_value}`.  Did you know {random_fact()}?"
+            )
             return
 
-        user_id = 'default'
+        user_id = "default"
         model_id = self.config.get_user_setting(user_id, "models")
         steps = self.config.get_user_setting(user_id, "steps")
         tts_voice = self.config.get_user_setting(user_id, "tts_voice")
@@ -220,12 +253,8 @@ class Settings(commands.Cog):
             "negative_prompt",
             "(child, baby, deformed, distorted, disfigured:1.3), poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, (mutated hands and fingers:1.4), disconnected limbs, mutation, mutated, ugly, disgusting, blurry, amputation",
         )
-        positive_prompt = self.config.get_user_setting(
-            user_id, "positive_prompt"
-        )
-        resolution = self.config.get_user_setting(
-            user_id, "resolution"
-        )
+        positive_prompt = self.config.get_user_setting(user_id, "positive_prompt")
+        resolution = self.config.get_user_setting(user_id, "resolution")
         if positive_prompt == "":
             positive_prompt = "literally nothing. fly free, birdie."
         if negative_prompt == "":
@@ -253,16 +282,27 @@ class Settings(commands.Cog):
             try:
                 await ctx.message.delete()
             except:
-                logging.warning(f"Could not delete message, it was likely deleted by another worker or a moderator.")
+                logging.warning(
+                    f"Could not delete message, it was likely deleted by another worker or a moderator."
+                )
         elif hasattr(ctx, "delete"):
             await ctx.delete()
         await DiscordBot.send_large_message(ctx, message)
 
-    @commands.command(name="strength", help="Set the strength for the image 2 image generation process. Default is 0.7.")
+    @commands.command(
+        name="strength",
+        help="Set the strength for the image 2 image generation process. Default is 0.7.",
+    )
     async def set_strength(self, ctx, strength):
         user_id = ctx.author.id
-        if not strength.replace('.','',1).isdigit() or float(strength) < 0 or float(strength) > 1:
-            our_reply = await ctx.send(f"strength must be a number between 0.0-1.0 You gave me `{strength}`. Try again.")
+        if (
+            not strength.replace(".", "", 1).isdigit()
+            or float(strength) < 0
+            or float(strength) > 1
+        ):
+            our_reply = await ctx.send(
+                f"strength must be a number between 0.0-1.0 You gave me `{strength}`. Try again."
+            )
             try:
                 if hasattr(ctx, "message"):
                     await ctx.message.delete(delay=15)
@@ -280,13 +320,20 @@ class Settings(commands.Cog):
         if hasattr(ctx, "message"):
             await ctx.message.delete()
         else:
-            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}")
+            logging.debug(
+                f"Received message object for delete, we are not sure how to proceed with: {ctx}"
+            )
 
-    @commands.command(name="steps", help="Set the number of steps for the image generation process. Default is 100.")
+    @commands.command(
+        name="steps",
+        help="Set the number of steps for the image generation process. Default is 100.",
+    )
     async def set_steps(self, ctx, steps):
         user_id = ctx.author.id
         if not steps.isdigit() or int(steps) < 0 or int(steps) > 50:
-            our_reply = await ctx.send(f"Steps must be a number between 1-50. You gave me `{steps}`. Try again.")
+            our_reply = await ctx.send(
+                f"Steps must be a number between 1-50. You gave me `{steps}`. Try again."
+            )
             try:
                 if hasattr(ctx, "message"):
                     await ctx.message.delete(delay=15)
@@ -304,9 +351,14 @@ class Settings(commands.Cog):
         if hasattr(ctx, "message"):
             await ctx.message.delete()
         else:
-            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}")
-    @commands.command(name="guidance", help="Set your guidance scaling parameter. It defaults to 7.5.")
-    async def set_guidance(self, ctx, guidance_scaling = None):
+            logging.debug(
+                f"Received message object for delete, we are not sure how to proceed with: {ctx}"
+            )
+
+    @commands.command(
+        name="guidance", help="Set your guidance scaling parameter. It defaults to 7.5."
+    )
+    async def set_guidance(self, ctx, guidance_scaling=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_guidance_scaling = config.get_user_setting(user_id, "guidance_scaling")
@@ -314,7 +366,9 @@ class Settings(commands.Cog):
             try:
                 scaling_value = float(guidance_scaling)
             except:
-                our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again.")
+                our_reply = await ctx.send(
+                    f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_scaling}`. Try again."
+                )
                 try:
                     await ctx.delete(delay=5)
                     await our_reply.delete(delay=5)
@@ -332,8 +386,11 @@ class Settings(commands.Cog):
         await ctx.delete()
         await response.delete(delay=15)
 
-    @commands.command(name="guidance_rescale", help="Set your guidance_rescale parameter. It defaults to 0.7.")
-    async def set_guidance_rescale(self, ctx, guidance_rescale = None):
+    @commands.command(
+        name="guidance_rescale",
+        help="Set your guidance_rescale parameter. It defaults to 0.7.",
+    )
+    async def set_guidance_rescale(self, ctx, guidance_rescale=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_guidance_rescale = config.get_user_setting(user_id, "guidance_rescale")
@@ -341,7 +398,9 @@ class Settings(commands.Cog):
             try:
                 scaling_value = float(guidance_rescale)
                 if scaling_value > 1.0 or scaling_value < 0.0:
-                    our_reply = await ctx.send(f"Scaling parameter must be a number between 0.0 and 1.0. You gave me `{guidance_rescale}`. Try again.")
+                    our_reply = await ctx.send(
+                        f"Scaling parameter must be a number between 0.0 and 1.0. You gave me `{guidance_rescale}`. Try again."
+                    )
                     try:
                         await ctx.delete(delay=5)
                         await our_reply.delete(delay=5)
@@ -349,7 +408,9 @@ class Settings(commands.Cog):
                         logging.error("Failed to delete messages.")
                     return
             except:
-                our_reply = await ctx.send(f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_rescale}`. Try again.")
+                our_reply = await ctx.send(
+                    f"Scaling parameter must be a number. Specifically, a float value. You gave me `{guidance_rescale}`. Try again."
+                )
                 try:
                     await ctx.delete(delay=5)
                     await our_reply.delete(delay=5)
@@ -367,13 +428,23 @@ class Settings(commands.Cog):
         await ctx.delete()
         await response.delete(delay=15)
 
-    @commands.command(name="seed", help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.")
-    async def set_seed(self, ctx, seed = None):
+    @commands.command(
+        name="seed",
+        help="Set or remove your seed value. When set to 'none' or 'random', it defaults to the current timestamp at the time of image generation. Can be used to reproduce images.",
+    )
+    async def set_seed(self, ctx, seed=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
         original_seed = config.get_user_setting(user_id, "seed")
-        if not seed.isdigit() and not "none" in seed.lower() and seed is not None and not "random" in seed.lower():
-            our_reply = await ctx.send(f"Seed must be a number. You gave me `{seed}`. Try again.")
+        if (
+            not seed.isdigit()
+            and not "none" in seed.lower()
+            and seed is not None
+            and not "random" in seed.lower()
+        ):
+            our_reply = await ctx.send(
+                f"Seed must be a number. You gave me `{seed}`. Try again."
+            )
             try:
                 await ctx.delete(delay=5)
                 await our_reply.delete(delay=5)
@@ -396,13 +467,21 @@ class Settings(commands.Cog):
         elif hasattr(ctx, "message") and hasattr(ctx.message, "delete"):
             await ctx.message.delete()
         else:
-            logging.debug(f"Received message object for delete, we are not sure how to proceed with: {ctx}. Cannot delete.")
+            logging.debug(
+                f"Received message object for delete, we are not sure how to proceed with: {ctx}. Cannot delete."
+            )
 
-    @commands.command(name="resolution", help="Set or get your default resolution for generated images.\nAvailable resolutions:\n" + str(available_resolutions))
+    @commands.command(
+        name="resolution",
+        help="Set or get your default resolution for generated images.\nAvailable resolutions:\n"
+        + str(available_resolutions),
+    )
     async def set_resolution(self, ctx, resolution=None):
         user_id = ctx.author.id
         user_config = config.get_user_config(user_id)
-        available_resolutions = await resolution_helper.list_available_resolutions(user_id=user_id)
+        available_resolutions = await resolution_helper.list_available_resolutions(
+            user_id=user_id
+        )
         if resolution is None:
             resolution = user_config.get("resolution")
             response = await ctx.send(
@@ -433,13 +512,18 @@ class Settings(commands.Cog):
             await ctx.delete()
         await response.delete(delay=15)
 
+
 def compare_setting_types(old_value, new_value):
     # Check whether the new value type is the same type as their old value.
     # In other words, a numeric (even string-based) should still be numeric, and a string should come in as a string.
     if old_value is None:
         return new_value
     # Check for a bool vs a bool string
-    if isinstance(old_value, bool) and isinstance(new_value, str) and new_value.lower() in ["true", "false"]:
+    if (
+        isinstance(old_value, bool)
+        and isinstance(new_value, str)
+        and new_value.lower() in ["true", "false"]
+    ):
         # Convert the string to a bool
         if new_value.lower() == "true":
             return True
@@ -449,7 +533,7 @@ def compare_setting_types(old_value, new_value):
     # Check if both values are integers
     if isinstance(old_value, int) and new_value.isdigit():
         return int(new_value)
-    
+
     # Check if both values are floats
     if isinstance(old_value, float):
         try:
@@ -457,9 +541,13 @@ def compare_setting_types(old_value, new_value):
             return float_value
         except ValueError:
             pass
-    
+
     # Check if both values are non-numeric strings
-    if isinstance(old_value, str) and isinstance(new_value, str) and not new_value.isnumeric():
+    if (
+        isinstance(old_value, str)
+        and isinstance(new_value, str)
+        and not new_value.isnumeric()
+    ):
         return new_value
 
     # Check for an empty string vs an old non-empty string. we want to allow unsetting things by making them an empty string.
@@ -469,7 +557,9 @@ def compare_setting_types(old_value, new_value):
         return new_value
 
     # Log the two types we received:
-    logging.error(f"compare_setting_types: old_value: {type(old_value)} new_value: {type(new_value)}")
+    logging.error(
+        f"compare_setting_types: old_value: {type(old_value)} new_value: {type(new_value)}"
+    )
 
     return None
 

@@ -5,13 +5,13 @@ from .oauth_token import OAuthToken
 from .zork import ZorkCampaign, ZorkChannel, ZorkPlayer, ZorkTurn
 
 __all__ = [
-    'db',
-    'User',
-    'OAuthClient',
-    'OAuthToken',
-    'ApiKey',
-    'ZorkCampaign',
-    'ZorkChannel',
-    'ZorkPlayer',
-    'ZorkTurn',
+    "db",
+    "User",
+    "OAuthClient",
+    "OAuthToken",
+    "ApiKey",
+    "ZorkCampaign",
+    "ZorkChannel",
+    "ZorkPlayer",
+    "ZorkTurn",
 ]

@@ -2,10 +2,14 @@ import logging, traceback
 from discord.ext import commands
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.bot import DiscordBot
-from discord_tron_master.classes.jobs.stablevicuna_prediction_job import StableVicunaPredictionJob
+from discord_tron_master.classes.jobs.stablevicuna_prediction_job import (
+    StableVicunaPredictionJob,
+)
 from discord_tron_master.bot import clean_traceback
+
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
+
 
 # Commands used for Stable Vicuna text predictions.
 class Stablevicuna_predict(commands.Cog):
@@ -13,19 +17,29 @@ class Stablevicuna_predict(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
-    @commands.command(name="vicuna", help="Generates an image based on the given prompt.")
+    @commands.command(
+        name="vicuna", help="Generates an image based on the given prompt."
+    )
     async def vicuna(self, ctx, *, prompt):
         try:
             # Generate a "Job" object that will be put into the queue.
-            discord_first_message = await DiscordBot.send_large_message(ctx=ctx, text="A worker has been selected for your query: `" + prompt + "`")
+            discord_first_message = await DiscordBot.send_large_message(
+                ctx=ctx,
+                text="A worker has been selected for your query: `" + prompt + "`",
+            )
 
             self.config.reload_config()
 
-            job = StableVicunaPredictionJob(ctx.author.id, (self.bot, self.config, ctx, prompt, discord_first_message))
+            job = StableVicunaPredictionJob(
+                ctx.author.id,
+                (self.bot, self.config, ctx, prompt, discord_first_message),
+            )
             # Get the worker that will process the job.
             worker = discord.worker_manager.find_best_fit_worker(job)
             if worker is None:
-                await discord_first_message.edit(content="No workers available. Stable Vicuna query was **not** added to queue. 😭 aw, how sad. 😭")
+                await discord_first_message.edit(
+                    content="No workers available. Stable Vicuna query was **not** added to queue. 😭 aw, how sad. 😭"
+                )
                 # Wait a few seconds before deleting:
                 await discord_first_message.delete(delay=10)
                 return

@@ -11,11 +11,19 @@ app = AppConfig.flask
 if app is None:
     raise Exception("Flask app is not initialized.")
 
+
 class ChatML:
-    def __init__(self, conversation: Conversations, token_limit: int = 120000, config_user_id: int = None):
+    def __init__(
+        self,
+        conversation: Conversations,
+        token_limit: int = 120000,
+        config_user_id: int = None,
+    ):
         self.conversations = conversation
         self.user_id = conversation.owner
-        self.history = conversation.get_history(self.user_id) or Conversations.get_new_history()
+        self.history = (
+            conversation.get_history(self.user_id) or Conversations.get_new_history()
+        )
         self.config_user_id = self.user_id if config_user_id is None else config_user_id
         self.user_config = config.get_user_config(self.config_user_id)
         # Pick up their current role from their profile.
@@ -35,7 +43,9 @@ class ChatML:
             conversation = self.conversations.get_by_owner(self.user_id)
             logging.debug(f"Picked up conversation from db: {conversation}")
             if conversation is None:
-                conversation = self.conversations.create(self.user_id, self.role, self.history)
+                conversation = self.conversations.create(
+                    self.user_id, self.role, self.history
+                )
             return conversation
 
     async def validate_reply(self):
@@ -86,16 +96,20 @@ class ChatML:
         if reply_token_count + history_token_count > self.token_limit:
             return True
         return False
+
     async def get_reply_token_count(self):
         return self.tokenizer.get_token_count(json.dumps(self.reply))
+
     async def get_history_token_count(self):
         # Pad the value by 64 to accommodate for the metadata in the JSON we can't really count right here.
-        return self.tokenizer.get_token_count(json.dumps(await self.get_history())) + 512
+        return (
+            self.tokenizer.get_token_count(json.dumps(await self.get_history())) + 512
+        )
 
     # Format the history as a string for OpenAI.
     async def get_prompt(self):
         return json.dumps(await self.get_history())
-        
+
     async def get_history(self):
         conversation = await self.get_conversation_or_create()
         logging.debug(f"Conversation: {conversation}")
@@ -122,7 +136,9 @@ class ChatML:
         # Store the reply for processing
         self.reply = {"role": role, "content": ChatML.clean(content)}
         if not await self.validate_reply():
-            raise ValueError(f"I am sorry. It seems your reply would overrun the limits of reality and time. We are currently stuck at {self.token_limit} tokens, and your message used {await self.get_reply_token_count()} tokens. Please try again.")
+            raise ValueError(
+                f"I am sorry. It seems your reply would overrun the limits of reality and time. We are currently stuck at {self.token_limit} tokens, and your message used {await self.get_reply_token_count()} tokens. Please try again."
+            )
         with app.app_context():
             conversation = await self.get_conversation_or_create()
             conversation.history.append(self.reply)
@@ -133,22 +149,30 @@ class ChatML:
     @staticmethod
     def clean(text):
         # Clean the newlines.
-        return text.replace('\\n', '\n')
+        return text.replace("\\n", "\n")
 
-    def truncate_conversation_history(self, conversation_history, new_prompt, max_tokens=2048):
+    def truncate_conversation_history(
+        self, conversation_history, new_prompt, max_tokens=2048
+    ):
         # Calculate tokens for new_prompt
         new_prompt_token_count = self.tokenizer.get_token_count(new_prompt)
         if new_prompt_token_count >= max_tokens:
             raise ValueError("The new prompt alone exceeds the maximum token limit.")
-    
+
         # Calculate tokens for conversation_history
-        conversation_history_token_counts = [len(self.tokenizer.tokenize(entry)) for entry in conversation_history]
+        conversation_history_token_counts = [
+            len(self.tokenizer.tokenize(entry)) for entry in conversation_history
+        ]
         total_tokens = sum(conversation_history_token_counts) + new_prompt_token_count
-    
+
         # Truncate conversation history if total tokens exceed max_tokens
         while total_tokens > max_tokens:
             conversation_history.pop(0)  # Remove the oldest entry
-            conversation_history_token_counts.pop(0)  # Remove the oldest entry's token count
-            total_tokens = sum(conversation_history_token_counts) + new_prompt_token_count
-    
-        return conversation_history  
+            conversation_history_token_counts.pop(
+                0
+            )  # Remove the oldest entry's token count
+            total_tokens = (
+                sum(conversation_history_token_counts) + new_prompt_token_count
+            )
+
+        return conversation_history

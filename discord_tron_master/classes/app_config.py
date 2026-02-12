@@ -9,9 +9,7 @@ DEFAULT_CONFIG = {
         "port": 6789,
         "tls": False,
     },
-    "openai_api": {
-        "api_key": None
-    },
+    "openai_api": {"api_key": None},
     "huggingface_api": {
         "api_key": None,
     },
@@ -78,18 +76,17 @@ DEFAULT_USER_CONFIG = {
     "hires_fix": False,
     "latent_refiner": False,
     "auto_model": True,
-    "resolution": {
-        "width": 1024,
-        "height": 1024
-    },
+    "resolution": {"width": 1024, "height": 1024},
     "model_adapter_1": None,
     "flux_adapter_1": "",
     "flux_guidance_scale": 3.0,
     "skip_guidance_layers": -1,
 }
 
+
 class AppConfig:
     flask = None
+
     def __init__(self):
         parent = os.path.dirname(Path(__file__).resolve().parent)
         self.project_root = parent
@@ -127,7 +124,9 @@ class AppConfig:
         user_config = self.config.get("users", {}).get(str(user_id), {})
         merged_settings = self.merge_dicts(DEFAULT_USER_CONFIG, user_config)
         if "model" not in merged_settings:
-            merged_settings["model"] = self.config.get("default_diffusion_model", "ptx0/terminus-xl-gamma-v2")
+            merged_settings["model"] = self.config.get(
+                "default_diffusion_model", "ptx0/terminus-xl-gamma-v2"
+            )
         return merged_settings
 
     def should_compare(self):
@@ -138,7 +137,11 @@ class AppConfig:
     def merge_dicts(dict1, dict2):
         result = dict1.copy()
         for key, value in dict2.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 result[key] = AppConfig.merge_dicts(result[key], value)
             else:
                 result[key] = value
@@ -186,7 +189,9 @@ class AppConfig:
 
     def get_local_model_path(self):
         self.reload_config()
-        return self.config.get("huggingface", {}).get("local_model_path", "/root/.cache/huggingface/hub")
+        return self.config.get("huggingface", {}).get(
+            "local_model_path", "/root/.cache/huggingface/hub"
+        )
 
     def set_user_config(self, user_id, user_config):
         self.config.get("users", {})[str(user_id)] = user_config
@@ -209,18 +214,23 @@ class AppConfig:
     def get_web_root(self):
         self.reload_config()
         return self.config.get("web_root", "/")
+
     def get_url_base(self):
         self.reload_config()
         return self.config.get("url_base", "http://localhost")
+
     def get_mysql_user(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("user", "diffusion")
+
     def get_mysql_password(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("password", "diffusion_pwd")
+
     def get_mysql_hostname(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("hostname", "localhost")
+
     def get_mysql_dbname(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("dbname", "diffusion_master")
