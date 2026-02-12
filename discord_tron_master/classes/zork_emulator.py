@@ -13,7 +13,12 @@ from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.models.base import db
-from discord_tron_master.models.zork import ZorkCampaign, ZorkChannel, ZorkPlayer, ZorkTurn
+from discord_tron_master.models.zork import (
+    ZorkCampaign,
+    ZorkChannel,
+    ZorkPlayer,
+    ZorkTurn,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -70,7 +75,9 @@ class ZorkEmulator:
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
         "You describe outcomes in second person, terse but vivid. You track rooms, "
         "objects, exits, and consequences. Each player is a distinct character and "
-        "may be in a different location or timeline than other players. You never break character.\n\n"
+        "may be in a different location or timeline than other players. You never break character. "
+        "This is an adult-oriented game. You may include mature themes, explicit content, violence, "
+        "dark humor, and adult situations when appropriate to the story and player actions.\n\n"
         "Return ONLY valid JSON with these keys:\n"
         "- narration: string (what the player sees)\n"
         "- state_update: object (world state patches)\n"
@@ -210,13 +217,20 @@ class ZorkEmulator:
         with app.app_context():
             channel = cls.get_or_create_channel(ctx.guild.id, ctx.channel.id)
             if not channel.enabled:
-                return None, f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it."
+                return (
+                    None,
+                    f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it.",
+                )
             if channel.active_campaign_id is None:
-                _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+                _, campaign = cls.enable_channel(
+                    ctx.guild.id, ctx.channel.id, ctx.author.id
+                )
             else:
                 campaign = ZorkCampaign.query.get(channel.active_campaign_id)
                 if campaign is None:
-                    _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+                    _, campaign = cls.enable_channel(
+                        ctx.guild.id, ctx.channel.id, ctx.author.id
+                    )
             campaign_id = campaign.id
 
         if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
@@ -362,7 +376,9 @@ class ZorkEmulator:
         return state_update, player_state_update
 
     @classmethod
-    def _build_player_state_for_prompt(cls, player_state: Dict[str, object]) -> Dict[str, object]:
+    def _build_player_state_for_prompt(
+        cls, player_state: Dict[str, object]
+    ) -> Dict[str, object]:
         if not isinstance(player_state, dict):
             return {}
         model_state = {}
@@ -472,7 +488,9 @@ class ZorkEmulator:
             return False
         with app.app_context():
             if campaign_id is None:
-                channel = ZorkChannel.query.filter_by(guild_id=guild_id, channel_id=channel_id).first()
+                channel = ZorkChannel.query.filter_by(
+                    guild_id=guild_id, channel_id=channel_id
+                ).first()
                 if channel is None or channel.active_campaign_id is None:
                     return False
                 campaign_id = channel.active_campaign_id
@@ -513,14 +531,20 @@ class ZorkEmulator:
             return False
         if not isinstance(image_url, str) or not image_url.strip():
             return False
-        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        player = ZorkPlayer.query.filter_by(
+            campaign_id=campaign_id, user_id=user_id
+        ).first()
         if player is None:
             return False
         player_state = cls.get_player_state(player)
         player_state["pending_avatar_url"] = image_url.strip()
         if isinstance(avatar_prompt, str) and avatar_prompt.strip():
-            player_state["pending_avatar_prompt"] = cls._trim_text(avatar_prompt.strip(), 500)
-        player_state["pending_avatar_generated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+            player_state["pending_avatar_prompt"] = cls._trim_text(
+                avatar_prompt.strip(), 500
+            )
+        player_state["pending_avatar_generated_at"] = (
+            datetime.datetime.utcnow().isoformat() + "Z"
+        )
         player.state_json = cls._dump_json(player_state)
         player.updated = db.func.now()
         db.session.commit()
@@ -528,7 +552,9 @@ class ZorkEmulator:
 
     @classmethod
     def accept_pending_avatar(cls, campaign_id: int, user_id: int) -> Tuple[bool, str]:
-        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        player = ZorkPlayer.query.filter_by(
+            campaign_id=campaign_id, user_id=user_id
+        ).first()
         if player is None:
             return False, "Player not found."
         player_state = cls.get_player_state(player)
@@ -546,7 +572,9 @@ class ZorkEmulator:
 
     @classmethod
     def decline_pending_avatar(cls, campaign_id: int, user_id: int) -> Tuple[bool, str]:
-        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        player = ZorkPlayer.query.filter_by(
+            campaign_id=campaign_id, user_id=user_id
+        ).first()
         if player is None:
             return False, "Player not found."
         player_state = cls.get_player_state(player)
@@ -572,10 +600,16 @@ class ZorkEmulator:
             return []
         refs = []
         seen_urls = set()
-        players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.last_active.desc()).all()
+        players = (
+            ZorkPlayer.query.filter_by(campaign_id=campaign.id)
+            .order_by(ZorkPlayer.last_active.desc())
+            .all()
+        )
         for entry in players:
             state = cls.get_player_state(entry)
-            if entry.user_id != actor.user_id and not cls._same_scene(actor_state, state):
+            if entry.user_id != actor.user_id and not cls._same_scene(
+                actor_state, state
+            ):
                 continue
             avatar_url = state.get("avatar_url")
             if not isinstance(avatar_url, str):
@@ -586,7 +620,9 @@ class ZorkEmulator:
             if cls._is_image_url_404(avatar_url):
                 continue
             seen_urls.add(avatar_url)
-            identity = str(state.get("character_name") or f"Adventurer-{str(entry.user_id)[-4:]}").strip()
+            identity = str(
+                state.get("character_name") or f"Adventurer-{str(entry.user_id)[-4:]}"
+            ).strip()
             refs.append(
                 {
                     "user_id": entry.user_id,
@@ -650,7 +686,9 @@ class ZorkEmulator:
         return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
 
     @classmethod
-    def _same_scene(cls, actor_state: Dict[str, object], other_state: Dict[str, object]) -> bool:
+    def _same_scene(
+        cls, actor_state: Dict[str, object], other_state: Dict[str, object]
+    ) -> bool:
         if not isinstance(actor_state, dict) or not isinstance(other_state, dict):
             return False
         actor_room_id = cls._normalize_match_text(actor_state.get("room_id"))
@@ -707,10 +745,16 @@ class ZorkEmulator:
         actor_state: Dict[str, object],
     ) -> List[Dict[str, object]]:
         out = []
-        players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.last_active.desc()).all()
+        players = (
+            ZorkPlayer.query.filter_by(campaign_id=campaign.id)
+            .order_by(ZorkPlayer.last_active.desc())
+            .all()
+        )
         for entry in players:
             state = cls.get_player_state(entry)
-            if entry.user_id != actor.user_id and not cls._same_scene(actor_state, state):
+            if entry.user_id != actor.user_id and not cls._same_scene(
+                actor_state, state
+            ):
                 continue
             fallback_name = f"Adventurer-{str(entry.user_id)[-4:]}"
             display_name = str(state.get("character_name") or fallback_name).strip()
@@ -722,7 +766,9 @@ class ZorkEmulator:
             attribute_cues = cls._build_attribute_cues(attributes)
             visible_items = []
             if entry.user_id == actor.user_id:
-                visible_items = cls._normalize_inventory_items(state.get("inventory"))[:3]
+                visible_items = cls._normalize_inventory_items(state.get("inventory"))[
+                    :3
+                ]
             out.append(
                 {
                     "user_id": entry.user_id,
@@ -777,7 +823,9 @@ class ZorkEmulator:
         location = str(player_state.get("location") or "").strip()
         if room_title:
             room_bits.append(room_title)
-        if location and cls._normalize_match_text(location) != cls._normalize_match_text(room_title):
+        if location and cls._normalize_match_text(
+            location
+        ) != cls._normalize_match_text(room_title):
             room_bits.append(location)
         room_clause = ", ".join(room_bits).strip()
         if room_clause:
@@ -803,7 +851,9 @@ class ZorkEmulator:
                     tags.append(" / ".join([str(cue) for cue in cues[:2]]))
                 items = entry.get("visible_items") or []
                 if items:
-                    tags.append("carrying " + ", ".join([str(item) for item in items[:2]]))
+                    tags.append(
+                        "carrying " + ", ".join([str(item) for item in items[:2]])
+                    )
                 if tags:
                     cast_fragments.append(f"{name} ({'; '.join(tags)})")
                 else:
@@ -904,16 +954,22 @@ class ZorkEmulator:
         if not isinstance(update, dict):
             return {}
         cleaned = dict(update)
-        previous_inventory = cls._normalize_inventory_items(previous_state.get("inventory"))
+        previous_inventory = cls._normalize_inventory_items(
+            previous_state.get("inventory")
+        )
         action_l = (action_text or "").lower()
         narration_l = (narration_text or "").lower()
 
         inventory_add = cls._normalize_inventory_items(cleaned.pop("inventory_add", []))
-        inventory_remove = cls._normalize_inventory_items(cleaned.pop("inventory_remove", []))
+        inventory_remove = cls._normalize_inventory_items(
+            cleaned.pop("inventory_remove", [])
+        )
 
         if "inventory" in cleaned:
             cleaned.pop("inventory", None)
-            logger.warning("Ignored full inventory list in player_state_update; only delta fields are accepted.")
+            logger.warning(
+                "Ignored full inventory list in player_state_update; only delta fields are accepted."
+            )
 
         # Only accept inventory deltas when item names are referenced in action/narration.
         filtered_add = []
@@ -930,7 +986,10 @@ class ZorkEmulator:
                 filtered_remove.append(item)
         inventory_remove = filtered_remove
 
-        if len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN or len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
+        if (
+            len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN
+            or len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN
+        ):
             logger.warning(
                 "Rejected suspicious inventory delta for user update: adds=%s removes=%s",
                 inventory_add,
@@ -994,24 +1053,34 @@ class ZorkEmulator:
 
     @classmethod
     def get_or_create_channel(cls, guild_id: int, channel_id: int) -> ZorkChannel:
-        channel = ZorkChannel.query.filter_by(guild_id=guild_id, channel_id=channel_id).first()
+        channel = ZorkChannel.query.filter_by(
+            guild_id=guild_id, channel_id=channel_id
+        ).first()
         if channel is None:
-            channel = ZorkChannel(guild_id=guild_id, channel_id=channel_id, enabled=False)
+            channel = ZorkChannel(
+                guild_id=guild_id, channel_id=channel_id, enabled=False
+            )
             db.session.add(channel)
             db.session.commit()
         return channel
 
     @classmethod
     def is_channel_enabled(cls, guild_id: int, channel_id: int) -> bool:
-        channel = ZorkChannel.query.filter_by(guild_id=guild_id, channel_id=channel_id).first()
+        channel = ZorkChannel.query.filter_by(
+            guild_id=guild_id, channel_id=channel_id
+        ).first()
         if channel is None:
             return False
         return bool(channel.enabled)
 
     @classmethod
-    def get_or_create_campaign(cls, guild_id: int, name: str, created_by: int) -> ZorkCampaign:
+    def get_or_create_campaign(
+        cls, guild_id: int, name: str, created_by: int
+    ) -> ZorkCampaign:
         normalized = cls._normalize_campaign_name(name)
-        campaign = ZorkCampaign.query.filter_by(guild_id=guild_id, name=normalized).first()
+        campaign = ZorkCampaign.query.filter_by(
+            guild_id=guild_id, name=normalized
+        ).first()
         if campaign is None:
             campaign = ZorkCampaign(
                 guild_id=guild_id,
@@ -1035,7 +1104,9 @@ class ZorkEmulator:
         return campaign
 
     @classmethod
-    def enable_channel(cls, guild_id: int, channel_id: int, user_id: int) -> Tuple[ZorkChannel, ZorkCampaign]:
+    def enable_channel(
+        cls, guild_id: int, channel_id: int, user_id: int
+    ) -> Tuple[ZorkChannel, ZorkCampaign]:
         channel = cls.get_or_create_channel(guild_id, channel_id)
         if channel.active_campaign_id is None:
             campaign = cls.get_or_create_campaign(guild_id, "main", user_id)
@@ -1052,19 +1123,22 @@ class ZorkEmulator:
 
     @classmethod
     def list_campaigns(cls, guild_id: int) -> List[ZorkCampaign]:
-        return ZorkCampaign.query.filter_by(guild_id=guild_id).order_by(ZorkCampaign.name.asc()).all()
+        return (
+            ZorkCampaign.query.filter_by(guild_id=guild_id)
+            .order_by(ZorkCampaign.name.asc())
+            .all()
+        )
 
     @classmethod
-    def can_switch_campaign(cls, campaign_id: int, user_id: int, window_seconds: int = 3600) -> Tuple[bool, int]:
+    def can_switch_campaign(
+        cls, campaign_id: int, user_id: int, window_seconds: int = 3600
+    ) -> Tuple[bool, int]:
         cutoff = cls._now() - datetime.timedelta(seconds=window_seconds)
-        active_count = (
-            ZorkPlayer.query.filter(
-                ZorkPlayer.campaign_id == campaign_id,
-                ZorkPlayer.user_id != user_id,
-                ZorkPlayer.last_active >= cutoff,
-            )
-            .count()
-        )
+        active_count = ZorkPlayer.query.filter(
+            ZorkPlayer.campaign_id == campaign_id,
+            ZorkPlayer.user_id != user_id,
+            ZorkPlayer.last_active >= cutoff,
+        ).count()
         return active_count == 0, active_count
 
     @classmethod
@@ -1078,9 +1152,15 @@ class ZorkEmulator:
     ) -> Tuple[ZorkCampaign, bool, Optional[str]]:
         normalized = cls._normalize_campaign_name(name)
         if enforce_activity_window and channel.active_campaign_id is not None:
-            can_switch, active_count = cls.can_switch_campaign(channel.active_campaign_id, user_id)
+            can_switch, active_count = cls.can_switch_campaign(
+                channel.active_campaign_id, user_id
+            )
             if not can_switch:
-                return None, False, f"{active_count} other player(s) active in last hour"
+                return (
+                    None,
+                    False,
+                    f"{active_count} other player(s) active in last hour",
+                )
         campaign = cls.get_or_create_campaign(guild_id, normalized, user_id)
         channel.active_campaign_id = campaign.id
         channel.updated = db.func.now()
@@ -1094,7 +1174,9 @@ class ZorkEmulator:
         user_id: int,
         campaign: Optional[ZorkCampaign] = None,
     ) -> ZorkPlayer:
-        player = ZorkPlayer.query.filter_by(campaign_id=campaign_id, user_id=user_id).first()
+        player = ZorkPlayer.query.filter_by(
+            campaign_id=campaign_id, user_id=user_id
+        ).first()
         if player is None:
             player_state = {}
             if campaign is not None:
@@ -1134,7 +1216,9 @@ class ZorkEmulator:
         return list(reversed(turns))
 
     @classmethod
-    def _copy_identity_fields(cls, source_state: Dict[str, object], target_state: Dict[str, object]) -> Dict[str, object]:
+    def _copy_identity_fields(
+        cls, source_state: Dict[str, object], target_state: Dict[str, object]
+    ) -> Dict[str, object]:
         if not isinstance(target_state, dict):
             target_state = {}
         if not isinstance(source_state, dict):
@@ -1205,8 +1289,12 @@ class ZorkEmulator:
                     model_override = campaign_state.get("scene_image_model")
                     if isinstance(model_override, str) and model_override.strip():
                         selected_model = model_override.strip()
-                    player = ZorkPlayer.query.filter_by(campaign_id=campaign.id, user_id=ctx.author.id).first()
-                    player_state = cls.get_player_state(player) if player is not None else {}
+                    player = ZorkPlayer.query.filter_by(
+                        campaign_id=campaign.id, user_id=ctx.author.id
+                    ).first()
+                    player_state = (
+                        cls.get_player_state(player) if player is not None else {}
+                    )
                     player_state_for_prompt = player_state
                     if not room_key:
                         room_key = cls._room_key_from_player_state(player_state)
@@ -1221,7 +1309,9 @@ class ZorkEmulator:
                         else:
                             should_store_room_image = True
                     if player is not None and not should_store_room_image:
-                        avatar_refs = cls._build_scene_avatar_references(campaign, player, player_state)
+                        avatar_refs = cls._build_scene_avatar_references(
+                            campaign, player, player_state
+                        )
                         for ref in avatar_refs:
                             ref_url = str(ref.get("url") or "").strip()
                             if not ref_url:
@@ -1237,10 +1327,14 @@ class ZorkEmulator:
                             player_state=player_state_for_prompt,
                         )
                     else:
-                        prompt_for_generation = cls._compose_scene_prompt_with_references(
-                            scene_image_prompt,
-                            has_room_reference=has_room_reference,
-                            avatar_refs=avatar_refs[: max(cls.MAX_SCENE_REFERENCE_IMAGES - 1, 0)],
+                        prompt_for_generation = (
+                            cls._compose_scene_prompt_with_references(
+                                scene_image_prompt,
+                                has_room_reference=has_room_reference,
+                                avatar_refs=avatar_refs[
+                                    : max(cls.MAX_SCENE_REFERENCE_IMAGES - 1, 0)
+                                ],
+                            )
                         )
         cfg = AppConfig()
         user_config = cfg.get_user_config(user_id=ctx.author.id)
@@ -1261,7 +1355,9 @@ class ZorkEmulator:
                     "suppress_image_details": True,
                     "zork_store_image": should_store_room_image,
                     "zork_seed_room_image": should_store_room_image,
-                    "zork_scene_prompt": cls._trim_text(scene_image_prompt, cls.MAX_SCENE_PROMPT_CHARS),
+                    "zork_scene_prompt": cls._trim_text(
+                        scene_image_prompt, cls.MAX_SCENE_PROMPT_CHARS
+                    ),
                     "zork_campaign_id": campaign_id,
                     "zork_room_key": room_key,
                     "zork_user_id": ctx.author.id,
@@ -1327,10 +1423,14 @@ class ZorkEmulator:
             model_override = campaign_state.get("scene_image_model")
             if isinstance(model_override, str) and model_override.strip():
                 selected_model = model_override.strip()
-            player = ZorkPlayer.query.filter_by(campaign_id=campaign.id, user_id=int(user_id)).first()
+            player = ZorkPlayer.query.filter_by(
+                campaign_id=campaign.id, user_id=int(user_id)
+            ).first()
             player_state = cls.get_player_state(player) if player is not None else {}
             if player is not None:
-                avatar_refs = cls._build_scene_avatar_references(campaign, player, player_state)
+                avatar_refs = cls._build_scene_avatar_references(
+                    campaign, player, player_state
+                )
                 for ref in avatar_refs:
                     ref_url = str(ref.get("url") or "").strip()
                     if not ref_url:
@@ -1386,7 +1486,9 @@ class ZorkEmulator:
         requested_prompt: str,
         fallback_name: str,
     ) -> str:
-        identity = str(player_state.get("character_name") or fallback_name or "adventurer").strip()
+        identity = str(
+            player_state.get("character_name") or fallback_name or "adventurer"
+        ).strip()
         persona = str(player_state.get("persona") or "").strip()
         prompt_parts = [
             f"Single-character concept portrait of {identity}.",
@@ -1424,7 +1526,9 @@ class ZorkEmulator:
         composed_prompt = cls._compose_avatar_prompt(
             player_state,
             requested_prompt=requested_prompt,
-            fallback_name=getattr(getattr(ctx, "author", None), "display_name", "adventurer"),
+            fallback_name=getattr(
+                getattr(ctx, "author", None), "display_name", "adventurer"
+            ),
         )
 
         campaign_state = cls.get_campaign_state(campaign)
@@ -1432,7 +1536,9 @@ class ZorkEmulator:
         if not isinstance(selected_model, str) or not selected_model.strip():
             selected_model = cls.DEFAULT_AVATAR_IMAGE_MODEL
 
-        player_state["pending_avatar_prompt"] = cls._trim_text(requested_prompt.strip(), 500)
+        player_state["pending_avatar_prompt"] = cls._trim_text(
+            requested_prompt.strip(), 500
+        )
         player_state.pop("pending_avatar_url", None)
         player.state_json = cls._dump_json(player_state)
         player.updated = db.func.now()
@@ -1464,7 +1570,10 @@ class ZorkEmulator:
             )
         except Exception as e:
             return False, f"Failed to queue avatar generation: {e}"
-        return True, "Avatar candidate queued. Use `!zork avatar accept` or `!zork avatar decline` after it arrives."
+        return (
+            True,
+            "Avatar candidate queued. Use `!zork avatar accept` or `!zork avatar decline` after it arrives.",
+        )
 
     @classmethod
     def get_player_attributes(cls, player: ZorkPlayer) -> Dict[str, int]:
@@ -1489,7 +1598,9 @@ class ZorkEmulator:
         return bool(campaign_state.get("guardrails_enabled", False))
 
     @classmethod
-    def set_guardrails_enabled(cls, campaign: Optional[ZorkCampaign], enabled: bool) -> bool:
+    def set_guardrails_enabled(
+        cls, campaign: Optional[ZorkCampaign], enabled: bool
+    ) -> bool:
         if campaign is None:
             return False
         campaign_state = cls.get_campaign_state(campaign)
@@ -1519,7 +1630,9 @@ class ZorkEmulator:
             "room_summary": player_state.get("room_summary"),
             "location": player_state.get("location"),
             "exits": exits[:12],
-            "inventory": cls._normalize_inventory_items(player_state.get("inventory"))[:20],
+            "inventory": cls._normalize_inventory_items(player_state.get("inventory"))[
+                :20
+            ],
             "known_characters": known_names[:12],
             "strict_action_shape": "one concrete action grounded in current room and items",
         }
@@ -1583,7 +1696,9 @@ class ZorkEmulator:
         attributes = cls.get_player_attributes(player)
         player_state = cls.get_player_state(player)
         if party_snapshot is None:
-            party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
+            party_snapshot = cls._build_party_snapshot_for_prompt(
+                campaign, player, player_state
+            )
         player_state_prompt = cls._build_player_state_for_prompt(player_state)
         total_points = cls.total_points_for_level(player.level)
         spent = cls.points_spent(attributes)
@@ -1637,7 +1752,7 @@ class ZorkEmulator:
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
             return None
-        return text[start:end + 1]
+        return text[start : end + 1]
 
     @classmethod
     def _extract_ascii_map(cls, text: str) -> str:
@@ -1651,7 +1766,9 @@ class ZorkEmulator:
         return "\n".join(lines).strip()
 
     @classmethod
-    def _assign_player_markers(cls, players: List["ZorkPlayer"], exclude_user_id: int) -> List[dict]:
+    def _assign_player_markers(
+        cls, players: List["ZorkPlayer"], exclude_user_id: int
+    ) -> List[dict]:
         markers = []
         letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         idx = 0
@@ -1666,7 +1783,9 @@ class ZorkEmulator:
         return markers
 
     @classmethod
-    def _apply_state_update(cls, state: Dict[str, object], update: Dict[str, object]) -> Dict[str, object]:
+    def _apply_state_update(
+        cls, state: Dict[str, object], update: Dict[str, object]
+    ) -> Dict[str, object]:
         if not isinstance(update, dict):
             return state
         for key, value in update.items():
@@ -1690,7 +1809,9 @@ class ZorkEmulator:
             raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
         should_clear_claim = manage_claim
         if campaign_id is None:
-            campaign_id, error_text = await cls.begin_turn(ctx, command_prefix=command_prefix)
+            campaign_id, error_text = await cls.begin_turn(
+                ctx, command_prefix=command_prefix
+            )
             if error_text is not None:
                 return error_text
             if campaign_id is None:
@@ -1702,7 +1823,9 @@ class ZorkEmulator:
             async with lock:
                 with app.app_context():
                     campaign = ZorkCampaign.query.get(campaign_id)
-                    player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
+                    player = cls.get_or_create_player(
+                        campaign_id, ctx.author.id, campaign=campaign
+                    )
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
@@ -1740,7 +1863,9 @@ class ZorkEmulator:
                                 player.state_json = cls._dump_json(player_state)
                                 player.updated = db.func.now()
                                 db.session.commit()
-                                options = cls._build_campaign_suggestion_text(ctx.guild.id)
+                                options = cls._build_campaign_suggestion_text(
+                                    ctx.guild.id
+                                )
                                 return (
                                     "Reply next with your campaign name (letters/numbers/spaces).\n"
                                     f"{options}\n"
@@ -1771,7 +1896,9 @@ class ZorkEmulator:
                             except Exception as e:
                                 return f"Could not create path thread: {e}"
 
-                            thread_channel, _ = cls.enable_channel(ctx.guild.id, thread.id, ctx.author.id)
+                            thread_channel, _ = cls.enable_channel(
+                                ctx.guild.id, thread.id, ctx.author.id
+                            )
                             thread_campaign, _, _ = cls.set_active_campaign(
                                 thread_channel,
                                 ctx.guild.id,
@@ -1780,10 +1907,14 @@ class ZorkEmulator:
                                 enforce_activity_window=False,
                             )
                             thread_player = cls.get_or_create_player(
-                                thread_campaign.id, ctx.author.id, campaign=thread_campaign
+                                thread_campaign.id,
+                                ctx.author.id,
+                                campaign=thread_campaign,
                             )
                             thread_state = cls.get_player_state(thread_player)
-                            thread_state = cls._copy_identity_fields(player_state, thread_state)
+                            thread_state = cls._copy_identity_fields(
+                                player_state, thread_state
+                            )
                             thread_state["party_status"] = "new_path"
                             thread_state["onboarding_state"] = None
                             thread_player.state_json = cls._dump_json(thread_state)
@@ -1800,7 +1931,9 @@ class ZorkEmulator:
                                 "Continue your adventure there."
                             )
 
-                    if action_clean in ("look", "l") and player_state.get("room_description"):
+                    if action_clean in ("look", "l") and player_state.get(
+                        "room_description"
+                    ):
                         title = player_state.get("room_title") or "Unknown"
                         desc = player_state.get("room_description") or ""
                         exits = player_state.get("exits")
@@ -1810,24 +1943,56 @@ class ZorkEmulator:
                         if inventory_line:
                             narration = f"{narration}\n\n{inventory_line}"
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
-                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+                        db.session.add(
+                            ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="player",
+                                content=action,
+                            )
+                        )
+                        db.session.add(
+                            ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="narrator",
+                                content=narration,
+                            )
+                        )
                         campaign.last_narration = narration
                         campaign.updated = db.func.now()
                         db.session.commit()
                         return narration
                     if action_clean in ("inventory", "inv", "i"):
-                        narration = cls._format_inventory(player_state) or "Inventory: empty"
+                        narration = (
+                            cls._format_inventory(player_state) or "Inventory: empty"
+                        )
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
-                        db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+                        db.session.add(
+                            ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="player",
+                                content=action,
+                            )
+                        )
+                        db.session.add(
+                            ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="narrator",
+                                content=narration,
+                            )
+                        )
                         campaign.last_narration = narration
                         campaign.updated = db.func.now()
                         db.session.commit()
                         return narration
 
                     turns = cls.get_recent_turns(campaign.id, user_id=ctx.author.id)
-                    party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
+                    party_snapshot = cls._build_party_snapshot_for_prompt(
+                        campaign, player, player_state
+                    )
                     system_prompt, user_prompt = cls.build_prompt(
                         campaign,
                         player,
@@ -1836,7 +2001,9 @@ class ZorkEmulator:
                         party_snapshot=party_snapshot,
                     )
                     gpt = GPT()
-                    response = await gpt.turbo_completion(system_prompt, user_prompt, temperature=0.8, max_tokens=900)
+                    response = await gpt.turbo_completion(
+                        system_prompt, user_prompt, temperature=0.8, max_tokens=900
+                    )
                     if not response:
                         response = "A hollow silence answers. Try again."
 
@@ -1855,7 +2022,9 @@ class ZorkEmulator:
                             state_update = payload.get("state_update", {}) or {}
                             summary_update = payload.get("summary_update")
                             xp_awarded = payload.get("xp_awarded", 0) or 0
-                            player_state_update = payload.get("player_state_update", {}) or {}
+                            player_state_update = (
+                                payload.get("player_state_update", {}) or {}
+                            )
                             scene_image_prompt = payload.get("scene_image_prompt")
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
@@ -1869,7 +2038,9 @@ class ZorkEmulator:
                     state_update = cls._scrub_inventory_from_state(state_update)
 
                     campaign_state = cls.get_campaign_state(campaign)
-                    campaign_state = cls._apply_state_update(campaign_state, state_update)
+                    campaign_state = cls._apply_state_update(
+                        campaign_state, state_update
+                    )
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
@@ -1880,7 +2051,9 @@ class ZorkEmulator:
                             campaign.summary = f"{campaign.summary}\n{summary_update}"
                         else:
                             campaign.summary = summary_update
-                        campaign.summary = cls._trim_text(campaign.summary, cls.MAX_SUMMARY_CHARS)
+                        campaign.summary = cls._trim_text(
+                            campaign.summary, cls.MAX_SUMMARY_CHARS
+                        )
 
                     player_state = cls.get_player_state(player)
                     player_state_update = cls._sanitize_player_state_update(
@@ -1889,13 +2062,17 @@ class ZorkEmulator:
                         action_text=action,
                         narration_text=narration,
                     )
-                    player_state = cls._apply_state_update(player_state, player_state_update)
+                    player_state = cls._apply_state_update(
+                        player_state, player_state_update
+                    )
                     player.state_json = cls._dump_json(player_state)
 
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
 
-                    inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
+                    inventory_line = (
+                        cls._format_inventory(player_state) or "Inventory: empty"
+                    )
                     if narration:
                         narration = f"{narration}\n\n{inventory_line}"
                     else:
@@ -1905,12 +2082,28 @@ class ZorkEmulator:
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
 
-                    db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="player", content=action))
-                    db.session.add(ZorkTurn(campaign_id=campaign.id, user_id=ctx.author.id, kind="narrator", content=narration))
+                    db.session.add(
+                        ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="player",
+                            content=action,
+                        )
+                    )
+                    db.session.add(
+                        ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="narrator",
+                            content=narration,
+                        )
+                    )
                     db.session.commit()
 
                     if isinstance(scene_image_prompt, str):
-                        refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(campaign, player, player_state)
+                        refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(
+                            campaign, player, player_state
+                        )
                         cleaned_scene_prompt = cls._enrich_scene_image_prompt(
                             scene_image_prompt,
                             player_state=player_state,
@@ -1940,16 +2133,22 @@ class ZorkEmulator:
             if not channel.enabled:
                 return f"Adventure mode is disabled in this channel. Run `{command_prefix}zork` to enable it."
             if channel.active_campaign_id is None:
-                _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+                _, campaign = cls.enable_channel(
+                    ctx.guild.id, ctx.channel.id, ctx.author.id
+                )
             else:
                 campaign = ZorkCampaign.query.get(channel.active_campaign_id)
                 if campaign is None:
-                    _, campaign = cls.enable_channel(ctx.guild.id, ctx.channel.id, ctx.author.id)
+                    _, campaign = cls.enable_channel(
+                        ctx.guild.id, ctx.channel.id, ctx.author.id
+                    )
             campaign_id = campaign.id
 
         with app.app_context():
             campaign = ZorkCampaign.query.get(campaign_id)
-            player = cls.get_or_create_player(campaign_id, ctx.author.id, campaign=campaign)
+            player = cls.get_or_create_player(
+                campaign_id, ctx.author.id, campaign=campaign
+            )
             player_state = cls.get_player_state(player)
             room_summary = player_state.get("room_summary")
             room_title = player_state.get("room_title")
@@ -1958,13 +2157,21 @@ class ZorkEmulator:
             if not room_summary and not room_title:
                 return "No map data yet. Try `look` first."
 
-            other_players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).order_by(ZorkPlayer.user_id.asc()).all()
+            other_players = (
+                ZorkPlayer.query.filter_by(campaign_id=campaign.id)
+                .order_by(ZorkPlayer.user_id.asc())
+                .all()
+            )
             marker_data = cls._assign_player_markers(other_players, ctx.author.id)
             other_entries = []
             for entry in marker_data:
                 other = entry["player"]
                 other_state = cls.get_player_state(other)
-                other_room = other_state.get("room_summary") or other_state.get("room_title") or other_state.get("location")
+                other_room = (
+                    other_state.get("room_summary")
+                    or other_state.get("room_title")
+                    or other_state.get("location")
+                )
                 if not other_room:
                     continue
                 other_entries.append(
