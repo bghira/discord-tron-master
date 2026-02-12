@@ -106,6 +106,10 @@ class ZorkEmulator:
         "- Use PARTY_SNAPSHOT persona/attributes to describe each visible character's look/pose/style cues.\n"
         "- Include at least one concrete prop or action beat tied to the acting player.\n"
         "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
+        "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name for this player and set it in player_state_update.character_name.\n"
+        "- Never assume a player's name from WORLD_SUMMARY or other context; always use PLAYER_CARD.state.character_name or generate a new one.\n"
+        "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
+        "- Track location/exits in player_state_update, not in narration prose.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -1711,6 +1715,7 @@ class ZorkEmulator:
         action: str,
         turns: List[ZorkTurn],
         party_snapshot: Optional[List[Dict[str, object]]] = None,
+        is_new_player: bool = False,
     ) -> Tuple[str, str]:
         summary = cls._strip_inventory_mentions(campaign.summary or "")
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
@@ -1751,6 +1756,7 @@ class ZorkEmulator:
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
+            f"IS_NEW_PLAYER: {str(is_new_player).lower()}\n"
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
@@ -1860,6 +1866,27 @@ class ZorkEmulator:
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
                     is_thread_channel = isinstance(ctx.channel, discord.Thread)
+
+                    has_character_name = bool(
+                        player_state.get("character_name", "").strip()
+                    )
+                    campaign_has_content = bool((campaign.summary or "").strip())
+                    other_players_exist = (
+                        ZorkPlayer.query.filter(
+                            ZorkPlayer.campaign_id == campaign.id,
+                            ZorkPlayer.user_id != ctx.author.id,
+                        ).count()
+                        > 0
+                    )
+                    needs_identity = campaign_has_content and not has_character_name
+                    is_new_player = not has_character_name and not campaign_has_content
+
+                    if needs_identity:
+                        return (
+                            "This campaign already has adventurers. "
+                            f"Set your identity first with `{command_prefix}zork identity <name>`. "
+                            "Then return to the adventure."
+                        )
 
                     # Deterministic onboarding in non-thread channels: bypass LLM until explicit choice.
                     onboarding_state = player_state.get("onboarding_state")
@@ -2026,6 +2053,7 @@ class ZorkEmulator:
                         action,
                         turns,
                         party_snapshot=party_snapshot,
+                        is_new_player=is_new_player,
                     )
                     gpt = GPT()
                     response = await gpt.turbo_completion(
