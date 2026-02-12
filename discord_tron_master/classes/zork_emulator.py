@@ -106,13 +106,17 @@ class ZorkEmulator:
         "- Use PARTY_SNAPSHOT persona/attributes to describe each visible character's look/pose/style cues.\n"
         "- Include at least one concrete prop or action beat tied to the acting player.\n"
         "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
-        "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name for this player and set it in player_state_update.character_name.\n"
+        "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name:\n"
+        "  * If CAMPAIGN references a known movie/book/show, use the MAIN CHARACTER/PROTAGONIST's canonical name.\n"
+        "  * Otherwise, create an appropriate name for this setting.\n"
+        "  Set it in player_state_update.character_name.\n"
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
-        "- NEVER generate dialogue, actions, or decisions for characters in PARTY_SNAPSHOT. Those are real players who control their own characters.\n"
-        "- If a player addresses another character in PARTY_SNAPSHOT, describe only the observable moment (a glance, a pause, silence) but do not speak or act for them. They will respond when their player acts.\n"
+        "- CRITICAL: PARTY_SNAPSHOT contains REAL HUMAN PLAYERS. You must NEVER write their dialogue, actions, reactions, or decisions.\n"
+        "- If another character from PARTY_SNAPSHOT is present, you may describe their passive state (standing, watching, breathing) but NO dialogue, NO gestures in response, NO reactions to events.\n"
+        "- Never write quoted speech for any character except NPCs you create. Players speak for themselves.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -360,14 +364,15 @@ class ZorkEmulator:
     async def generate_campaign_persona(cls, campaign_name: str) -> str:
         gpt = GPT()
         prompt = (
-            f"Generate a brief character persona (1-2 sentences, max 140 chars) for a player "
-            f"entering this text adventure setting: '{campaign_name}'. "
-            f"Describe their likely disposition, traits, or attitude that fits this world. "
-            f"Return ONLY the persona text, no quotes or explanation."
+            f"The campaign is titled: '{campaign_name}'.\n"
+            f"If this references a known movie, book, show, or story, create a persona for the MAIN CHARACTER/PROTAGONIST of that work. "
+            f"Use their canonical personality, traits, and disposition.\n"
+            f"If it's an original setting, create a fitting persona for a protagonist in that world.\n"
+            f"Return ONLY a brief persona (1-2 sentences, max 140 chars). No quotes or explanation."
         )
         try:
             response = await gpt.turbo_completion(
-                prompt, "", temperature=0.9, max_tokens=80
+                prompt, "", temperature=0.7, max_tokens=80
             )
             if response:
                 persona = response.strip().strip('"').strip("'")
