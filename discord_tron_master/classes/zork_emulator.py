@@ -110,6 +110,8 @@ class ZorkEmulator:
         "- Never assume a player's name from WORLD_SUMMARY or other context; always use PLAYER_CARD.state.character_name or generate a new one.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
+        "- NEVER generate dialogue, actions, or decisions for characters in PARTY_SNAPSHOT. Those are real players who control their own characters.\n"
+        "- If a player addresses another character in PARTY_SNAPSHOT, describe only the observable moment (a glance, a pause) but do not speak or act for them.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
