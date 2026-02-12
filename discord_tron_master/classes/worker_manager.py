@@ -333,7 +333,7 @@ class WorkerManager:
         user_ids = set()
         if worker.job_queue is None:
             return False
-        jobs = worker.job_queue.view()
+        jobs = list(worker.job_queue.queue)
         for job in jobs:
             if job is None:
                 continue
@@ -349,13 +349,14 @@ class WorkerManager:
         """
         idx = -1
         identical_authors = 0
-        for job in worker.job_queue.view():
+        queued_jobs = list(worker.job_queue.queue)
+        for job in queued_jobs:
             idx += 1
             if job is None:
                 continue
             if (
                 idx > 0
-                and job.author_id == worker.job_queue.view()[idx - 1].author_id
+                and job.author_id == queued_jobs[idx - 1].author_id
                 and not job.is_migrated()[0]
             ):
                 # This job is from the same user as the previous job
@@ -392,11 +393,13 @@ class WorkerManager:
                 logger.info(
                     f"We lack a solid block of jobs from the same user. Not Reorganizing queue."
                 )
+                continue
             logger.info(
-                f"We found a solid block of jobs from the same user. Not Reorganizing queue."
+                f"We found a solid block of jobs from the same user. Reorganizing queue."
             )
             # We need to reorganize the queue.
-            jobs = worker.job_queue.view()
+            # Only reorganize queued jobs, not in_progress ones.
+            jobs = list(worker.job_queue.queue)
             logger.info(
                 f"(reorganize_queue_by_user_ids) Worker {worker_id} jobs before reorganise: {[f'author_id={job.author_id}, id={job.id}' for job in jobs]}"
             )
