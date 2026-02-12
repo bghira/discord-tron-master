@@ -129,6 +129,7 @@ class ZorkEmulator:
         "Keep it under 25 lines and 60 columns. Use @ for the player location.\n"
         "Use simple ASCII only: - | + . # / \\ and letters.\n"
         "Include other player markers (A, B, C, ...) and add a Legend at the bottom.\n"
+        "In the Legend, use PLAYER_NAME for @ and character_name from OTHER_PLAYERS for each marker.\n"
     )
     PRESET_ALIASES = {
         "alice": "alice",
@@ -2231,17 +2232,27 @@ class ZorkEmulator:
                 )
                 if not other_room:
                     continue
+                other_name = (
+                    other_state.get("character_name")
+                    or f"Adventurer-{str(other.user_id)[-4:]}"
+                )
                 other_entries.append(
                     {
                         "marker": entry["marker"],
                         "user_id": other.user_id,
+                        "character_name": other_name,
                         "room": other_room,
                         "party_status": other_state.get("party_status"),
                     }
                 )
 
+            player_name = (
+                player_state.get("character_name")
+                or f"Adventurer-{str(ctx.author.id)[-4:]}"
+            )
             map_prompt = (
                 f"CAMPAIGN: {campaign.name}\n"
+                f"PLAYER_NAME: {player_name}\n"
                 f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
