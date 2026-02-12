@@ -107,11 +107,12 @@ class ZorkEmulator:
         "- Include at least one concrete prop or action beat tied to the acting player.\n"
         "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
         "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name for this player and set it in player_state_update.character_name.\n"
-        "- Never assume a player's name from WORLD_SUMMARY or other context; always use PLAYER_CARD.state.character_name or generate a new one.\n"
+        "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
+        "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
         "- NEVER generate dialogue, actions, or decisions for characters in PARTY_SNAPSHOT. Those are real players who control their own characters.\n"
-        "- If a player addresses another character in PARTY_SNAPSHOT, describe only the observable moment (a glance, a pause) but do not speak or act for them.\n"
+        "- If a player addresses another character in PARTY_SNAPSHOT, describe only the observable moment (a glance, a pause, silence) but do not speak or act for them. They will respond when their player acts.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"

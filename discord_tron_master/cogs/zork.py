@@ -407,8 +407,14 @@ class Zork(commands.Cog):
                 await ctx.send("Identity cannot be empty.")
                 return
             character_name = character_name[:64]
+            old_name = player_state.get("character_name")
             player_state["character_name"] = character_name
             player.state_json = ZorkEmulator._dump_json(player_state)
+            if old_name and isinstance(old_name, str) and old_name != character_name:
+                campaign.summary = (campaign.summary or "").replace(
+                    old_name, character_name
+                )
+                campaign.updated = db.func.now()
             player.updated = db.func.now()
             db.session.commit()
             await ctx.send(f"Identity set to `{character_name}`.")
