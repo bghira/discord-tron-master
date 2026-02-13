@@ -1036,6 +1036,28 @@ class ZorkEmulator:
         first_sentence = re.split(r'(?<=[.!?])\s', source, maxsplit=1)[0]
         return first_sentence[:120]
 
+    _ITEM_STOPWORDS = {"a", "an", "the", "of", "and", "or", "to", "in", "on", "for"}
+
+    @classmethod
+    def _item_mentioned(cls, item_name: str, text_lower: str) -> bool:
+        """Check whether *item_name* is referenced in *text_lower*.
+
+        First tries an exact substring match.  If that fails, falls back to
+        word-level matching: the item is considered mentioned when every
+        significant word (>2 chars, not a stopword) in its name appears
+        somewhere in the text.
+        """
+        item_l = item_name.lower()
+        if item_l in text_lower:
+            return True
+        words = [
+            w for w in re.findall(r"[a-z0-9]+", item_l)
+            if len(w) > 2 and w not in cls._ITEM_STOPWORDS
+        ]
+        if not words:
+            return False
+        return all(w in text_lower for w in words)
+
     @classmethod
     def _sanitize_player_state_update(
         cls,
@@ -1063,10 +1085,11 @@ class ZorkEmulator:
             )
 
         # Only accept inventory deltas when item names are referenced in action/narration.
+        combined_l = f"{action_l} {narration_l}"
+
         filtered_add = []
         for item in inventory_add:
-            item_l = item.lower()
-            if item_l in action_l or item_l in narration_l:
+            if cls._item_mentioned(item, combined_l):
                 filtered_add.append(item)
             else:
                 logger.warning(
@@ -1077,8 +1100,7 @@ class ZorkEmulator:
 
         filtered_remove = []
         for item in inventory_remove:
-            item_l = item.lower()
-            if item_l in action_l or item_l in narration_l:
+            if cls._item_mentioned(item, combined_l):
                 filtered_remove.append(item)
             else:
                 logger.warning(
