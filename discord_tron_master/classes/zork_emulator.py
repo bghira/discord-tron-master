@@ -69,7 +69,7 @@ class ZorkEmulator:
     _locks: Dict[int, asyncio.Lock] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
-    _pending_timers: Dict[int, asyncio.Task] = {}  # campaign_id -> asyncio.Task
+    _pending_timers: Dict[int, dict] = {}  # campaign_id -> timer context dict
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
@@ -89,7 +89,9 @@ class ZorkEmulator:
         "- player_state_update: object (optional, player state patches)\n"
         "- scene_image_prompt: string (optional; include only when scene/location changes and a fresh image should be rendered)\n"
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
-        "- set_timer_event: string (optional; what happens when the timer expires)\n\n"
+        "- set_timer_event: string (optional; what happens when the timer expires)\n"
+        "- set_timer_interruptible: boolean (optional; default true)\n"
+        "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n\n"
         "Rules:\n"
         "- No markdown or code fences.\n"
         "- Keep narration under 1800 characters.\n"
@@ -144,23 +146,30 @@ class ZorkEmulator:
     TIMER_TOOL_PROMPT = (
         "\nTIMED EVENTS SYSTEM:\n"
         "You can schedule real countdown timers that fire automatically if the player doesn't act.\n"
-        "To set a timer, include these two EXTRA keys in your normal JSON response:\n"
-        '- "set_timer_delay": integer (30-300 seconds)\n'
-        '- "set_timer_event": string (what happens when the timer expires)\n'
+        "To set a timer, include these EXTRA keys in your normal JSON response:\n"
+        '- "set_timer_delay": integer (30-300 seconds) — REQUIRED for timer\n'
+        '- "set_timer_event": string (what happens when the timer expires) — REQUIRED for timer\n'
+        '- "set_timer_interruptible": boolean (default true; if false, timer keeps running even if player acts)\n'
+        '- "set_timer_interrupt_action": string or null (what should happen when the player interrupts '
+        "the timer by acting; null means just cancel silently; a description means the system will "
+        "feed it back to you as context on the next turn so you can narrate the interruption)\n"
         "These go ALONGSIDE narration/state_update/etc in the same JSON object. Example:\n"
-        '{"narration": "The ceiling groans. Dust rains down...", '
+        '{"narration": "The ceiling groans ominously. Dust rains down...", '
         '"state_update": {"ceiling_status": "cracking"}, "summary_update": "Ceiling is unstable.", "xp_awarded": 0, '
         '"player_state_update": {"room_summary": "A crumbling chamber with a failing ceiling."}, '
-        '"set_timer_delay": 120, "set_timer_event": "The ceiling collapses, burying the room in rubble."}\n'
-        "The system will start a real countdown visible to the player. "
-        "If the player acts before it expires, the timer is cancelled. "
+        '"set_timer_delay": 120, "set_timer_event": "The ceiling collapses, burying the room in rubble.", '
+        '"set_timer_interruptible": true, '
+        '"set_timer_interrupt_action": "The player escapes just as cracks widen overhead."}\n'
+        "The system shows a live countdown in Discord. "
+        "If the player acts before it expires, the timer is cancelled (if interruptible). "
         "If the player does NOT act in time, the system auto-fires the event.\n"
         "PURPOSE: Timed events should FORCE THE PLAYER TO MAKE A DECISION or DRAG THEM WHERE THEY NEED TO BE.\n"
         "- Use timers to push the story forward when the player is stalling, idle, or refusing to engage.\n"
         "- NPCs should grab, escort, or coerce the player. Environments should shift and force movement.\n"
-        "- The event_description should advance the plot: move the player to the next location, "
+        "- The event should advance the plot: move the player to the next location, "
         "force an encounter, have an NPC intervene, or change the scene decisively.\n"
         "- Do NOT use timers for trivial flavor. They should always have real consequences that change game state.\n"
+        "- Set interruptible=false for events the player cannot avoid (e.g. an earthquake, a mandatory roll call).\n"
         "Rules:\n"
         "- Use ~60s for urgent, ~120s for moderate, ~180-300s for slow-building tension.\n"
         "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
@@ -1813,10 +1822,57 @@ class ZorkEmulator:
         return True
 
     @classmethod
-    def cancel_pending_timer(cls, campaign_id: int):
-        task = cls._pending_timers.pop(campaign_id, None)
+    def cancel_pending_timer(cls, campaign_id: int) -> Optional[dict]:
+        """Cancel a pending timer and return its context dict (or None)."""
+        ctx_dict = cls._pending_timers.pop(campaign_id, None)
+        if ctx_dict is None:
+            return None
+        task = ctx_dict.get("task")
         if task is not None and not task.done():
             task.cancel()
+        # Schedule a message edit to remove the live countdown.
+        message_id = ctx_dict.get("message_id")
+        channel_id = ctx_dict.get("channel_id")
+        if message_id and channel_id:
+            asyncio.ensure_future(
+                cls._edit_timer_line(channel_id, message_id, "\u2705 *Timer cancelled — you acted in time.*")
+            )
+        return ctx_dict
+
+    @classmethod
+    def register_timer_message(cls, campaign_id: int, message_id: int):
+        """Called by the cog after sending a reply that contains a timer countdown."""
+        ctx_dict = cls._pending_timers.get(campaign_id)
+        if ctx_dict is not None:
+            ctx_dict["message_id"] = message_id
+
+    @classmethod
+    async def _edit_timer_line(cls, channel_id: int, message_id: int, replacement: str):
+        """Edit a Discord message to replace the ⏰ countdown line."""
+        try:
+            bot_instance = DiscordBot.get_instance()
+            if bot_instance is None:
+                return
+            channel = await bot_instance.find_channel(channel_id)
+            if channel is None:
+                return
+            message = await channel.fetch_message(message_id)
+            if message is None:
+                return
+            content = message.content
+            # Replace the ⏰ line with the new text.
+            lines = content.split("\n")
+            new_lines = []
+            for line in lines:
+                if line.startswith("\u23f0"):
+                    new_lines.append(replacement)
+                else:
+                    new_lines.append(line)
+            new_content = "\n".join(new_lines)
+            if new_content != content:
+                await message.edit(content=new_content)
+        except Exception:
+            logger.debug("Failed to edit timer message %s", message_id, exc_info=True)
 
     @classmethod
     def _build_rails_context(
@@ -2047,7 +2103,16 @@ class ZorkEmulator:
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
-                    cls.cancel_pending_timer(campaign_id)
+                    timer_interrupt_context = None
+                    pending = cls._pending_timers.get(campaign_id)
+                    if pending is not None:
+                        if pending.get("interruptible", True):
+                            cancelled_timer = cls.cancel_pending_timer(campaign_id)
+                            if cancelled_timer:
+                                interrupt_action = cancelled_timer.get("interrupt_action")
+                                if interrupt_action:
+                                    timer_interrupt_context = interrupt_action
+                        # Non-interruptible timers are left running.
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
@@ -2241,6 +2306,14 @@ class ZorkEmulator:
                         party_snapshot=party_snapshot,
                         is_new_player=is_new_player,
                     )
+                    if timer_interrupt_context:
+                        user_prompt = (
+                            f"{user_prompt}\n"
+                            f"TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
+                            f"The interrupted event was: \"{timer_interrupt_context}\"\n"
+                            f"The player's action that interrupted it: \"{action}\"\n"
+                            f"Incorporate the interruption naturally into your narration.\n"
+                        )
                     gpt = GPT()
                     response = await gpt.turbo_completion(
                         system_prompt, user_prompt, temperature=0.8, max_tokens=900
@@ -2395,16 +2468,27 @@ class ZorkEmulator:
                                     t_delay = 60
                                 t_delay = max(30, min(300, t_delay))
                                 t_event = str(inline_timer_event).strip()[:500]
+                                t_interruptible = bool(
+                                    payload.get("set_timer_interruptible", True)
+                                )
+                                t_interrupt_action = payload.get("set_timer_interrupt_action")
+                                if isinstance(t_interrupt_action, str):
+                                    t_interrupt_action = t_interrupt_action.strip()[:500] or None
+                                else:
+                                    t_interrupt_action = None
                                 cls.cancel_pending_timer(campaign.id)
                                 cls._schedule_timer(
-                                    campaign.id, ctx.channel.id, t_delay, t_event
+                                    campaign.id, ctx.channel.id, t_delay, t_event,
+                                    interruptible=t_interruptible,
+                                    interrupt_action=t_interrupt_action,
                                 )
                                 timer_scheduled_delay = t_delay
                                 logger.info(
-                                    "Zork timer set (inline): campaign=%s delay=%ds event=%r",
+                                    "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s",
                                     campaign.id,
                                     t_delay,
                                     t_event,
+                                    t_interruptible,
                                 )
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
@@ -2546,11 +2630,21 @@ class ZorkEmulator:
         channel_id: int,
         delay_seconds: int,
         event_description: str,
+        interruptible: bool = True,
+        interrupt_action: Optional[str] = None,
     ):
         task = asyncio.create_task(
             cls._timer_task(campaign_id, channel_id, delay_seconds, event_description)
         )
-        cls._pending_timers[campaign_id] = task
+        cls._pending_timers[campaign_id] = {
+            "task": task,
+            "channel_id": channel_id,
+            "message_id": None,
+            "event": event_description,
+            "delay": delay_seconds,
+            "interruptible": interruptible,
+            "interrupt_action": interrupt_action,
+        }
 
     @classmethod
     async def _timer_task(
@@ -2564,7 +2658,15 @@ class ZorkEmulator:
             await asyncio.sleep(delay_seconds)
         except asyncio.CancelledError:
             return
-        cls._pending_timers.pop(campaign_id, None)
+        timer_ctx = cls._pending_timers.pop(campaign_id, None)
+        # Edit the original message to replace live countdown.
+        if timer_ctx:
+            msg_id = timer_ctx.get("message_id")
+            ch_id = timer_ctx.get("channel_id")
+            if msg_id and ch_id:
+                asyncio.ensure_future(
+                    cls._edit_timer_line(ch_id, msg_id, "\u26a0\ufe0f *Timer expired!*")
+                )
         try:
             await cls._execute_timed_event(campaign_id, channel_id, event_description)
         except Exception:

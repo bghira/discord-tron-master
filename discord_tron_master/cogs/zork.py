@@ -66,12 +66,16 @@ class Zork(commands.Cog):
             .strip()
         )
 
-    async def _send_action_reply(self, ctx_like, narration: str):
+    async def _send_action_reply(self, ctx_like, narration: str, campaign_id: int = None):
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:
-            await DiscordBot.send_large_message(ctx_like, f"{mention}\n{narration}")
-            return
-        await DiscordBot.send_large_message(ctx_like, narration)
+            msg = await DiscordBot.send_large_message(ctx_like, f"{mention}\n{narration}")
+        else:
+            msg = await DiscordBot.send_large_message(ctx_like, narration)
+        # If a timer was just scheduled, register the message for later editing.
+        if campaign_id is not None and msg is not None:
+            ZorkEmulator.register_timer_message(campaign_id, msg.id)
+        return msg
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -108,7 +112,7 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            await self._send_action_reply(message, narration)
+            await self._send_action_reply(message, narration, campaign_id=campaign_id)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(message)
@@ -180,7 +184,7 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            await self._send_action_reply(ctx, narration)
+            await self._send_action_reply(ctx, narration, campaign_id=campaign_id)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
