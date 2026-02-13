@@ -203,6 +203,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork persona <text>` set your character persona\n"
             f"- `{prefix}zork rails` show strict guardrails mode status for active campaign\n"
             f"- `{prefix}zork rails enable|disable` toggle strict on-rails action validation for active campaign\n"
+            f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
             f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
@@ -368,6 +369,79 @@ class Zork(commands.Cog):
                 return
             ZorkEmulator.set_guardrails_enabled(campaign, False)
             await ctx.send(f"Rails mode disabled for campaign `{campaign.name}`.")
+
+    @zork.group(name="timed-events", invoke_without_command=True)
+    async def zork_timed_events(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            enabled = ZorkEmulator.is_timed_events_enabled(campaign)
+            mode = "enabled" if enabled else "disabled"
+            await ctx.send(
+                f"Timed events are `{mode}` for campaign `{campaign.name}`.\n"
+                f"Use `{self._prefix()}zork timed-events enable` or `{self._prefix()}zork timed-events disable`."
+            )
+
+    @zork_timed_events.command(name="enable")
+    async def zork_timed_events_enable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+                await ctx.send("Only the campaign creator or an Image Admin can change this setting.")
+                return
+            ZorkEmulator.set_timed_events_enabled(campaign, True)
+            await ctx.send(f"Timed events enabled for campaign `{campaign.name}`.")
+
+    @zork_timed_events.command(name="disable")
+    async def zork_timed_events_disable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+                await ctx.send("Only the campaign creator or an Image Admin can change this setting.")
+                return
+            ZorkEmulator.set_timed_events_enabled(campaign, False)
+            await ctx.send(f"Timed events disabled for campaign `{campaign.name}`.")
 
     @zork.command(name="identity")
     async def zork_identity(self, ctx, *, character_name: str = None):

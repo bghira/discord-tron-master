@@ -68,6 +68,7 @@ class ZorkEmulator:
     _locks: Dict[int, asyncio.Lock] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
+    _pending_timers: Dict[int, asyncio.Task] = {}  # campaign_id -> asyncio.Task
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
@@ -136,6 +137,15 @@ class ZorkEmulator:
         "resolve the player's action or reference, return ONLY:\n"
         '{"tool_call": "memory_search", "query": "..."}\n'
         "No other keys alongside tool_call. Only use when genuinely needed.\n"
+    )
+    TIMER_TOOL_PROMPT = (
+        "\nYou have a set_timer tool. Use it to create dramatic tension with timed events.\n"
+        "When the story calls for a deadline or countdown, return ONLY:\n"
+        '{"tool_call": "set_timer", "delay_seconds": <30-300>, "event_description": "..."}\n'
+        "No other keys alongside tool_call. delay_seconds must be between 30 and 300.\n"
+        "After the system processes your set_timer, you will be called again to narrate\n"
+        "the scene. In that narration, mention the time pressure and approximate seconds.\n"
+        "Only use when genuinely needed for dramatic pacing. Do not spam timers.\n"
     )
 
     MAP_SYSTEM_PROMPT = (
@@ -1760,6 +1770,34 @@ class ZorkEmulator:
         return True
 
     @classmethod
+    def is_timed_events_enabled(cls, campaign: Optional[ZorkCampaign]) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        return bool(campaign_state.get("timed_events_enabled", True))
+
+    @classmethod
+    def set_timed_events_enabled(
+        cls, campaign: Optional[ZorkCampaign], enabled: bool
+    ) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        campaign_state["timed_events_enabled"] = bool(enabled)
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        if not enabled:
+            cls.cancel_pending_timer(campaign.id)
+        return True
+
+    @classmethod
+    def cancel_pending_timer(cls, campaign_id: int):
+        task = cls._pending_timers.pop(campaign_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    @classmethod
     def _build_rails_context(
         cls,
         player_state: Dict[str, object],
@@ -1887,6 +1925,8 @@ class ZorkEmulator:
         if guardrails_enabled:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
         system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
+        if state.get("timed_events_enabled", True):
+            system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
         return system_prompt, user_prompt
 
     @staticmethod
@@ -1989,6 +2029,7 @@ class ZorkEmulator:
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
+                    cls.cancel_pending_timer(campaign_id)
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
@@ -2189,7 +2230,7 @@ class ZorkEmulator:
                     if not response:
                         response = "A hollow silence answers. Try again."
 
-                    # --- Tool-call detection (memory_search) ---
+                    # --- Tool-call detection (memory_search / set_timer) ---
                     json_text_tc = cls._extract_json(response)
                     if json_text_tc:
                         try:
@@ -2197,27 +2238,68 @@ class ZorkEmulator:
                         except Exception:
                             first_payload = None
                         if first_payload and cls._is_tool_call(first_payload):
-                            query = str(first_payload.get("query") or "").strip()
-                            if query:
-                                logger.info(
-                                    "Zork memory search requested: campaign=%s query=%r",
-                                    campaign.id,
-                                    query,
-                                )
-                                results = ZorkMemory.search(query, campaign.id, top_k=5)
-                                if results:
-                                    recall_lines = []
-                                    for turn_id, kind, content, score in results:
-                                        recall_lines.append(
-                                            f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
-                                        )
-                                    recall_block = (
-                                        "MEMORY_RECALL (results from memory_search):\n"
-                                        + "\n".join(recall_lines)
+                            tool_name = str(first_payload.get("tool_call") or "").strip()
+
+                            if tool_name == "memory_search":
+                                query = str(first_payload.get("query") or "").strip()
+                                if query:
+                                    logger.info(
+                                        "Zork memory search requested: campaign=%s query=%r",
+                                        campaign.id,
+                                        query,
                                     )
-                                else:
-                                    recall_block = "MEMORY_RECALL: No relevant memories found."
-                                augmented_prompt = f"{user_prompt}\n{recall_block}\n"
+                                    results = ZorkMemory.search(query, campaign.id, top_k=5)
+                                    if results:
+                                        recall_lines = []
+                                        for turn_id, kind, content, score in results:
+                                            recall_lines.append(
+                                                f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
+                                            )
+                                        recall_block = (
+                                            "MEMORY_RECALL (results from memory_search):\n"
+                                            + "\n".join(recall_lines)
+                                        )
+                                    else:
+                                        recall_block = "MEMORY_RECALL: No relevant memories found."
+                                    augmented_prompt = f"{user_prompt}\n{recall_block}\n"
+                                    response = await gpt.turbo_completion(
+                                        system_prompt,
+                                        augmented_prompt,
+                                        temperature=0.8,
+                                        max_tokens=900,
+                                    )
+                                    if not response:
+                                        response = "A hollow silence answers. Try again."
+
+                            elif tool_name == "set_timer" and cls.is_timed_events_enabled(campaign):
+                                raw_delay = first_payload.get("delay_seconds", 60)
+                                try:
+                                    delay_seconds = int(raw_delay)
+                                except (TypeError, ValueError):
+                                    delay_seconds = 60
+                                delay_seconds = max(30, min(300, delay_seconds))
+                                event_description = str(
+                                    first_payload.get("event_description") or "Something happens."
+                                ).strip()[:500]
+
+                                cls.cancel_pending_timer(campaign.id)
+                                channel_id = ctx.channel.id
+                                cls._schedule_timer(
+                                    campaign.id, channel_id, delay_seconds, event_description
+                                )
+                                logger.info(
+                                    "Zork timer set: campaign=%s delay=%ds event=%r",
+                                    campaign.id,
+                                    delay_seconds,
+                                    event_description,
+                                )
+                                timer_block = (
+                                    f"TIMER_SET (system confirmation): A timed event has been scheduled.\n"
+                                    f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
+                                    f"Now narrate the current scene. You MUST mention the time pressure\n"
+                                    f"and tell the player approximately how long they have."
+                                )
+                                augmented_prompt = f"{user_prompt}\n{timer_block}\n"
                                 response = await gpt.turbo_completion(
                                     system_prompt,
                                     augmented_prompt,
@@ -2357,6 +2439,176 @@ class ZorkEmulator:
         finally:
             if should_clear_claim:
                 cls._clear_inflight_turn(campaign_id, ctx.author.id)
+
+    @classmethod
+    def _schedule_timer(
+        cls,
+        campaign_id: int,
+        channel_id: int,
+        delay_seconds: int,
+        event_description: str,
+    ):
+        task = asyncio.create_task(
+            cls._timer_task(campaign_id, channel_id, delay_seconds, event_description)
+        )
+        cls._pending_timers[campaign_id] = task
+
+    @classmethod
+    async def _timer_task(
+        cls,
+        campaign_id: int,
+        channel_id: int,
+        delay_seconds: int,
+        event_description: str,
+    ):
+        try:
+            await asyncio.sleep(delay_seconds)
+        except asyncio.CancelledError:
+            return
+        cls._pending_timers.pop(campaign_id, None)
+        try:
+            await cls._execute_timed_event(campaign_id, channel_id, event_description)
+        except Exception:
+            logger.exception(
+                "Zork timed event failed: campaign=%s event=%r",
+                campaign_id,
+                event_description,
+            )
+
+    @classmethod
+    async def _execute_timed_event(
+        cls,
+        campaign_id: int,
+        channel_id: int,
+        event_description: str,
+    ):
+        app = AppConfig.get_flask()
+        if app is None:
+            return
+        lock = cls._get_lock(campaign_id)
+        async with lock:
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign_id)
+                if campaign is None:
+                    return
+                if not cls.is_timed_events_enabled(campaign):
+                    return
+
+                # Safety: skip if a player acted very recently (race guard).
+                latest_turn = (
+                    ZorkTurn.query.filter_by(campaign_id=campaign_id)
+                    .order_by(ZorkTurn.id.desc())
+                    .first()
+                )
+                if latest_turn and latest_turn.kind == "player":
+                    if latest_turn.created:
+                        age = (datetime.datetime.utcnow() - latest_turn.created).total_seconds()
+                        if age < 5:
+                            return
+
+                # Find most recently active player for context.
+                active_player = (
+                    ZorkPlayer.query.filter_by(campaign_id=campaign_id)
+                    .order_by(ZorkPlayer.last_active.desc())
+                    .first()
+                )
+                if active_player is None:
+                    return
+
+                action = f"[SYSTEM EVENT - TIMED]: {event_description}"
+                turns = cls.get_recent_turns(campaign_id, user_id=active_player.user_id)
+                system_prompt, user_prompt = cls.build_prompt(
+                    campaign,
+                    active_player,
+                    action,
+                    turns,
+                    is_new_player=False,
+                )
+
+                gpt = GPT()
+                response = await gpt.turbo_completion(
+                    system_prompt, user_prompt, temperature=0.8, max_tokens=900
+                )
+                if not response:
+                    return
+
+                narration = response.strip()
+                state_update = {}
+                summary_update = None
+                xp_awarded = 0
+                player_state_update = {}
+
+                json_text = cls._extract_json(response)
+                if json_text:
+                    try:
+                        payload = json.loads(json_text)
+                        narration = payload.get("narration", narration).strip()
+                        state_update = payload.get("state_update", {}) or {}
+                        summary_update = payload.get("summary_update")
+                        xp_awarded = payload.get("xp_awarded", 0) or 0
+                        player_state_update = payload.get("player_state_update", {}) or {}
+                    except Exception as e:
+                        logger.warning(f"Failed to parse timed event JSON response: {e}")
+
+                narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                narration = cls._strip_inventory_from_narration(narration)
+
+                state_update, player_state_update = cls._split_room_state(
+                    state_update, player_state_update
+                )
+                state_update = cls._scrub_inventory_from_state(state_update)
+
+                campaign_state = cls.get_campaign_state(campaign)
+                campaign_state = cls._apply_state_update(campaign_state, state_update)
+                campaign_state = cls._scrub_inventory_from_state(campaign_state)
+                campaign.state_json = cls._dump_json(campaign_state)
+
+                if summary_update:
+                    summary_update = summary_update.strip()
+                    summary_update = cls._strip_inventory_mentions(summary_update)
+                    if campaign.summary:
+                        campaign.summary = f"{campaign.summary}\n{summary_update}"
+                    else:
+                        campaign.summary = summary_update
+                    campaign.summary = cls._trim_text(
+                        campaign.summary, cls.MAX_SUMMARY_CHARS
+                    )
+
+                player_state = cls.get_player_state(active_player)
+                player_state_update = cls._sanitize_player_state_update(
+                    player_state,
+                    player_state_update,
+                    action_text=action,
+                    narration_text=narration,
+                )
+                player_state = cls._apply_state_update(player_state, player_state_update)
+                active_player.state_json = cls._dump_json(player_state)
+
+                if isinstance(xp_awarded, int) and xp_awarded > 0:
+                    active_player.xp += xp_awarded
+
+                campaign.last_narration = narration
+                campaign.updated = db.func.now()
+                active_player.updated = db.func.now()
+
+                narrator_turn = ZorkTurn(
+                    campaign_id=campaign.id,
+                    user_id=None,
+                    kind="narrator",
+                    content=f"[TIMED EVENT] {narration}",
+                )
+                db.session.add(narrator_turn)
+                db.session.commit()
+
+        # Post to Discord outside the lock / app context.
+        bot_instance = DiscordBot.get_instance()
+        if bot_instance is None:
+            return
+        channel = await bot_instance.find_channel(channel_id)
+        if channel is None:
+            return
+        output = f"**[Timed Event]**\n{narration}"
+        await DiscordBot.send_large_message(channel, output)
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:
