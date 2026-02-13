@@ -35,6 +35,8 @@ flask-migrate = "^4.0.7"
 mysql-connector-python = "^9.1.0"
 python-dotenv = "^1.0.1"
 websocket = "^0.2.1"
+numpy = ">=1.24,<2"
+sentence-transformers = ">=2.2,<4"
 
 
 [build-system]

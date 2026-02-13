@@ -11,6 +11,7 @@ import discord
 import requests
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
+from discord_tron_master.classes.zork_memory import ZorkMemory
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.models.base import db
 from discord_tron_master.models.zork import (
@@ -130,6 +131,13 @@ class ZorkEmulator:
         "- Do not create new key items, exits, NPCs, or mechanics just to satisfy a request.\n"
         "- Use the provided RAILS_CONTEXT as hard constraints.\n"
     )
+    MEMORY_TOOL_PROMPT = (
+        "\nYou have a memory_search tool. If the current context is insufficient to "
+        "resolve the player's action or reference, return ONLY:\n"
+        '{"tool_call": "memory_search", "query": "..."}\n'
+        "No other keys alongside tool_call. Only use when genuinely needed.\n"
+    )
+
     MAP_SYSTEM_PROMPT = (
         "You draw compact ASCII maps for text adventures.\n"
         "Return ONLY the ASCII map (no markdown, no code fences).\n"
@@ -1833,7 +1841,17 @@ class ZorkEmulator:
         system_prompt = cls.SYSTEM_PROMPT
         if guardrails_enabled:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
         return system_prompt, user_prompt
+
+    @staticmethod
+    def _is_tool_call(payload: dict) -> bool:
+        """Return True when *payload* is a memory_search tool invocation."""
+        return (
+            isinstance(payload, dict)
+            and "tool_call" in payload
+            and "narration" not in payload
+        )
 
     @classmethod
     def _extract_json(cls, text: str) -> Optional[str]:
@@ -2126,6 +2144,44 @@ class ZorkEmulator:
                     if not response:
                         response = "A hollow silence answers. Try again."
 
+                    # --- Tool-call detection (memory_search) ---
+                    json_text_tc = cls._extract_json(response)
+                    if json_text_tc:
+                        try:
+                            first_payload = json.loads(json_text_tc)
+                        except Exception:
+                            first_payload = None
+                        if first_payload and cls._is_tool_call(first_payload):
+                            query = str(first_payload.get("query") or "").strip()
+                            if query:
+                                logger.info(
+                                    "Zork memory search requested: campaign=%s query=%r",
+                                    campaign.id,
+                                    query,
+                                )
+                                results = ZorkMemory.search(query, campaign.id, top_k=5)
+                                if results:
+                                    recall_lines = []
+                                    for turn_id, kind, content, score in results:
+                                        recall_lines.append(
+                                            f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
+                                        )
+                                    recall_block = (
+                                        "MEMORY_RECALL (results from memory_search):\n"
+                                        + "\n".join(recall_lines)
+                                    )
+                                else:
+                                    recall_block = "MEMORY_RECALL: No relevant memories found."
+                                augmented_prompt = f"{user_prompt}\n{recall_block}\n"
+                                response = await gpt.turbo_completion(
+                                    system_prompt,
+                                    augmented_prompt,
+                                    temperature=0.8,
+                                    max_tokens=900,
+                                )
+                                if not response:
+                                    response = "A hollow silence answers. Try again."
+
                     narration = response.strip()
                     state_update = {}
                     summary_update = None
@@ -2210,15 +2266,30 @@ class ZorkEmulator:
                             content=action,
                         )
                     )
-                    db.session.add(
-                        ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="narrator",
-                            content=narration,
-                        )
+                    narrator_turn = ZorkTurn(
+                        campaign_id=campaign.id,
+                        user_id=ctx.author.id,
+                        kind="narrator",
+                        content=narration,
                     )
+                    db.session.add(narrator_turn)
                     db.session.commit()
+
+                    # Fire-and-forget: embed the narrator turn for memory search.
+                    try:
+                        ZorkMemory.store_turn_embedding(
+                            narrator_turn.id,
+                            campaign.id,
+                            ctx.author.id,
+                            "narrator",
+                            narration,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Zork memory embedding skipped for turn %s",
+                            narrator_turn.id,
+                            exc_info=True,
+                        )
 
                     if isinstance(scene_image_prompt, str):
                         refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(
