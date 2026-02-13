@@ -1963,12 +1963,9 @@ class ZorkEmulator:
     def _extract_json(cls, text: str) -> Optional[str]:
         text = text.strip()
         if "```" in text:
-            cleaned = []
-            for line in text.splitlines():
-                if "```" in line:
-                    continue
-                cleaned.append(line)
-            text = "\n".join(cleaned).strip()
+            # Strip code fence markers (```json, ```, etc.) without
+            # dropping lines that also contain JSON content.
+            text = re.sub(r"```\w*", "", text).strip()
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
