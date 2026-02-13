@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import time
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
@@ -85,8 +86,10 @@ class ZorkEmulator:
         "- state_update: object (world state patches)\n"
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
-        "- player_state_update: object (optional, player state patches)\n\n"
-        "- scene_image_prompt: string (optional; include only when scene/location changes and a fresh image should be rendered)\n\n"
+        "- player_state_update: object (optional, player state patches)\n"
+        "- scene_image_prompt: string (optional; include only when scene/location changes and a fresh image should be rendered)\n"
+        "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
+        "- set_timer_event: string (optional; what happens when the timer expires)\n\n"
         "Rules:\n"
         "- No markdown or code fences.\n"
         "- Keep narration under 1800 characters.\n"
@@ -139,13 +142,31 @@ class ZorkEmulator:
         "No other keys alongside tool_call. Only use when genuinely needed.\n"
     )
     TIMER_TOOL_PROMPT = (
-        "\nYou have a set_timer tool. Use it to create dramatic tension with timed events.\n"
-        "When the story calls for a deadline or countdown, return ONLY:\n"
-        '{"tool_call": "set_timer", "delay_seconds": <30-300>, "event_description": "..."}\n'
-        "No other keys alongside tool_call. delay_seconds must be between 30 and 300.\n"
-        "After the system processes your set_timer, you will be called again to narrate\n"
-        "the scene. In that narration, mention the time pressure and approximate seconds.\n"
-        "Only use when genuinely needed for dramatic pacing. Do not spam timers.\n"
+        "\nTIMED EVENTS SYSTEM:\n"
+        "You can schedule real countdown timers that fire automatically if the player doesn't act.\n"
+        "To set a timer, include these two EXTRA keys in your normal JSON response:\n"
+        '- "set_timer_delay": integer (30-300 seconds)\n'
+        '- "set_timer_event": string (what happens when the timer expires)\n'
+        "These go ALONGSIDE narration/state_update/etc in the same JSON object. Example:\n"
+        '{"narration": "The ceiling groans. Dust rains down...", '
+        '"state_update": {"ceiling_status": "cracking"}, "summary_update": "Ceiling is unstable.", "xp_awarded": 0, '
+        '"player_state_update": {"room_summary": "A crumbling chamber with a failing ceiling."}, '
+        '"set_timer_delay": 120, "set_timer_event": "The ceiling collapses, burying the room in rubble."}\n'
+        "The system will start a real countdown visible to the player. "
+        "If the player acts before it expires, the timer is cancelled. "
+        "If the player does NOT act in time, the system auto-fires the event.\n"
+        "PURPOSE: Timed events should FORCE THE PLAYER TO MAKE A DECISION or DRAG THEM WHERE THEY NEED TO BE.\n"
+        "- Use timers to push the story forward when the player is stalling, idle, or refusing to engage.\n"
+        "- NPCs should grab, escort, or coerce the player. Environments should shift and force movement.\n"
+        "- The event_description should advance the plot: move the player to the next location, "
+        "force an encounter, have an NPC intervene, or change the scene decisively.\n"
+        "- Do NOT use timers for trivial flavor. They should always have real consequences that change game state.\n"
+        "Rules:\n"
+        "- Use ~60s for urgent, ~120s for moderate, ~180-300s for slow-building tension.\n"
+        "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
+        "or the world should move without the player.\n"
+        "- Your narration MUST mention the time pressure so the player knows to act.\n"
+        "- Use at least once every few turns when dramatic pacing allows. Do not use on consecutive turns.\n"
     )
 
     MAP_SYSTEM_PROMPT = (
@@ -2287,6 +2308,7 @@ class ZorkEmulator:
                                 cls._schedule_timer(
                                     campaign.id, channel_id, delay_seconds, event_description
                                 )
+                                timer_scheduled_delay = delay_seconds
                                 logger.info(
                                     "Zork timer set: campaign=%s delay=%ds event=%r",
                                     campaign.id,
@@ -2309,12 +2331,45 @@ class ZorkEmulator:
                                 if not response:
                                     response = "A hollow silence answers. Try again."
 
+                        # Fallback: LLM returned set_timer alongside narration.
+                        # _is_tool_call rejects that, but we still honour the timer.
+                        elif (
+                            first_payload
+                            and isinstance(first_payload, dict)
+                            and str(first_payload.get("tool_call") or "").strip() == "set_timer"
+                            and "narration" in first_payload
+                            and cls.is_timed_events_enabled(campaign)
+                        ):
+                            raw_delay = first_payload.get("delay_seconds", 60)
+                            try:
+                                delay_seconds = int(raw_delay)
+                            except (TypeError, ValueError):
+                                delay_seconds = 60
+                            delay_seconds = max(30, min(300, delay_seconds))
+                            event_description = str(
+                                first_payload.get("event_description") or "Something happens."
+                            ).strip()[:500]
+
+                            cls.cancel_pending_timer(campaign.id)
+                            channel_id = ctx.channel.id
+                            cls._schedule_timer(
+                                campaign.id, channel_id, delay_seconds, event_description
+                            )
+                            timer_scheduled_delay = delay_seconds
+                            logger.info(
+                                "Zork timer set (with narration): campaign=%s delay=%ds event=%r",
+                                campaign.id,
+                                delay_seconds,
+                                event_description,
+                            )
+
                     narration = response.strip()
                     state_update = {}
                     summary_update = None
                     xp_awarded = 0
                     player_state_update = {}
                     scene_image_prompt = None
+                    timer_scheduled_delay = None
 
                     json_text = cls._extract_json(response)
                     if json_text:
@@ -2328,6 +2383,32 @@ class ZorkEmulator:
                                 payload.get("player_state_update", {}) or {}
                             )
                             scene_image_prompt = payload.get("scene_image_prompt")
+
+                            # Inline timed event fields.
+                            inline_timer_delay = payload.get("set_timer_delay")
+                            inline_timer_event = payload.get("set_timer_event")
+                            if (
+                                inline_timer_delay is not None
+                                and inline_timer_event
+                                and cls.is_timed_events_enabled(campaign)
+                            ):
+                                try:
+                                    t_delay = int(inline_timer_delay)
+                                except (TypeError, ValueError):
+                                    t_delay = 60
+                                t_delay = max(30, min(300, t_delay))
+                                t_event = str(inline_timer_event).strip()[:500]
+                                cls.cancel_pending_timer(campaign.id)
+                                cls._schedule_timer(
+                                    campaign.id, ctx.channel.id, t_delay, t_event
+                                )
+                                timer_scheduled_delay = t_delay
+                                logger.info(
+                                    "Zork timer set (inline): campaign=%s delay=%ds event=%r",
+                                    campaign.id,
+                                    t_delay,
+                                    t_event,
+                                )
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
@@ -2380,6 +2461,13 @@ class ZorkEmulator:
                         narration = f"{narration}\n\n{inventory_line}"
                     else:
                         narration = inventory_line
+
+                    if timer_scheduled_delay is not None:
+                        expiry_ts = int(time.time()) + timer_scheduled_delay
+                        narration = (
+                            f"{narration}\n\n"
+                            f"\u23f0 Something happens <t:{expiry_ts}:R>..."
+                        )
 
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
@@ -2600,6 +2688,8 @@ class ZorkEmulator:
                 db.session.add(narrator_turn)
                 db.session.commit()
 
+                target_user_id = active_player.user_id
+
         # Post to Discord outside the lock / app context.
         bot_instance = DiscordBot.get_instance()
         if bot_instance is None:
@@ -2607,7 +2697,8 @@ class ZorkEmulator:
         channel = await bot_instance.find_channel(channel_id)
         if channel is None:
             return
-        output = f"**[Timed Event]**\n{narration}"
+        mention = f"<@{target_user_id}>" if target_user_id else ""
+        output = f"**[Timed Event]** {mention}\n{narration}"
         await DiscordBot.send_large_message(channel, output)
 
     @classmethod
