@@ -42,7 +42,14 @@ class ZorkEmulator:
     XP_BASE = 100
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 2
+    ATTENTION_WINDOW_SECONDS = 600
     ROOM_IMAGE_STATE_KEY = "room_scene_images"
+    PLAYER_STATS_KEY = "zork_stats"
+    PLAYER_STATS_MESSAGES_KEY = "messages_sent"
+    PLAYER_STATS_TIMERS_AVERTED_KEY = "timers_averted"
+    PLAYER_STATS_TIMERS_MISSED_KEY = "timers_missed"
+    PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
+    PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_CAMPAIGN_PERSONA = (
@@ -64,7 +71,7 @@ class ZorkEmulator:
         "room_id",
     }
     MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {"last_narration"}
-    PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description"}
+    PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
 
     _locks: Dict[int, asyncio.Lock] = {}
     _inflight_turns = set()
@@ -356,6 +363,148 @@ class ZorkEmulator:
     @staticmethod
     def _now() -> datetime.datetime:
         return datetime.datetime.utcnow()
+
+    @staticmethod
+    def _format_utc_timestamp(value: datetime.datetime) -> str:
+        if value.tzinfo is not None:
+            value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return value.replace(microsecond=0).isoformat() + "Z"
+
+    @staticmethod
+    def _parse_utc_timestamp(value: object) -> Optional[datetime.datetime]:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.datetime.fromisoformat(text)
+        except Exception:
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    @staticmethod
+    def _coerce_non_negative_int(value: object, default: int = 0) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed >= 0 else default
+
+    @classmethod
+    def _default_player_stats(cls) -> Dict[str, object]:
+        return {
+            cls.PLAYER_STATS_MESSAGES_KEY: 0,
+            cls.PLAYER_STATS_TIMERS_AVERTED_KEY: 0,
+            cls.PLAYER_STATS_TIMERS_MISSED_KEY: 0,
+            cls.PLAYER_STATS_ATTENTION_SECONDS_KEY: 0,
+            cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY: None,
+        }
+
+    @classmethod
+    def _get_player_stats_from_state(
+        cls, player_state: Dict[str, object]
+    ) -> Dict[str, object]:
+        stats = cls._default_player_stats()
+        if not isinstance(player_state, dict):
+            return stats
+        raw_stats = player_state.get(cls.PLAYER_STATS_KEY, {})
+        if not isinstance(raw_stats, dict):
+            return stats
+        stats[cls.PLAYER_STATS_MESSAGES_KEY] = cls._coerce_non_negative_int(
+            raw_stats.get(cls.PLAYER_STATS_MESSAGES_KEY), 0
+        )
+        stats[cls.PLAYER_STATS_TIMERS_AVERTED_KEY] = cls._coerce_non_negative_int(
+            raw_stats.get(cls.PLAYER_STATS_TIMERS_AVERTED_KEY), 0
+        )
+        stats[cls.PLAYER_STATS_TIMERS_MISSED_KEY] = cls._coerce_non_negative_int(
+            raw_stats.get(cls.PLAYER_STATS_TIMERS_MISSED_KEY), 0
+        )
+        stats[cls.PLAYER_STATS_ATTENTION_SECONDS_KEY] = cls._coerce_non_negative_int(
+            raw_stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
+        )
+        last_message_at = cls._parse_utc_timestamp(
+            raw_stats.get(cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY)
+        )
+        if last_message_at is not None:
+            stats[cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY] = cls._format_utc_timestamp(
+                last_message_at
+            )
+        return stats
+
+    @classmethod
+    def _set_player_stats_on_state(
+        cls, player_state: Dict[str, object], stats: Dict[str, object]
+    ) -> Dict[str, object]:
+        if not isinstance(player_state, dict):
+            player_state = {}
+        player_state[cls.PLAYER_STATS_KEY] = cls._get_player_stats_from_state(
+            {cls.PLAYER_STATS_KEY: stats}
+        )
+        return player_state
+
+    @classmethod
+    def record_player_message(
+        cls,
+        player: ZorkPlayer,
+        observed_at: Optional[datetime.datetime] = None,
+    ) -> Dict[str, object]:
+        now_dt = observed_at or cls._now()
+        if now_dt.tzinfo is not None:
+            now_dt = now_dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+        player_state = cls.get_player_state(player)
+        stats = cls._get_player_stats_from_state(player_state)
+        last_message_at = cls._parse_utc_timestamp(
+            stats.get(cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY)
+        )
+        if last_message_at is not None:
+            gap_seconds = (now_dt - last_message_at).total_seconds()
+            if 0 < gap_seconds < cls.ATTENTION_WINDOW_SECONDS:
+                stats[cls.PLAYER_STATS_ATTENTION_SECONDS_KEY] = (
+                    cls._coerce_non_negative_int(
+                        stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
+                    )
+                    + int(gap_seconds)
+                )
+
+        stats[cls.PLAYER_STATS_MESSAGES_KEY] = (
+            cls._coerce_non_negative_int(stats.get(cls.PLAYER_STATS_MESSAGES_KEY), 0)
+            + 1
+        )
+        stats[cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY] = cls._format_utc_timestamp(now_dt)
+
+        player_state = cls._set_player_stats_on_state(player_state, stats)
+        player.state_json = cls._dump_json(player_state)
+        return stats
+
+    @classmethod
+    def increment_player_stat(
+        cls, player: ZorkPlayer, stat_key: str, increment: int = 1
+    ) -> Dict[str, object]:
+        if increment <= 0:
+            return cls.get_player_statistics(player)
+        player_state = cls.get_player_state(player)
+        stats = cls._get_player_stats_from_state(player_state)
+        current = cls._coerce_non_negative_int(stats.get(stat_key), 0)
+        stats[stat_key] = current + int(increment)
+        player_state = cls._set_player_stats_on_state(player_state, stats)
+        player.state_json = cls._dump_json(player_state)
+        return stats
+
+    @classmethod
+    def get_player_statistics(cls, player: ZorkPlayer) -> Dict[str, object]:
+        player_state = cls.get_player_state(player)
+        stats = cls._get_player_stats_from_state(player_state)
+        attention_seconds = cls._coerce_non_negative_int(
+            stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
+        )
+        stats["attention_hours"] = round(attention_seconds / 3600.0, 2)
+        return stats
 
     @staticmethod
     def _load_json(text: Optional[str], default):
@@ -2103,6 +2252,7 @@ class ZorkEmulator:
                     player = cls.get_or_create_player(
                         campaign_id, ctx.author.id, campaign=campaign
                     )
+                    cls.record_player_message(player)
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
@@ -2112,6 +2262,11 @@ class ZorkEmulator:
                         if pending.get("interruptible", True):
                             cancelled_timer = cls.cancel_pending_timer(campaign_id)
                             if cancelled_timer:
+                                cls.increment_player_stat(
+                                    player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
+                                )
+                                player.updated = db.func.now()
+                                db.session.commit()
                                 interrupt_action = cancelled_timer.get("interrupt_action")
                                 if interrupt_action:
                                     timer_interrupt_context = interrupt_action
@@ -2730,6 +2885,11 @@ class ZorkEmulator:
                 if active_player is None:
                     return
 
+                cls.increment_player_stat(
+                    active_player, cls.PLAYER_STATS_TIMERS_MISSED_KEY
+                )
+                active_player.updated = db.func.now()
+                db.session.commit()
                 action = f"[SYSTEM EVENT - TIMED]: {event_description}"
                 turns = cls.get_recent_turns(campaign_id, user_id=active_player.user_id)
                 system_prompt, user_prompt = cls.build_prompt(

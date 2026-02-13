@@ -787,6 +787,7 @@ class Zork(commands.Cog):
                 campaign.id, ctx.author.id, campaign=campaign
             )
             attrs = ZorkEmulator.get_player_attributes(player)
+            player_stats = ZorkEmulator.get_player_statistics(player)
             total_points = ZorkEmulator.total_points_for_level(player.level)
             spent = ZorkEmulator.points_spent(attrs)
             remaining = total_points - spent
@@ -800,7 +801,11 @@ class Zork(commands.Cog):
                 f"Campaign: `{campaign.name}`\n"
                 f"Level: {player.level} | XP: {player.xp}/{xp_needed}\n"
                 f"Attributes: {attrs_text}\n"
-                f"Points available: {remaining}/{total_points}"
+                f"Points available: {remaining}/{total_points}\n"
+                f"Messages sent: {player_stats.get('messages_sent', 0)}\n"
+                f"Timers averted: {player_stats.get('timers_averted', 0)}\n"
+                f"Timers missed: {player_stats.get('timers_missed', 0)}\n"
+                f"Attention time: {player_stats.get('attention_hours', 0.0):.2f} hours"
             )
             await DiscordBot.send_large_message(ctx, message)
 
