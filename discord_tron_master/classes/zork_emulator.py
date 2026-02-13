@@ -1079,10 +1079,30 @@ class ZorkEmulator:
         )
 
         if "inventory" in cleaned:
-            cleaned.pop("inventory", None)
-            logger.warning(
-                "Ignored full inventory list in player_state_update; only delta fields are accepted."
+            model_inventory = cls._normalize_inventory_items(
+                cleaned.pop("inventory", [])
             )
+            model_set = {name.lower() for name in model_inventory}
+            current_names = [entry["name"] for entry in previous_inventory_rich]
+            current_set = {name.lower() for name in current_names}
+            # Items the model dropped from the list → implicit removes.
+            for name in current_names:
+                if name.lower() not in model_set and name.lower() not in {
+                    r.lower() for r in inventory_remove
+                }:
+                    inventory_remove.append(name)
+            # Items the model introduced → implicit adds.
+            for name in model_inventory:
+                if name.lower() not in current_set and name.lower() not in {
+                    a.lower() for a in inventory_add
+                }:
+                    inventory_add.append(name)
+            if inventory_remove or inventory_add:
+                logger.info(
+                    "Converted full inventory list to deltas: adds=%s removes=%s",
+                    inventory_add,
+                    inventory_remove,
+                )
 
         # Only accept inventory deltas when item names are referenced in action/narration.
         combined_l = f"{action_l} {narration_l}"
@@ -1098,13 +1118,16 @@ class ZorkEmulator:
                 )
         inventory_add = filtered_add
 
+        current_norm = {entry["name"].lower() for entry in previous_inventory_rich}
         filtered_remove = []
         for item in inventory_remove:
-            if cls._item_mentioned(item, combined_l):
+            # Removes only need the item to exist in inventory — the model
+            # can't hallucinate removal of something the player never had.
+            if item.lower() in current_norm:
                 filtered_remove.append(item)
             else:
                 logger.warning(
-                    "Inventory remove rejected: '%s' not found in action or narration.",
+                    "Inventory remove rejected: '%s' not in current inventory.",
                     item,
                 )
         inventory_remove = filtered_remove
