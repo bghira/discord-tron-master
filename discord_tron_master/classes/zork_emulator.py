@@ -2409,6 +2409,20 @@ class ZorkEmulator:
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
+                    # Safety: if narration still looks like raw JSON, something
+                    # went wrong during parsing.  Try to salvage the narration
+                    # key so raw JSON never leaks to Discord or stored turns.
+                    if narration.lstrip().startswith("{") and '"narration"' in narration:
+                        try:
+                            salvage = json.loads(
+                                cls._extract_json(narration) or "{}"
+                            )
+                            narration = str(
+                                salvage.get("narration", "")
+                            ).strip() or "The world shifts, but nothing clear emerges."
+                        except Exception:
+                            narration = "The world shifts, but nothing clear emerges."
+
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
