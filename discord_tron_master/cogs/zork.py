@@ -6,6 +6,7 @@ import discord
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.zork_emulator import ZorkEmulator
+from discord_tron_master.classes.zork_memory import ZorkMemory
 from discord_tron_master.models.base import db
 from discord_tron_master.models.zork import (
     ZorkCampaign,
@@ -961,4 +962,6 @@ class Zork(commands.Cog):
             channel.enabled = True
             channel.updated = db.func.now()
             db.session.commit()
+            ZorkMemory.delete_campaign_embeddings(campaign.id)
+            ZorkEmulator.cancel_pending_timer(campaign.id)
             await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")

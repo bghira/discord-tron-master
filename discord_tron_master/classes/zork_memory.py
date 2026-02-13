@@ -163,6 +163,34 @@ class ZorkMemory:
             return []
 
     # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def delete_campaign_embeddings(cls, campaign_id: int) -> int:
+        """Remove all embeddings for *campaign_id*. Returns rows deleted."""
+        try:
+            conn = cls._get_conn()
+            cursor = conn.execute(
+                "DELETE FROM turn_embeddings WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            conn.commit()
+            deleted = cursor.rowcount
+            logger.info(
+                "Zork memory: deleted %d embeddings for campaign %s",
+                deleted,
+                campaign_id,
+            )
+            return deleted
+        except Exception:
+            logger.exception(
+                "Zork memory: failed to delete embeddings for campaign %s",
+                campaign_id,
+            )
+            return 0
+
+    # ------------------------------------------------------------------
     # Backfill
     # ------------------------------------------------------------------
 
