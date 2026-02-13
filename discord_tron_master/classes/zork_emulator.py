@@ -97,6 +97,8 @@ class ZorkEmulator:
         "- Treat each player's inventory as private and never copy items from other players.\n"
         "- For inventory changes, ONLY use player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
         "- Do not return player_state_update.inventory full lists.\n"
+        "- Each inventory item in RAILS_CONTEXT has a 'name' and 'origin' (how/where it was acquired). "
+        "Respect item origins — never contradict or reinvent an item's backstory.\n"
         "- When a player must pick a path, accept only exact responses: 'main party' or 'new path'.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
         "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
@@ -920,14 +922,11 @@ class ZorkEmulator:
     def _format_inventory(cls, player_state: Dict[str, object]) -> Optional[str]:
         if not isinstance(player_state, dict):
             return None
-        inventory = player_state.get("inventory")
-        if not inventory:
+        items = cls._get_inventory_rich(player_state)
+        if not items:
             return None
-        if isinstance(inventory, list):
-            inv_text = ", ".join([str(item) for item in inventory])
-        else:
-            inv_text = str(inventory)
-        return f"Inventory: {inv_text}"
+        names = [entry["name"] for entry in items]
+        return f"Inventory: {', '.join(names)}"
 
     @classmethod
     def _normalize_inventory_items(cls, value) -> List[str]:
@@ -963,25 +962,71 @@ class ZorkEmulator:
         return cleaned
 
     @classmethod
+    def _get_inventory_rich(cls, player_state: Dict[str, object]) -> List[Dict[str, str]]:
+        """Return inventory as a list of ``{"name": ..., "origin": ...}`` dicts.
+
+        Handles both legacy plain-string inventories and the newer rich format.
+        """
+        raw = player_state.get("inventory") if isinstance(player_state, dict) else None
+        if not raw:
+            return []
+        if not isinstance(raw, list):
+            return []
+        result = []
+        seen = set()
+        for item in raw:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("item") or item.get("title") or "").strip()
+                origin = str(item.get("origin") or "").strip()
+            else:
+                name = str(item).strip()
+                origin = ""
+            if not name:
+                continue
+            norm = name.lower()
+            if norm in seen:
+                continue
+            seen.add(norm)
+            result.append({"name": name, "origin": origin})
+        return result
+
+    @classmethod
     def _apply_inventory_delta(
         cls,
-        current: List[str],
+        current: List[Dict[str, str]],
         adds: List[str],
         removes: List[str],
-    ) -> List[str]:
-        out = []
+        origin_hint: str = "",
+    ) -> List[Dict[str, str]]:
+        """Apply adds/removes to a rich inventory list.
+
+        *current* must be rich dicts (``{"name": ..., "origin": ...}``).
+        *adds*/*removes* are plain item-name strings.
+        New items receive *origin_hint* as their origin.
+        """
         remove_norm = {item.lower() for item in removes}
-        for item in current:
-            if item.lower() in remove_norm:
+        out: List[Dict[str, str]] = []
+        for entry in current:
+            if entry["name"].lower() in remove_norm:
                 continue
-            out.append(item)
-        out_norm = {item.lower() for item in out}
+            out.append(entry)
+        out_norm = {entry["name"].lower() for entry in out}
         for item in adds:
             if item.lower() in out_norm:
                 continue
-            out.append(item)
+            out.append({"name": item, "origin": origin_hint})
             out_norm.add(item.lower())
         return out
+
+    @classmethod
+    def _build_origin_hint(cls, narration_text: str, action_text: str) -> str:
+        """Build a short origin string from the current narration/action context."""
+        source = (narration_text or action_text or "").strip()
+        if not source:
+            return ""
+        # Take the first sentence (or first 120 chars) as a concise origin.
+        first_sentence = re.split(r'(?<=[.!?])\s', source, maxsplit=1)[0]
+        return first_sentence[:120]
 
     @classmethod
     def _sanitize_player_state_update(
@@ -994,9 +1039,7 @@ class ZorkEmulator:
         if not isinstance(update, dict):
             return {}
         cleaned = dict(update)
-        previous_inventory = cls._normalize_inventory_items(
-            previous_state.get("inventory")
-        )
+        previous_inventory_rich = cls._get_inventory_rich(previous_state)
         action_l = (action_text or "").lower()
         narration_l = (narration_text or "").lower()
 
@@ -1017,6 +1060,11 @@ class ZorkEmulator:
             item_l = item.lower()
             if item_l in action_l or item_l in narration_l:
                 filtered_add.append(item)
+            else:
+                logger.warning(
+                    "Inventory add rejected: '%s' not found in action or narration.",
+                    item,
+                )
         inventory_add = filtered_add
 
         filtered_remove = []
@@ -1024,6 +1072,11 @@ class ZorkEmulator:
             item_l = item.lower()
             if item_l in action_l or item_l in narration_l:
                 filtered_remove.append(item)
+            else:
+                logger.warning(
+                    "Inventory remove rejected: '%s' not found in action or narration.",
+                    item,
+                )
         inventory_remove = filtered_remove
 
         if (
@@ -1038,12 +1091,15 @@ class ZorkEmulator:
             inventory_add = []
             inventory_remove = []
 
+        origin_hint = cls._build_origin_hint(narration_text, action_text)
+
         if inventory_add or inventory_remove:
             cleaned["inventory"] = cls._apply_inventory_delta(
-                previous_inventory, inventory_add, inventory_remove
+                previous_inventory_rich, inventory_add, inventory_remove,
+                origin_hint=origin_hint,
             )
         else:
-            cleaned["inventory"] = previous_inventory
+            cleaned["inventory"] = previous_inventory_rich
 
         for key in list(cleaned.keys()):
             if key != "inventory" and "inventory" in str(key).lower():
@@ -1665,14 +1721,13 @@ class ZorkEmulator:
             if not name:
                 continue
             known_names.append(name)
+        inventory_rich = cls._get_inventory_rich(player_state)[:20]
         return {
             "room_title": player_state.get("room_title"),
             "room_summary": player_state.get("room_summary"),
             "location": player_state.get("location"),
             "exits": exits[:12],
-            "inventory": cls._normalize_inventory_items(player_state.get("inventory"))[
-                :20
-            ],
+            "inventory": inventory_rich,
             "known_characters": known_names[:12],
             "strict_action_shape": "one concrete action grounded in current room and items",
         }
@@ -2093,6 +2148,7 @@ class ZorkEmulator:
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
+                    raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
 
@@ -2124,7 +2180,7 @@ class ZorkEmulator:
                         player_state,
                         player_state_update,
                         action_text=action,
-                        narration_text=narration,
+                        narration_text=raw_narration,
                     )
                     player_state = cls._apply_state_update(
                         player_state, player_state_update
