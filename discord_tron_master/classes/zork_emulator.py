@@ -1834,8 +1834,9 @@ class ZorkEmulator:
         message_id = ctx_dict.get("message_id")
         channel_id = ctx_dict.get("channel_id")
         if message_id and channel_id:
+            event = ctx_dict.get("event", "unknown event")
             asyncio.ensure_future(
-                cls._edit_timer_line(channel_id, message_id, "\u2705 *Timer cancelled — you acted in time.*")
+                cls._edit_timer_line(channel_id, message_id, f"\u2705 *Timer cancelled — you acted in time. (Averted: {event})*")
             )
         return ctx_dict
 
@@ -1869,6 +1870,8 @@ class ZorkEmulator:
                 else:
                     new_lines.append(line)
             new_content = "\n".join(new_lines)
+            if len(new_content) > 2000:
+                new_content = new_content[:1997] + "..."
             if new_content != content:
                 await message.edit(content=new_content)
         except Exception:
@@ -2379,6 +2382,7 @@ class ZorkEmulator:
                                     campaign.id, channel_id, delay_seconds, event_description
                                 )
                                 timer_scheduled_delay = delay_seconds
+                                timer_scheduled_event = event_description
                                 logger.info(
                                     "Zork timer set: campaign=%s delay=%ds event=%r",
                                     campaign.id,
@@ -2426,6 +2430,7 @@ class ZorkEmulator:
                                 campaign.id, channel_id, delay_seconds, event_description
                             )
                             timer_scheduled_delay = delay_seconds
+                            timer_scheduled_event = event_description
                             logger.info(
                                 "Zork timer set (with narration): campaign=%s delay=%ds event=%r",
                                 campaign.id,
@@ -2440,6 +2445,8 @@ class ZorkEmulator:
                     player_state_update = {}
                     scene_image_prompt = None
                     timer_scheduled_delay = None
+                    timer_scheduled_event = None
+                    timer_scheduled_interruptible = True
 
                     json_text = cls._extract_json(response)
                     if json_text:
@@ -2483,6 +2490,8 @@ class ZorkEmulator:
                                     interrupt_action=t_interrupt_action,
                                 )
                                 timer_scheduled_delay = t_delay
+                                timer_scheduled_event = t_event
+                                timer_scheduled_interruptible = t_interruptible
                                 logger.info(
                                     "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s",
                                     campaign.id,
@@ -2559,9 +2568,14 @@ class ZorkEmulator:
 
                     if timer_scheduled_delay is not None:
                         expiry_ts = int(time.time()) + timer_scheduled_delay
+                        event_hint = timer_scheduled_event or "Something happens"
+                        if timer_scheduled_interruptible:
+                            interrupt_hint = "act to prevent!"
+                        else:
+                            interrupt_hint = "unavoidable"
                         narration = (
                             f"{narration}\n\n"
-                            f"\u23f0 Something happens <t:{expiry_ts}:R>..."
+                            f"\u23f0 <t:{expiry_ts}:R>: {event_hint} ({interrupt_hint})"
                         )
 
                     campaign.last_narration = narration
@@ -2665,7 +2679,7 @@ class ZorkEmulator:
             ch_id = timer_ctx.get("channel_id")
             if msg_id and ch_id:
                 asyncio.ensure_future(
-                    cls._edit_timer_line(ch_id, msg_id, "\u26a0\ufe0f *Timer expired!*")
+                    cls._edit_timer_line(ch_id, msg_id, f"\u26a0\ufe0f *Timer expired — {event_description}*")
                 )
         try:
             await cls._execute_timed_event(campaign_id, channel_id, event_description)
