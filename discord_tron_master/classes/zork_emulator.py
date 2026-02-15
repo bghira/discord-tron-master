@@ -2371,6 +2371,23 @@ class ZorkEmulator:
                                 interrupt_action = cancelled_timer.get("interrupt_action")
                                 if interrupt_action:
                                     timer_interrupt_context = interrupt_action
+                                # Persist the interruption as a turn so it appears in RECENT_TURNS.
+                                event_desc = cancelled_timer.get("event", "an impending event")
+                                interrupt_note = (
+                                    f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
+                                    f"Averted event: \"{event_desc}\""
+                                )
+                                if interrupt_action:
+                                    interrupt_note += f" Interruption context: \"{interrupt_action}\""
+                                db.session.add(
+                                    ZorkTurn(
+                                        campaign_id=campaign.id,
+                                        user_id=ctx.author.id,
+                                        kind="narrator",
+                                        content=interrupt_note,
+                                    )
+                                )
+                                db.session.commit()
                         # Non-interruptible timers are left running.
 
                     player_state = cls.get_player_state(player)
@@ -2625,10 +2642,16 @@ class ZorkEmulator:
                                             query,
                                         )
                                         results = ZorkMemory.search(query, campaign.id, top_k=5)
+                                        # Keep only results above relevance threshold.
+                                        relevant = [
+                                            (turn_id, kind, content, score)
+                                            for turn_id, kind, content, score in results
+                                            if score >= 0.75 and turn_id not in seen_turn_ids
+                                        ]
+                                        # Sort chronologically so the model sees events in order.
+                                        relevant.sort(key=lambda t: t[0])
                                         recall_lines = []
-                                        for turn_id, kind, content, score in results:
-                                            if turn_id in seen_turn_ids:
-                                                continue
+                                        for turn_id, kind, content, score in relevant:
                                             seen_turn_ids.add(turn_id)
                                             recall_lines.append(
                                                 f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
