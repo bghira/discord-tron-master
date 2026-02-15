@@ -681,6 +681,11 @@ class ZorkEmulator:
                 break
         return state
 
+    _COMPLETED_VALUES = {
+        "complete", "completed", "done", "resolved", "finished",
+        "concluded", "vacated", "dispersed", "avoided", "departed",
+    }
+
     # Value patterns (strings) that indicate a past/resolved state.
     _STALE_VALUE_PATTERNS = _COMPLETED_VALUES | {
         "secured", "confirmed", "received", "granted",
@@ -2468,11 +2473,6 @@ class ZorkEmulator:
             idx += 1
             markers.append({"marker": marker, "player": player})
         return markers
-
-    _COMPLETED_VALUES = {
-        "complete", "completed", "done", "resolved", "finished",
-        "concluded", "vacated", "dispersed", "avoided", "departed",
-    }
 
     @classmethod
     def _apply_state_update(
