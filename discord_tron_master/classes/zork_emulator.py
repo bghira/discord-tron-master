@@ -146,8 +146,12 @@ class ZorkEmulator:
     )
     MEMORY_TOOL_PROMPT = (
         "\nYou have a memory_search tool. To use it, return ONLY:\n"
-        '{"tool_call": "memory_search", "query": "..."}\n'
-        "No other keys alongside tool_call.\n"
+        '{"tool_call": "memory_search", "queries": ["query1", "query2", ...]}\n'
+        "No other keys alongside tool_call. You may provide one or more queries.\n"
+        "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
+        "Example: to recall Marcus and Anastasia, use:\n"
+        '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
+        "NOT: {\"tool_call\": \"memory_search\", \"queries\": [\"Marcus Anastasia relationship\"]}\n"
         "USE memory_search when:\n"
         "- A character or NPC appears or is mentioned who has not been in the recent conversation turns. "
         "Search their name to recall what happened with them before.\n"
@@ -2510,23 +2514,39 @@ class ZorkEmulator:
                             tool_name = str(first_payload.get("tool_call") or "").strip()
 
                             if tool_name == "memory_search":
-                                query = str(first_payload.get("query") or "").strip()
-                                if query:
-                                    logger.info(
-                                        "Zork memory search requested: campaign=%s query=%r",
-                                        campaign.id,
-                                        query,
-                                    )
-                                    results = ZorkMemory.search(query, campaign.id, top_k=5)
-                                    if results:
+                                # Support both "queries": [...] and legacy "query": "..."
+                                raw_queries = first_payload.get("queries") or []
+                                if not raw_queries:
+                                    legacy = str(first_payload.get("query") or "").strip()
+                                    if legacy:
+                                        raw_queries = [legacy]
+                                queries = [str(q).strip() for q in raw_queries if str(q).strip()]
+                                if queries:
+                                    recall_sections = []
+                                    seen_turn_ids = set()
+                                    for query in queries:
+                                        logger.info(
+                                            "Zork memory search requested: campaign=%s query=%r",
+                                            campaign.id,
+                                            query,
+                                        )
+                                        results = ZorkMemory.search(query, campaign.id, top_k=5)
                                         recall_lines = []
                                         for turn_id, kind, content, score in results:
+                                            if turn_id in seen_turn_ids:
+                                                continue
+                                            seen_turn_ids.add(turn_id)
                                             recall_lines.append(
                                                 f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
                                             )
+                                        if recall_lines:
+                                            recall_sections.append(
+                                                f"Results for '{query}':\n" + "\n".join(recall_lines)
+                                            )
+                                    if recall_sections:
                                         recall_block = (
                                             "MEMORY_RECALL (results from memory_search):\n"
-                                            + "\n".join(recall_lines)
+                                            + "\n".join(recall_sections)
                                         )
                                     else:
                                         recall_block = "MEMORY_RECALL: No relevant memories found."
