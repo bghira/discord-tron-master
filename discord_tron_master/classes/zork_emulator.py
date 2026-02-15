@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -24,6 +25,22 @@ from discord_tron_master.models.zork import (
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
+
+_ZORK_LOG_PATH = os.path.join(os.getcwd(), "zork.log")
+
+
+def _zork_log(section: str, body: str = "") -> None:
+    """Append a timestamped section to zork.log in the process working dir."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(_ZORK_LOG_PATH, "a") as fh:
+            fh.write(f"\n{'='*72}\n[{ts}] {section}\n{'='*72}\n")
+            if body:
+                fh.write(body)
+                if not body.endswith("\n"):
+                    fh.write("\n")
+    except Exception:
+        pass
 
 
 class ZorkEmulator:
@@ -2497,11 +2514,16 @@ class ZorkEmulator:
                             "sentence, then narrate the new moment in full.\n"
                         )
                     gpt = GPT()
+                    _zork_log(
+                        f"TURN START campaign={campaign.id}",
+                        f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
+                    )
                     response = await gpt.turbo_completion(
                         system_prompt, user_prompt, temperature=0.8, max_tokens=900
                     )
                     if not response:
                         response = "A hollow silence answers. Try again."
+                    _zork_log("INITIAL API RESPONSE", response)
 
                     # --- Tool-call detection (memory_search / set_timer) ---
                     json_text_tc = cls._extract_json(response)
@@ -2522,6 +2544,7 @@ class ZorkEmulator:
                                         raw_queries = [legacy]
                                 queries = [str(q).strip() for q in raw_queries if str(q).strip()]
                                 if queries:
+                                    _zork_log("MEMORY SEARCH", f"queries={queries}")
                                     recall_sections = []
                                     seen_turn_ids = set()
                                     for query in queries:
@@ -2550,6 +2573,7 @@ class ZorkEmulator:
                                         )
                                     else:
                                         recall_block = "MEMORY_RECALL: No relevant memories found."
+                                    _zork_log("MEMORY RECALL BLOCK", recall_block)
                                     augmented_prompt = f"{user_prompt}\n{recall_block}\n"
                                     response = await gpt.turbo_completion(
                                         system_prompt,
@@ -2559,6 +2583,7 @@ class ZorkEmulator:
                                     )
                                     if not response:
                                         response = "A hollow silence answers. Try again."
+                                    _zork_log("AUGMENTED API RESPONSE", response)
 
                             elif tool_name == "set_timer" and cls.is_timed_events_enabled(campaign):
                                 raw_delay = first_payload.get("delay_seconds", 60)
@@ -2589,6 +2614,10 @@ class ZorkEmulator:
                                     f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
                                     f"Now narrate the current scene. You MUST mention the time pressure\n"
                                     f"and tell the player approximately how long they have."
+                                )
+                                _zork_log(
+                                    "TIMER TOOL CALL",
+                                    f"delay={delay_seconds}s event={event_description!r}",
                                 )
                                 augmented_prompt = f"{user_prompt}\n{timer_block}\n"
                                 response = await gpt.turbo_completion(
@@ -2714,6 +2743,16 @@ class ZorkEmulator:
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
+
+                    _zork_log(
+                        f"TURN RESULT campaign={campaign.id}",
+                        f"--- NARRATION ---\n{narration}\n\n"
+                        f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
+                        f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
+                        f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
+                        f"--- XP AWARDED ---\n{xp_awarded}\n"
+                        f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
+                    )
 
                     state_update, player_state_update = cls._split_room_state(
                         state_update, player_state_update
