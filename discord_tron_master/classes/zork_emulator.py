@@ -49,7 +49,7 @@ class ZorkEmulator:
     MAX_ATTRIBUTE_VALUE = 20
     MAX_SUMMARY_CHARS = 4000
     MAX_STATE_CHARS = 8000
-    MAX_RECENT_TURNS = 12
+    MAX_RECENT_TURNS = 24
     MAX_TURN_CHARS = 1200
     MAX_NARRATION_CHARS = 3500
     MAX_PARTY_CONTEXT_PLAYERS = 6
@@ -117,7 +117,8 @@ class ZorkEmulator:
         "- set_timer_interruptible: boolean (optional; default true)\n"
         "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n\n"
         "Rules:\n"
-        "- No markdown or code fences.\n"
+        "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
+        "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
@@ -619,6 +620,51 @@ class ZorkEmulator:
         if len(text) <= max_chars:
             return text
         return text[-max_chars:]
+
+    @classmethod
+    def _append_summary(cls, existing: str, update: str) -> str:
+        """Append *update* to *existing* summary, deduplicating near-identical lines."""
+        if not update:
+            return existing or ""
+        update = update.strip()
+        if not existing:
+            return cls._trim_text(update, cls.MAX_SUMMARY_CHARS)
+        # Deduplicate: skip lines that already appear (substring match).
+        existing_lower = existing.lower()
+        new_lines = []
+        for line in update.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.lower() in existing_lower:
+                continue
+            new_lines.append(line)
+        if not new_lines:
+            return existing
+        merged = f"{existing}\n{chr(10).join(new_lines)}"
+        return cls._trim_text(merged, cls.MAX_SUMMARY_CHARS)
+
+    @classmethod
+    def _fit_state_to_budget(
+        cls, state: Dict[str, object], max_chars: int
+    ) -> Dict[str, object]:
+        """Drop the largest values from *state* until its JSON fits *max_chars*.
+
+        Returns a (possibly reduced) copy — always valid JSON-serialisable.
+        """
+        text = cls._dump_json(state)
+        if len(text) <= max_chars:
+            return state
+        # Sort keys by serialised value length (largest first) and drop until it fits.
+        state = dict(state)
+        ranked = sorted(
+            state.keys(), key=lambda k: len(cls._dump_json(state[k])), reverse=True
+        )
+        for key in ranked:
+            del state[key]
+            if len(cls._dump_json(state)) <= max_chars:
+                break
+        return state
 
     @classmethod
     def _build_model_state(cls, campaign_state: Dict[str, object]) -> Dict[str, object]:
@@ -2139,8 +2185,7 @@ class ZorkEmulator:
         state = cls._scrub_inventory_from_state(state)
         guardrails_enabled = bool(state.get("guardrails_enabled", False))
         model_state = cls._build_model_state(state)
-        state_text = cls._dump_json(model_state)
-        state_text = cls._trim_text(state_text, cls.MAX_STATE_CHARS)
+        model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
         attributes = cls.get_player_attributes(player)
         player_state = cls.get_player_state(player)
         if party_snapshot is None:
@@ -2160,12 +2205,26 @@ class ZorkEmulator:
         }
 
         recent_lines = []
+        _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
+        _ERROR_PHRASES = ("a hollow silence answers", "the world shifts, but nothing clear emerges")
         for turn in turns:
-            if turn.kind != "player":
+            content = (turn.content or "").strip()
+            if not content:
                 continue
-            clipped = cls._trim_text(turn.content, cls.MAX_TURN_CHARS)
-            clipped = cls._strip_inventory_mentions(clipped)
-            recent_lines.append(f"PLAYER: {clipped}")
+            if turn.kind == "player":
+                # Skip OOC messages — those are meta-messages to the GM.
+                if _OOC_RE.match(content):
+                    continue
+                clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
+                clipped = cls._strip_inventory_mentions(clipped)
+                recent_lines.append(f"PLAYER: {clipped}")
+            elif turn.kind == "narrator":
+                # Skip error/fallback narrations.
+                if content.lower() in _ERROR_PHRASES:
+                    continue
+                clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
+                clipped = cls._strip_inventory_mentions(clipped)
+                recent_lines.append(f"NARRATOR: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
         rails_context = cls._build_rails_context(player_state, party_snapshot)
 
@@ -2176,7 +2235,7 @@ class ZorkEmulator:
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
-            f"WORLD_STATE: {state_text}\n"
+            f"WORLD_STATE: {cls._dump_json(model_state)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
@@ -2211,6 +2270,16 @@ class ZorkEmulator:
         if start == -1 or end == -1 or end <= start:
             return None
         return text[start : end + 1]
+
+    @classmethod
+    def _clean_response(cls, response: str) -> str:
+        """Strip text outside the JSON object so duplicate narration and fencing are removed."""
+        if not response:
+            return response
+        json_text = cls._extract_json(response)
+        if json_text:
+            return json_text
+        return response.strip()
 
     @classmethod
     def _extract_ascii_map(cls, text: str) -> str:
@@ -2484,7 +2553,7 @@ class ZorkEmulator:
                         db.session.commit()
                         return narration
 
-                    turns = cls.get_recent_turns(campaign.id, user_id=ctx.author.id)
+                    turns = cls.get_recent_turns(campaign.id)
                     party_snapshot = cls._build_party_snapshot_for_prompt(
                         campaign, player, player_state
                     )
@@ -2519,10 +2588,12 @@ class ZorkEmulator:
                         f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
                     )
                     response = await gpt.turbo_completion(
-                        system_prompt, user_prompt, temperature=0.8, max_tokens=900
+                        system_prompt, user_prompt, temperature=0.8, max_tokens=2048
                     )
                     if not response:
                         response = "A hollow silence answers. Try again."
+                    else:
+                        response = cls._clean_response(response)
                     _zork_log("INITIAL API RESPONSE", response)
 
                     # --- Tool-call detection (memory_search / set_timer) ---
@@ -2579,10 +2650,12 @@ class ZorkEmulator:
                                         system_prompt,
                                         augmented_prompt,
                                         temperature=0.8,
-                                        max_tokens=900,
+                                        max_tokens=2048,
                                     )
                                     if not response:
                                         response = "A hollow silence answers. Try again."
+                                    else:
+                                        response = cls._clean_response(response)
                                     _zork_log("AUGMENTED API RESPONSE", response)
 
                             elif tool_name == "set_timer" and cls.is_timed_events_enabled(campaign):
@@ -2624,10 +2697,12 @@ class ZorkEmulator:
                                     system_prompt,
                                     augmented_prompt,
                                     temperature=0.8,
-                                    max_tokens=900,
+                                    max_tokens=2048,
                                 )
                                 if not response:
                                     response = "A hollow silence answers. Try again."
+                                else:
+                                    response = cls._clean_response(response)
 
                         # Fallback: LLM returned set_timer alongside narration.
                         # _is_tool_call rejects that, but we still honour the timer.
@@ -2769,12 +2844,8 @@ class ZorkEmulator:
                     if summary_update:
                         summary_update = summary_update.strip()
                         summary_update = cls._strip_inventory_mentions(summary_update)
-                        if campaign.summary:
-                            campaign.summary = f"{campaign.summary}\n{summary_update}"
-                        else:
-                            campaign.summary = summary_update
-                        campaign.summary = cls._trim_text(
-                            campaign.summary, cls.MAX_SUMMARY_CHARS
+                        campaign.summary = cls._append_summary(
+                            campaign.summary, summary_update
                         )
 
                     player_state = cls.get_player_state(player)
@@ -2816,14 +2887,17 @@ class ZorkEmulator:
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
 
-                    db.session.add(
-                        ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="player",
-                            content=action,
+                    # Don't store OOC meta-messages in turn history.
+                    _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
+                    if not _is_ooc:
+                        db.session.add(
+                            ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="player",
+                                content=action,
+                            )
                         )
-                    )
                     narrator_turn = ZorkTurn(
                         campaign_id=campaign.id,
                         user_id=ctx.author.id,
@@ -2970,7 +3044,7 @@ class ZorkEmulator:
                 active_player.updated = db.func.now()
                 db.session.commit()
                 action = f"[SYSTEM EVENT - TIMED]: {event_description}"
-                turns = cls.get_recent_turns(campaign_id, user_id=active_player.user_id)
+                turns = cls.get_recent_turns(campaign_id)
                 system_prompt, user_prompt = cls.build_prompt(
                     campaign,
                     active_player,
@@ -2981,10 +3055,11 @@ class ZorkEmulator:
 
                 gpt = GPT()
                 response = await gpt.turbo_completion(
-                    system_prompt, user_prompt, temperature=0.8, max_tokens=900
+                    system_prompt, user_prompt, temperature=0.8, max_tokens=2048
                 )
                 if not response:
                     return
+                response = cls._clean_response(response)
 
                 narration = response.strip()
                 state_update = {}
@@ -3020,12 +3095,8 @@ class ZorkEmulator:
                 if summary_update:
                     summary_update = summary_update.strip()
                     summary_update = cls._strip_inventory_mentions(summary_update)
-                    if campaign.summary:
-                        campaign.summary = f"{campaign.summary}\n{summary_update}"
-                    else:
-                        campaign.summary = summary_update
-                    campaign.summary = cls._trim_text(
-                        campaign.summary, cls.MAX_SUMMARY_CHARS
+                    campaign.summary = cls._append_summary(
+                        campaign.summary, summary_update
                     )
 
                 player_state = cls.get_player_state(active_player)
