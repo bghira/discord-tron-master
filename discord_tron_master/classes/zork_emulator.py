@@ -145,10 +145,21 @@ class ZorkEmulator:
         "- Use the provided RAILS_CONTEXT as hard constraints.\n"
     )
     MEMORY_TOOL_PROMPT = (
-        "\nYou have a memory_search tool. If the current context is insufficient to "
-        "resolve the player's action or reference, return ONLY:\n"
+        "\nYou have a memory_search tool. To use it, return ONLY:\n"
         '{"tool_call": "memory_search", "query": "..."}\n'
-        "No other keys alongside tool_call. Only use when genuinely needed.\n"
+        "No other keys alongside tool_call.\n"
+        "USE memory_search when:\n"
+        "- A character or NPC appears or is mentioned who has not been in the recent conversation turns. "
+        "Search their name to recall what happened with them before.\n"
+        "- The player references past events, places, or items not in the current context.\n"
+        "- You need to maintain consistency with earlier scenes.\n"
+        "When in doubt about a returning character's context, SEARCH — do not guess or improvise their details.\n"
+        "IMPORTANT: Memories are stored as narrator event text (e.g. what happened in a scene). "
+        "Queries are matched by semantic similarity against these narration snippets. "
+        "Use short, concrete keyword queries with names and places — e.g. "
+        '"Marcus penthouse", "Anastasia garden", "sword cave". '
+        "Do NOT use abstract or relational queries like "
+        '"character identity role relationship" — these will not match stored events.\n'
     )
     TIMER_TOOL_PROMPT = (
         "\nTIMED EVENTS SYSTEM:\n"
@@ -2471,6 +2482,15 @@ class ZorkEmulator:
                             f"The interrupted event was: \"{timer_interrupt_context}\"\n"
                             f"The player's action that interrupted it: \"{action}\"\n"
                             f"Incorporate the interruption naturally into your narration.\n"
+                        )
+                    if action_clean in ("time skip", "time-skip", "timeskip"):
+                        user_prompt = (
+                            f"{user_prompt}\n"
+                            "TIME_SKIP: The player requests a time skip. Fast-forward past "
+                            "any idle, repetitive, or low-stakes moments and jump ahead to "
+                            "the next meaningful story beat — a new encounter, discovery, "
+                            "twist, or decision point. Summarise skipped time in one brief "
+                            "sentence, then narrate the new moment in full.\n"
                         )
                     gpt = GPT()
                     response = await gpt.turbo_completion(
