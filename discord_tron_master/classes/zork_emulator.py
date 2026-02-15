@@ -59,6 +59,9 @@ class ZorkEmulator:
     XP_BASE = 100
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 2
+    MAX_CHARACTERS_CHARS = 3000
+    IMMUTABLE_CHARACTER_FIELDS = {"name", "personality", "background", "appearance"}
+    MAX_CHARACTERS_IN_PROMPT = 20
     ATTENTION_WINDOW_SECONDS = 600
     ROOM_IMAGE_STATE_KEY = "room_scene_images"
     PLAYER_STATS_KEY = "zork_stats"
@@ -107,7 +110,10 @@ class ZorkEmulator:
         "dark humor, and adult situations when appropriate to the story and player actions.\n\n"
         "Return ONLY valid JSON with these keys:\n"
         "- narration: string (what the player sees)\n"
-        "- state_update: object (world state patches)\n"
+        "- state_update: object (world state patches; set a key to null to remove it when no longer relevant. "
+        "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale keys every turn by setting them to null. "
+        "Remove: completed/concluded events, expired countdowns/ETAs, booleans for past events that no longer affect gameplay, "
+        "and any scene-specific state from scenes the player has left. Only keep state that is CURRENTLY ACTIVE and relevant.)\n"
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
@@ -115,7 +121,16 @@ class ZorkEmulator:
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
         "- set_timer_interruptible: boolean (optional; default true)\n"
-        "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n\n"
+        "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n"
+        "- character_updates: object (optional; keyed by stable slug IDs like 'marcus-blackwell'. "
+        "Use this to create or update NPCs in the world character tracker. "
+        "Slug IDs must be lowercase-hyphenated, derived from the character name, and stable across turns. "
+        "On first appearance provide all fields: name, personality, background, appearance, location, "
+        "current_status, allegiance, relationship. On subsequent turns only mutable fields are accepted: "
+        "location, current_status, allegiance, relationship, deceased_reason, and any other dynamic key. "
+        "Immutable fields (name, personality, background, appearance) are locked at creation and silently ignored on updates. "
+        "Set deceased_reason to a string when a character dies. "
+        "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.)\n\n"
         "Rules:\n"
         "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
@@ -666,6 +681,43 @@ class ZorkEmulator:
                 break
         return state
 
+    # Value patterns (strings) that indicate a past/resolved state.
+    _STALE_VALUE_PATTERNS = _COMPLETED_VALUES | {
+        "secured", "confirmed", "received", "granted",
+        "initiated", "accepted", "placed", "offered",
+    }
+
+    @classmethod
+    def _prune_stale_state(cls, state: Dict[str, object]) -> Dict[str, object]:
+        """Remove keys from *state* that look like stale ephemeral tracking entries."""
+        pruned = {}
+        for key, value in state.items():
+            # Drop string values that signal completion/past events.
+            if isinstance(value, str) and value.strip().lower() in cls._STALE_VALUE_PATTERNS:
+                continue
+            # Drop boolean True flags whose key name indicates a past one-shot event.
+            if value is True and any(key.endswith(s) for s in (
+                "_complete", "_arrived", "_announced", "_revealed",
+                "_concluded", "_departed", "_dispatched", "_offered",
+                "_introduced", "_unlocked",
+            )):
+                continue
+            # Drop stale ETA/countdown/elapsed keys with numeric values.
+            if isinstance(value, (int, float)) and any(
+                key.endswith(s) for s in (
+                    "_eta_minutes", "_eta", "_countdown_minutes", "_countdown_hours",
+                    "_countdown", "_deadline_seconds", "_time_elapsed",
+                )
+            ):
+                continue
+            # Drop string-valued ETAs/countdowns (e.g. "40_minutes").
+            if isinstance(value, str) and any(
+                key.endswith(s) for s in ("_eta", "_eta_minutes")
+            ):
+                continue
+            pruned[key] = value
+        return pruned
+
     @classmethod
     def _build_model_state(cls, campaign_state: Dict[str, object]) -> Dict[str, object]:
         if not isinstance(campaign_state, dict):
@@ -675,7 +727,7 @@ class ZorkEmulator:
             if key in cls.MODEL_STATE_EXCLUDE_KEYS:
                 continue
             model_state[key] = value
-        return model_state
+        return cls._prune_stale_state(model_state)
 
     @classmethod
     def _split_room_state(
@@ -2007,6 +2059,105 @@ class ZorkEmulator:
         return data if isinstance(data, dict) else {}
 
     @classmethod
+    def get_campaign_characters(cls, campaign: ZorkCampaign) -> Dict[str, dict]:
+        """Load the characters dict from campaign.characters_json."""
+        data = cls._load_json(campaign.characters_json, {})
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def _apply_character_updates(
+        cls, existing: Dict[str, dict], updates: Dict[str, dict]
+    ) -> Dict[str, dict]:
+        """Merge character updates into existing characters dict.
+
+        New slugs get all fields stored.  Existing slugs only get mutable
+        fields updated — immutable fields are silently dropped.
+        """
+        if not isinstance(updates, dict):
+            return existing
+        for slug, fields in updates.items():
+            if not isinstance(fields, dict):
+                continue
+            slug = str(slug).strip()
+            if not slug:
+                continue
+            if slug in existing:
+                # Existing character — only accept mutable fields.
+                for key, value in fields.items():
+                    if key not in cls.IMMUTABLE_CHARACTER_FIELDS:
+                        existing[slug][key] = value
+            else:
+                # New character — store everything.
+                existing[slug] = dict(fields)
+        return existing
+
+    @classmethod
+    def _build_characters_for_prompt(
+        cls,
+        characters: Dict[str, dict],
+        player_state: Dict[str, object],
+        recent_text: str,
+    ) -> list:
+        """Build a tiered character list for the prompt.
+
+        - Nearby (same location as player): full record
+        - Recently mentioned in recent_text: condensed
+        - Distant/deceased: minimal
+        """
+        if not characters:
+            return []
+        player_location = str(player_state.get("location") or "").strip().lower()
+        recent_lower = recent_text.lower() if recent_text else ""
+
+        nearby = []
+        mentioned = []
+        distant = []
+
+        for slug, char in characters.items():
+            char_location = str(char.get("location") or "").strip().lower()
+            char_name = str(char.get("name") or slug).strip().lower()
+            is_deceased = bool(char.get("deceased_reason"))
+
+            if not is_deceased and player_location and char_location == player_location:
+                # Full record for nearby characters.
+                entry = dict(char)
+                entry["_slug"] = slug
+                nearby.append(entry)
+            elif char_name in recent_lower or slug in recent_lower:
+                # Condensed for recently mentioned.
+                entry = {
+                    "_slug": slug,
+                    "name": char.get("name", slug),
+                    "location": char.get("location"),
+                    "current_status": char.get("current_status"),
+                    "allegiance": char.get("allegiance"),
+                }
+                if is_deceased:
+                    entry["deceased_reason"] = char.get("deceased_reason")
+                mentioned.append(entry)
+            else:
+                # Minimal for distant/deceased.
+                entry = {"_slug": slug, "name": char.get("name", slug)}
+                if is_deceased:
+                    entry["deceased_reason"] = char.get("deceased_reason")
+                else:
+                    entry["location"] = char.get("location")
+                distant.append(entry)
+
+        result = nearby + mentioned + distant
+        return result[: cls.MAX_CHARACTERS_IN_PROMPT]
+
+    @classmethod
+    def _fit_characters_to_budget(cls, characters_list: list, max_chars: int) -> list:
+        """Trim characters from the end until the JSON representation fits."""
+        while characters_list:
+            text = json.dumps(characters_list, ensure_ascii=True)
+            if len(text) <= max_chars:
+                return characters_list
+            characters_list = characters_list[:-1]
+        return []
+
+    @classmethod
     def is_guardrails_enabled(cls, campaign: Optional[ZorkCampaign]) -> bool:
         if campaign is None:
             return False
@@ -2228,6 +2379,14 @@ class ZorkEmulator:
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
         rails_context = cls._build_rails_context(player_state, party_snapshot)
 
+        characters = cls.get_campaign_characters(campaign)
+        characters_for_prompt = cls._build_characters_for_prompt(
+            characters, player_state, recent_text
+        )
+        characters_for_prompt = cls._fit_characters_to_budget(
+            characters_for_prompt, cls.MAX_CHARACTERS_CHARS
+        )
+
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
@@ -2236,6 +2395,7 @@ class ZorkEmulator:
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+            f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
@@ -2309,6 +2469,11 @@ class ZorkEmulator:
             markers.append({"marker": marker, "player": player})
         return markers
 
+    _COMPLETED_VALUES = {
+        "complete", "completed", "done", "resolved", "finished",
+        "concluded", "vacated", "dispersed", "avoided", "departed",
+    }
+
     @classmethod
     def _apply_state_update(
         cls, state: Dict[str, object], update: Dict[str, object]
@@ -2317,6 +2482,9 @@ class ZorkEmulator:
             return state
         for key, value in update.items():
             if value is None:
+                state.pop(key, None)
+            elif isinstance(value, str) and value.strip().lower() in cls._COMPLETED_VALUES:
+                # Resolved entries don't need to stay in active state.
                 state.pop(key, None)
             else:
                 state[key] = value
@@ -2766,6 +2934,7 @@ class ZorkEmulator:
                     xp_awarded = 0
                     player_state_update = {}
                     scene_image_prompt = None
+                    character_updates = {}
                     timer_scheduled_delay = None
                     timer_scheduled_event = None
                     timer_scheduled_interruptible = True
@@ -2782,6 +2951,7 @@ class ZorkEmulator:
                                 payload.get("player_state_update", {}) or {}
                             )
                             scene_image_prompt = payload.get("scene_image_prompt")
+                            character_updates = payload.get("character_updates", {}) or {}
 
                             # Inline timed event fields.
                             inline_timer_delay = payload.get("set_timer_delay")
@@ -2863,6 +3033,17 @@ class ZorkEmulator:
                     )
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
+
+                    if character_updates and isinstance(character_updates, dict):
+                        existing_chars = cls.get_campaign_characters(campaign)
+                        existing_chars = cls._apply_character_updates(
+                            existing_chars, character_updates
+                        )
+                        campaign.characters_json = cls._dump_json(existing_chars)
+                        _zork_log(
+                            f"CHARACTER UPDATES campaign={campaign.id}",
+                            json.dumps(character_updates, indent=2),
+                        )
 
                     if summary_update:
                         summary_update = summary_update.strip()
@@ -3089,6 +3270,7 @@ class ZorkEmulator:
                 summary_update = None
                 xp_awarded = 0
                 player_state_update = {}
+                character_updates = {}
 
                 json_text = cls._extract_json(response)
                 if json_text:
@@ -3099,6 +3281,7 @@ class ZorkEmulator:
                         summary_update = payload.get("summary_update")
                         xp_awarded = payload.get("xp_awarded", 0) or 0
                         player_state_update = payload.get("player_state_update", {}) or {}
+                        character_updates = payload.get("character_updates", {}) or {}
                     except Exception as e:
                         logger.warning(f"Failed to parse timed event JSON response: {e}")
 
@@ -3114,6 +3297,17 @@ class ZorkEmulator:
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
                 campaign_state = cls._scrub_inventory_from_state(campaign_state)
                 campaign.state_json = cls._dump_json(campaign_state)
+
+                if character_updates and isinstance(character_updates, dict):
+                    existing_chars = cls.get_campaign_characters(campaign)
+                    existing_chars = cls._apply_character_updates(
+                        existing_chars, character_updates
+                    )
+                    campaign.characters_json = cls._dump_json(existing_chars)
+                    _zork_log(
+                        f"CHARACTER UPDATES (timed event) campaign={campaign.id}",
+                        json.dumps(character_updates, indent=2),
+                    )
 
                 if summary_update:
                     summary_update = summary_update.strip()

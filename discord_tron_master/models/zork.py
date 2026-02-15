@@ -9,6 +9,7 @@ class ZorkCampaign(db.Model):
     created_by = db.Column(db.BigInteger(), nullable=False)
     summary = db.Column(db.Text(), nullable=False, default="")
     state_json = db.Column(db.Text(), nullable=False, default="{}")
+    characters_json = db.Column(db.Text(), nullable=False, default="{}")
     last_narration = db.Column(db.Text(), nullable=True)
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
@@ -25,6 +26,7 @@ class ZorkCampaign(db.Model):
             "created_by": self.created_by,
             "summary": self.summary,
             "state_json": self.state_json,
+            "characters_json": self.characters_json,
             "last_narration": self.last_narration,
             "created": self.created,
             "updated": self.updated,
