@@ -58,7 +58,7 @@ class ZorkEmulator:
     MAX_SCENE_REFERENCE_IMAGES = 10
     XP_BASE = 100
     XP_PER_LEVEL = 50
-    MAX_INVENTORY_CHANGES_PER_TURN = 2
+    MAX_INVENTORY_CHANGES_PER_TURN = 10
     MAX_CHARACTERS_CHARS = 3000
     IMMUTABLE_CHARACTER_FIELDS = {"name", "personality", "background", "appearance"}
     MAX_CHARACTERS_IN_PROMPT = 20
@@ -1456,17 +1456,20 @@ class ZorkEmulator:
                 )
         inventory_remove = filtered_remove
 
-        if (
-            len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN
-            or len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN
-        ):
+        if len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
             logger.warning(
-                "Rejected suspicious inventory delta for user update: adds=%s removes=%s",
-                inventory_add,
-                inventory_remove,
+                "Truncating inventory adds from %d to %d",
+                len(inventory_add),
+                cls.MAX_INVENTORY_CHANGES_PER_TURN,
             )
-            inventory_add = []
-            inventory_remove = []
+            inventory_add = inventory_add[: cls.MAX_INVENTORY_CHANGES_PER_TURN]
+        if len(inventory_remove) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
+            logger.warning(
+                "Truncating inventory removes from %d to %d",
+                len(inventory_remove),
+                cls.MAX_INVENTORY_CHANGES_PER_TURN,
+            )
+            inventory_remove = inventory_remove[: cls.MAX_INVENTORY_CHANGES_PER_TURN]
 
         origin_hint = cls._build_origin_hint(narration_text, action_text)
 
