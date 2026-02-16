@@ -1428,33 +1428,10 @@ class ZorkEmulator:
                     inventory_remove,
                 )
 
-        # Only accept inventory deltas when item names are referenced in action/narration.
-        combined_l = f"{action_l} {narration_l}"
-
-        filtered_add = []
-        for item in inventory_add:
-            if cls._item_mentioned(item, combined_l):
-                filtered_add.append(item)
-            else:
-                logger.warning(
-                    "Inventory add rejected: '%s' not found in action or narration.",
-                    item,
-                )
-        inventory_add = filtered_add
-
         current_norm = {entry["name"].lower() for entry in previous_inventory_rich}
-        filtered_remove = []
-        for item in inventory_remove:
-            # Removes only need the item to exist in inventory — the model
-            # can't hallucinate removal of something the player never had.
-            if item.lower() in current_norm:
-                filtered_remove.append(item)
-            else:
-                logger.warning(
-                    "Inventory remove rejected: '%s' not in current inventory.",
-                    item,
-                )
-        inventory_remove = filtered_remove
+        inventory_remove = [
+            item for item in inventory_remove if item.lower() in current_norm
+        ]
 
         if len(inventory_add) > cls.MAX_INVENTORY_CHANGES_PER_TURN:
             logger.warning(
