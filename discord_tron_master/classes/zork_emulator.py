@@ -137,6 +137,7 @@ class ZorkEmulator:
         "- Keep narration under 1800 characters.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
+        "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
         "- Use player_state_update.room_description for a full room description only when location changes.\n"
         "- Use player_state_update.room_summary for a short one-line room summary for future context.\n"
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
@@ -2700,7 +2701,11 @@ class ZorkEmulator:
                     if action_clean in ("look", "l") and player_state.get(
                         "room_description"
                     ):
-                        title = player_state.get("room_title") or "Unknown"
+                        title = (
+                            player_state.get("room_title")
+                            or player_state.get("location")
+                            or "Unknown"
+                        )
                         desc = player_state.get("room_description") or ""
                         exits = player_state.get("exits")
                         exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
