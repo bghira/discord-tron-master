@@ -3011,36 +3011,50 @@ class ZorkEmulator:
                                 and inline_timer_event
                                 and cls.is_timed_events_enabled(campaign)
                             ):
-                                try:
-                                    t_delay = int(inline_timer_delay)
-                                except (TypeError, ValueError):
-                                    t_delay = 60
-                                t_delay = max(30, min(300, t_delay))
-                                t_event = str(inline_timer_event).strip()[:500]
-                                t_interruptible = bool(
-                                    payload.get("set_timer_interruptible", True)
-                                )
-                                t_interrupt_action = payload.get("set_timer_interrupt_action")
-                                if isinstance(t_interrupt_action, str):
-                                    t_interrupt_action = t_interrupt_action.strip()[:500] or None
+                                # Block new timer if one is already running.
+                                existing_timer = cls._pending_timers.get(campaign.id)
+                                if existing_timer is not None:
+                                    _zork_log(
+                                        f"TIMER REJECTED campaign={campaign.id}",
+                                        f"Existing timer still active — model tried to set a new one.\n"
+                                        f"Existing event: {existing_timer.get('event')!r}\n"
+                                        f"Rejected event: {str(inline_timer_event).strip()[:500]!r}",
+                                    )
                                 else:
-                                    t_interrupt_action = None
-                                cls.cancel_pending_timer(campaign.id)
-                                cls._schedule_timer(
-                                    campaign.id, ctx.channel.id, t_delay, t_event,
-                                    interruptible=t_interruptible,
-                                    interrupt_action=t_interrupt_action,
-                                )
-                                timer_scheduled_delay = t_delay
-                                timer_scheduled_event = t_event
-                                timer_scheduled_interruptible = t_interruptible
-                                logger.info(
-                                    "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s",
-                                    campaign.id,
-                                    t_delay,
-                                    t_event,
-                                    t_interruptible,
-                                )
+                                    try:
+                                        t_delay = int(inline_timer_delay)
+                                    except (TypeError, ValueError):
+                                        t_delay = 60
+                                    t_delay = max(30, min(300, t_delay))
+                                    t_event = str(inline_timer_event).strip()[:500]
+                                    t_interruptible = bool(
+                                        payload.get("set_timer_interruptible", True)
+                                    )
+                                    t_interrupt_action = payload.get("set_timer_interrupt_action")
+                                    if isinstance(t_interrupt_action, str):
+                                        t_interrupt_action = t_interrupt_action.strip()[:500] or None
+                                    else:
+                                        t_interrupt_action = None
+                                    cls._schedule_timer(
+                                        campaign.id, ctx.channel.id, t_delay, t_event,
+                                        interruptible=t_interruptible,
+                                        interrupt_action=t_interrupt_action,
+                                    )
+                                    timer_scheduled_delay = t_delay
+                                    timer_scheduled_event = t_event
+                                    timer_scheduled_interruptible = t_interruptible
+                                    _zork_log(
+                                        f"TIMER SET campaign={campaign.id}",
+                                        f"delay={t_delay}s event={t_event!r} "
+                                        f"interruptible={t_interruptible}",
+                                    )
+                                    logger.info(
+                                        "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s",
+                                        campaign.id,
+                                        t_delay,
+                                        t_event,
+                                        t_interruptible,
+                                    )
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
