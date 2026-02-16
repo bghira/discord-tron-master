@@ -1462,6 +1462,18 @@ class ZorkEmulator:
         for key in list(cleaned.keys()):
             if key != "inventory" and "inventory" in str(key).lower():
                 cleaned.pop(key, None)
+
+        # When location changes but room_description wasn't provided, clear
+        # stale room data so the look command doesn't show the old room.
+        new_location = cleaned.get("location")
+        if new_location is not None:
+            old_location = previous_state.get("location")
+            if str(new_location).strip().lower() != str(old_location or "").strip().lower():
+                if "room_description" not in cleaned:
+                    cleaned["room_description"] = None
+                if "room_title" not in cleaned:
+                    cleaned["room_title"] = None
+
         return cleaned
 
     @classmethod
@@ -2698,15 +2710,20 @@ class ZorkEmulator:
                                 "Continue your adventure there."
                             )
 
-                    if action_clean in ("look", "l") and player_state.get(
-                        "room_description"
+                    if action_clean in ("look", "l") and (
+                        player_state.get("room_description")
+                        or player_state.get("room_summary")
                     ):
                         title = (
                             player_state.get("room_title")
                             or player_state.get("location")
                             or "Unknown"
                         )
-                        desc = player_state.get("room_description") or ""
+                        desc = (
+                            player_state.get("room_description")
+                            or player_state.get("room_summary")
+                            or ""
+                        )
                         exits = player_state.get("exits")
                         exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
                         narration = f"{title}\n{desc}{exits_text}"
