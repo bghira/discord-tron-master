@@ -2436,6 +2436,43 @@ class ZorkEmulator:
             return None
         return text[start : end + 1]
 
+    @staticmethod
+    def _parse_json_lenient(text: str) -> Optional[dict]:
+        """Parse a JSON object from *text*, tolerating trailing extra data.
+
+        If the text contains multiple JSON objects (JSONL-style), parse each
+        one and shallow-merge them into a single dict so no data is lost.
+        """
+        try:
+            result = json.loads(text)
+            if isinstance(result, dict):
+                return result
+            return {}
+        except json.JSONDecodeError as exc:
+            if "Extra data" not in str(exc):
+                raise
+            # JSONL-style: decode successive objects and merge them.
+            merged = {}
+            decoder = json.JSONDecoder()
+            idx = 0
+            length = len(text)
+            while idx < length:
+                # Skip whitespace between objects.
+                while idx < length and text[idx] in " \t\r\n":
+                    idx += 1
+                if idx >= length:
+                    break
+                try:
+                    obj, end_idx = decoder.raw_decode(text, idx)
+                    if isinstance(obj, dict):
+                        merged.update(obj)
+                    idx = end_idx
+                except (json.JSONDecodeError, ValueError):
+                    break
+            if merged:
+                return merged
+            raise
+
     @classmethod
     def _clean_response(cls, response: str) -> str:
         """Strip text outside the JSON object so duplicate narration and fencing are removed."""
@@ -2953,7 +2990,7 @@ class ZorkEmulator:
                     json_text = cls._extract_json(response)
                     if json_text:
                         try:
-                            payload = json.loads(json_text)
+                            payload = cls._parse_json_lenient(json_text)
                             narration = payload.get("narration", narration).strip()
                             state_update = payload.get("state_update", {}) or {}
                             summary_update = payload.get("summary_update")
@@ -3287,7 +3324,7 @@ class ZorkEmulator:
                 json_text = cls._extract_json(response)
                 if json_text:
                     try:
-                        payload = json.loads(json_text)
+                        payload = cls._parse_json_lenient(json_text)
                         narration = payload.get("narration", narration).strip()
                         state_update = payload.get("state_update", {}) or {}
                         summary_update = payload.get("summary_update")
