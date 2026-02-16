@@ -2810,11 +2810,22 @@ class ZorkEmulator:
                                             query,
                                         )
                                         results = ZorkMemory.search(query, campaign.id, top_k=5)
+                                        if results:
+                                            top_score = max(s for _, _, _, s in results)
+                                            _zork_log(
+                                                f"MEMORY SCORES query={query!r}",
+                                                "\n".join(
+                                                    f"  turn={tid} score={s:.3f} {c[:80]}"
+                                                    for tid, _, c, s in results
+                                                ),
+                                            )
+                                        else:
+                                            top_score = 0.0
                                         # Keep only results above relevance threshold.
                                         relevant = [
                                             (turn_id, kind, content, score)
                                             for turn_id, kind, content, score in results
-                                            if score >= 0.75 and turn_id not in seen_turn_ids
+                                            if score >= 0.35 and turn_id not in seen_turn_ids
                                         ]
                                         # Sort chronologically so the model sees events in order.
                                         relevant.sort(key=lambda t: t[0])
@@ -2997,15 +3008,16 @@ class ZorkEmulator:
                     # Safety: if narration still looks like raw JSON, something
                     # went wrong during parsing.  Try to salvage the narration
                     # key so raw JSON never leaks to Discord or stored turns.
-                    if narration.lstrip().startswith("{") and '"narration"' in narration:
+                    if narration.lstrip().startswith("{"):
                         try:
                             salvage = json.loads(
                                 cls._extract_json(narration) or "{}"
                             )
-                            narration = str(
-                                salvage.get("narration", "")
-                            ).strip() or "The world shifts, but nothing clear emerges."
-                        except Exception:
+                            if isinstance(salvage, dict) and salvage:
+                                narration = str(
+                                    salvage.get("narration", "")
+                                ).strip() or "The world shifts, but nothing clear emerges."
+                        except (json.JSONDecodeError, Exception):
                             narration = "The world shifts, but nothing clear emerges."
 
                     raw_narration = narration
@@ -3284,6 +3296,18 @@ class ZorkEmulator:
                         character_updates = payload.get("character_updates", {}) or {}
                     except Exception as e:
                         logger.warning(f"Failed to parse timed event JSON response: {e}")
+
+                if narration.lstrip().startswith("{"):
+                    try:
+                        salvage = json.loads(
+                            cls._extract_json(narration) or "{}"
+                        )
+                        if isinstance(salvage, dict) and salvage:
+                            narration = str(
+                                salvage.get("narration", "")
+                            ).strip() or "The world shifts, but nothing clear emerges."
+                    except (json.JSONDecodeError, Exception):
+                        narration = "The world shifts, but nothing clear emerges."
 
                 narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                 narration = cls._strip_inventory_from_narration(narration)
