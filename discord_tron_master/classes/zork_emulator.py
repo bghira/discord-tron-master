@@ -522,16 +522,16 @@ class ZorkEmulator:
             player.state_json = pdata["state_json"]
             player.updated = db.func.now()
 
-        # 5. Delete turns after target
-        deleted_count = ZorkTurn.query.filter(
-            ZorkTurn.campaign_id == campaign_id,
-            ZorkTurn.id > target_turn.id,
-        ).delete(synchronize_session=False)
-
-        # 6. Delete snapshots after target
+        # 5. Delete snapshots after target (must precede turns due to FK)
         ZorkSnapshot.query.filter(
             ZorkSnapshot.campaign_id == campaign_id,
             ZorkSnapshot.turn_id > target_turn.id,
+        ).delete(synchronize_session=False)
+
+        # 6. Delete turns after target
+        deleted_count = ZorkTurn.query.filter(
+            ZorkTurn.campaign_id == campaign_id,
+            ZorkTurn.id > target_turn.id,
         ).delete(synchronize_session=False)
 
         db.session.commit()
