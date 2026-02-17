@@ -3066,6 +3066,29 @@ class ZorkEmulator:
                                         t_event,
                                         t_interruptible,
                                     )
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse Zork JSON response: {e} — retrying")
+                            _zork_log("JSON PARSE RETRY", f"error={e}\nresponse={response[:500]}")
+                            response = await gpt.turbo_completion(
+                                system_prompt, user_prompt, temperature=0.7, max_tokens=2048
+                            )
+                            if response:
+                                response = cls._clean_response(response)
+                                json_text = cls._extract_json(response)
+                                if json_text:
+                                    try:
+                                        payload = cls._parse_json_lenient(json_text)
+                                        narration = payload.get("narration", narration).strip()
+                                        state_update = payload.get("state_update", {}) or {}
+                                        summary_update = payload.get("summary_update")
+                                        xp_awarded = payload.get("xp_awarded", 0) or 0
+                                        player_state_update = (
+                                            payload.get("player_state_update", {}) or {}
+                                        )
+                                        scene_image_prompt = payload.get("scene_image_prompt")
+                                        character_updates = payload.get("character_updates", {}) or {}
+                                    except Exception as e2:
+                                        logger.warning(f"Retry also failed to parse JSON: {e2}")
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
@@ -3358,6 +3381,26 @@ class ZorkEmulator:
                         xp_awarded = payload.get("xp_awarded", 0) or 0
                         player_state_update = payload.get("player_state_update", {}) or {}
                         character_updates = payload.get("character_updates", {}) or {}
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse timed event JSON: {e} — retrying")
+                        response = await gpt.turbo_completion(
+                            system_prompt, user_prompt, temperature=0.7, max_tokens=2048
+                        )
+                        if response:
+                            response = cls._clean_response(response)
+                            narration = response.strip()
+                            json_text = cls._extract_json(response)
+                            if json_text:
+                                try:
+                                    payload = cls._parse_json_lenient(json_text)
+                                    narration = payload.get("narration", narration).strip()
+                                    state_update = payload.get("state_update", {}) or {}
+                                    summary_update = payload.get("summary_update")
+                                    xp_awarded = payload.get("xp_awarded", 0) or 0
+                                    player_state_update = payload.get("player_state_update", {}) or {}
+                                    character_updates = payload.get("character_updates", {}) or {}
+                                except Exception as e2:
+                                    logger.warning(f"Timed event retry also failed: {e2}")
                     except Exception as e:
                         logger.warning(f"Failed to parse timed event JSON response: {e}")
 
