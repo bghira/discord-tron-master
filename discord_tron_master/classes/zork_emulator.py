@@ -661,6 +661,91 @@ class ZorkEmulator:
 
     # ── Campaign Setup State Machine ──────────────────────────────────────
 
+    IMDB_SUGGEST_URL = "https://v2.sg.media-imdb.com/suggestion/{first}/{query}.json"
+    IMDB_TIMEOUT = 5
+
+    @classmethod
+    def _imdb_search_single(cls, query: str, max_results: int = 3) -> List[dict]:
+        """Single IMDB suggestion API call. Returns list of result dicts."""
+        clean = re.sub(r"[^\w\s]", "", query.strip().lower())
+        if not clean:
+            return []
+        first = clean[0] if clean[0].isalpha() else "a"
+        encoded = clean.replace(" ", "_")
+        url = cls.IMDB_SUGGEST_URL.format(first=first, query=encoded)
+        resp = requests.get(
+            url,
+            timeout=cls.IMDB_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        results = []
+        for item in data.get("d", [])[:max_results]:
+            title = item.get("l")
+            if not title:
+                continue
+            results.append({
+                "imdb_id": item.get("id", ""),
+                "title": title,
+                "year": item.get("y"),
+                "type": item.get("q", ""),  # "TV series", "feature", "TV episode", etc.
+                "stars": item.get("s", ""),
+            })
+        return results
+
+    @classmethod
+    def _imdb_search(cls, query: str, max_results: int = 3) -> List[dict]:
+        """Search IMDB suggestion API with progressive fallback.
+
+        Tries the full query first, then strips episode/season markers and
+        trailing words until results are found or the query is exhausted.
+        Returns a list of dicts with keys: imdb_id, title, year, type, stars.
+        """
+        try:
+            results = cls._imdb_search_single(query, max_results)
+            if results:
+                return results
+
+            # Strip common episode markers (S01E02, season 1, ep 3, etc.)
+            stripped = re.sub(
+                r"\b(s\d+e\d+|season\s*\d+|episode\s*\d+|ep\s*\d+)\b",
+                "",
+                query,
+                flags=re.IGNORECASE,
+            ).strip()
+            if stripped and stripped != query:
+                results = cls._imdb_search_single(stripped, max_results)
+                if results:
+                    return results
+
+            # Try progressively shorter word prefixes (drop trailing words).
+            words = query.strip().split()
+            for length in range(len(words) - 1, 1, -1):
+                sub = " ".join(words[:length])
+                results = cls._imdb_search_single(sub, max_results)
+                if results:
+                    return results
+
+            return []
+        except Exception as e:
+            logger.debug("IMDB search failed for %r: %s", query, e)
+            return []
+
+    @classmethod
+    def _format_imdb_results(cls, results: List[dict]) -> str:
+        """Format IMDB results into a short text block for LLM context."""
+        if not results:
+            return ""
+        lines = []
+        for r in results:
+            year_str = f" ({r['year']})" if r.get("year") else ""
+            type_str = f" [{r['type']}]" if r.get("type") else ""
+            stars_str = f" — {r['stars']}" if r.get("stars") else ""
+            lines.append(f"- {r['title']}{year_str}{type_str}{stars_str}")
+        return "\n".join(lines)
+
     @classmethod
     def is_in_setup_mode(cls, campaign) -> bool:
         """Check if a campaign is still in interactive setup."""
@@ -669,22 +754,42 @@ class ZorkEmulator:
 
     @classmethod
     async def start_campaign_setup(cls, campaign, raw_name: str) -> str:
-        """Step 1: LLM classifies the campaign name, stores result, returns message."""
+        """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
         gpt = GPT()
-        classify_prompt = (
-            f"The user wants to play a campaign called: '{raw_name}'.\n"
-            "Determine if this references a known movie, book, TV show, video game, "
-            "or other existing published work.\n"
+
+        # Search IMDB first to give the LLM concrete data.
+        imdb_results = cls._imdb_search(raw_name)
+        imdb_text = cls._format_imdb_results(imdb_results)
+        _zork_log(
+            f"SETUP CLASSIFY campaign={campaign.id}",
+            f"raw_name={raw_name!r}\nIMDB results:\n{imdb_text or '(none)'}",
+        )
+
+        imdb_context = ""
+        if imdb_text:
+            imdb_context = (
+                f"\nIMDB search results for '{raw_name}':\n{imdb_text}\n"
+                "Use these results to help identify the work.\n"
+            )
+
+        classify_system = (
+            "You classify whether text references a known published work "
+            "(movie, book, TV show, video game, etc).\n"
             "Return ONLY valid JSON with these keys:\n"
             '- "is_known_work": boolean\n'
-            '- "work_type": string (e.g. "film", "novel", "tv_series", "video_game", "other") or null if not known\n'
+            '- "work_type": string (e.g. "film", "novel", "tv_series", "tv_episode", "video_game", "other") or null\n'
             '- "work_description": string (1-2 sentence description of the work) or null\n'
-            '- "suggested_title": string (the canonical title if known, else the raw name)\n'
+            '- "suggested_title": string (the canonical full title if known, else the raw name)\n'
             "No markdown, no code fences."
+        )
+        classify_user = (
+            f"The user wants to play a campaign called: '{raw_name}'.\n"
+            f"{imdb_context}"
+            "Is this a known published work? Provide the canonical title and description."
         )
         try:
             response = await gpt.turbo_completion(
-                classify_prompt, "", temperature=0.3, max_tokens=300
+                classify_system, classify_user, temperature=0.3, max_tokens=300
             )
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
@@ -698,11 +803,25 @@ class ZorkEmulator:
         work_desc = result.get("work_description") or ""
         suggested = result.get("suggested_title") or raw_name
 
+        # If LLM missed it but IMDB found results, promote the top hit.
+        if not is_known and imdb_results:
+            top = imdb_results[0]
+            is_known = True
+            suggested = top["title"]
+            year_str = f" ({top['year']})" if top.get("year") else ""
+            work_type = (top.get("type") or "").lower().replace(" ", "_") or "other"
+            stars = top.get("stars", "")
+            work_desc = f"{top['title']}{year_str}"
+            if stars:
+                work_desc += f" starring {stars}"
+            _zork_log("SETUP CLASSIFY IMDB OVERRIDE", f"LLM missed, using IMDB top hit: {suggested}")
+
         setup_data = {
-            "raw_name": raw_name,
+            "raw_name": suggested if is_known else raw_name,
             "is_known_work": is_known,
             "work_type": work_type,
             "work_description": work_desc,
+            "imdb_results": imdb_results or [],
         }
 
         state = cls.get_campaign_state(campaign)
@@ -765,7 +884,21 @@ class ZorkEmulator:
             setup_data["work_type"] = None
             setup_data["work_description"] = ""
         else:
-            # User is providing a correction — re-classify with their input
+            # User is providing a correction — IMDB search + re-classify
+            imdb_results = cls._imdb_search(content)
+            imdb_text = cls._format_imdb_results(imdb_results)
+            _zork_log(
+                f"SETUP RE-CLASSIFY campaign={campaign.id}",
+                f"user_input={content!r}\nIMDB results:\n{imdb_text or '(none)'}",
+            )
+
+            imdb_context = ""
+            if imdb_text:
+                imdb_context = (
+                    f"\nIMDB search results for '{content}':\n{imdb_text}\n"
+                    "Use these results to help identify the work.\n"
+                )
+
             gpt = GPT()
             re_classify_system = (
                 "You classify whether text references a known published work "
@@ -778,6 +911,7 @@ class ZorkEmulator:
             re_classify_user = (
                 f"The user clarified their campaign: '{content}'\n"
                 f"Original input was: '{setup_data.get('raw_name', '')}'\n"
+                f"{imdb_context}"
                 "Is this a known published work? Provide the canonical title and a description."
             )
             try:
@@ -794,6 +928,22 @@ class ZorkEmulator:
             setup_data["work_description"] = result.get("work_description") or ""
             suggested = result.get("suggested_title") or content.strip()
             setup_data["raw_name"] = suggested
+
+            # If LLM still missed it but IMDB found results, promote top hit.
+            if not setup_data["is_known_work"] and imdb_results:
+                top = imdb_results[0]
+                setup_data["is_known_work"] = True
+                setup_data["raw_name"] = top["title"]
+                year_str = f" ({top['year']})" if top.get("year") else ""
+                setup_data["work_type"] = (
+                    (top.get("type") or "").lower().replace(" ", "_") or "other"
+                )
+                stars = top.get("stars", "")
+                setup_data["work_description"] = f"{top['title']}{year_str}"
+                if stars:
+                    setup_data["work_description"] += f" starring {stars}"
+
+            setup_data["imdb_results"] = imdb_results or []
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(campaign, setup_data)
@@ -826,11 +976,19 @@ class ZorkEmulator:
             "No markdown, no code fences, no explanation. ONLY the JSON object."
         )
 
+        # Include IMDB data if available for richer context.
+        imdb_results = setup_data.get("imdb_results", [])
+        imdb_context = ""
+        if imdb_results:
+            imdb_text = cls._format_imdb_results(imdb_results)
+            imdb_context = f"\nIMDB reference data:\n{imdb_text}\n"
+
         if is_known:
             user_prompt = (
                 f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
                 f"based on the {work_type or 'work'}: '{raw_name}'.\n"
-                f"Description: {work_desc}\n\n"
+                f"Description: {work_desc}\n"
+                f"{imdb_context}\n"
                 f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
                 f"Variant ideas: faithful retelling from a character's perspective, "
                 f"alternate timeline, prequel/sequel, or a 'what-if' divergence.\n"
@@ -1000,9 +1158,18 @@ class ZorkEmulator:
             '- "opening_narration": string (vivid second-person opening, 200-400 chars)\n'
             "No markdown, no code fences, no explanation. ONLY the JSON object."
         )
+        # Include IMDB data for richer world-building.
+        imdb_results = setup_data.get("imdb_results", [])
+        imdb_context = ""
+        if imdb_results:
+            imdb_text = cls._format_imdb_results(imdb_results)
+            imdb_context = f"\nIMDB reference data:\n{imdb_text}\n"
+
         finalize_user = (
             f"Build the complete world for: '{raw_name}'\n"
             f"Known work: {is_known}\n"
+            f"Description: {setup_data.get('work_description', '')}\n"
+            f"{imdb_context}"
             f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
             f"Include the main character '{chosen.get('main_character', '')}' and all essential NPCs "
             f"({', '.join(chosen.get('essential_npcs', []))}).\n"
