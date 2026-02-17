@@ -102,6 +102,27 @@ class Zork(commands.Cog):
             return
         if campaign_id is None:
             return
+
+        # Setup mode intercept — route to setup handler instead of play_action.
+        with app.app_context():
+            _setup_campaign = ZorkCampaign.query.get(campaign_id)
+            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(_setup_campaign)
+        if _in_setup:
+            reaction_added = await ZorkEmulator._add_processing_reaction(message)
+            try:
+                with app.app_context():
+                    _setup_campaign = ZorkCampaign.query.get(campaign_id)
+                    response = await ZorkEmulator.handle_setup_message(
+                        message, content, _setup_campaign, command_prefix=self._prefix()
+                    )
+                    if response:
+                        await DiscordBot.send_large_message(message, response)
+            finally:
+                if reaction_added:
+                    await ZorkEmulator._remove_processing_reaction(message)
+                ZorkEmulator.end_turn(campaign_id, message.author.id)
+            return
+
         reaction_added = await ZorkEmulator._add_processing_reaction(message)
         try:
             narration = await ZorkEmulator.play_action(
@@ -174,6 +195,27 @@ class Zork(commands.Cog):
             return
         if campaign_id is None:
             return
+
+        # Setup mode intercept
+        with app.app_context():
+            _setup_campaign = ZorkCampaign.query.get(campaign_id)
+            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(_setup_campaign)
+        if _in_setup:
+            reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+            try:
+                with app.app_context():
+                    _setup_campaign = ZorkCampaign.query.get(campaign_id)
+                    response = await ZorkEmulator.handle_setup_message(
+                        ctx, action, _setup_campaign, command_prefix=self._prefix()
+                    )
+                    if response:
+                        await DiscordBot.send_large_message(ctx, response)
+            finally:
+                if reaction_added:
+                    await ZorkEmulator._remove_processing_reaction(ctx)
+                ZorkEmulator.end_turn(campaign_id, ctx.author.id)
+            return
+
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
         try:
             narration = await ZorkEmulator.play_action(
@@ -208,6 +250,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork persona <text>` set your character persona\n"
             f"- `{prefix}zork rails` show strict guardrails mode status for active campaign\n"
             f"- `{prefix}zork rails enable|disable` toggle strict on-rails action validation for active campaign\n"
+            f"- `{prefix}zork on-rails` show on-rails narrative mode status\n"
+            f"- `{prefix}zork on-rails enable|disable` lock/unlock story to the chapter outline\n"
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
             f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
@@ -374,6 +418,73 @@ class Zork(commands.Cog):
                 return
             ZorkEmulator.set_guardrails_enabled(campaign, False)
             await ctx.send(f"Rails mode disabled for campaign `{campaign.name}`.")
+
+    @zork.group(name="on-rails", invoke_without_command=True)
+    async def zork_on_rails(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            on_rails = ZorkEmulator.is_on_rails(campaign)
+            mode = "enabled" if on_rails else "disabled"
+            await ctx.send(
+                f"On-rails mode is `{mode}` for campaign `{campaign.name}`.\n"
+                f"Use `{self._prefix()}zork on-rails enable` or `{self._prefix()}zork on-rails disable`."
+            )
+
+    @zork_on_rails.command(name="enable")
+    async def zork_on_rails_enable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            ZorkEmulator.set_on_rails(campaign, True)
+            await ctx.send(f"On-rails mode enabled for campaign `{campaign.name}`.")
+
+    @zork_on_rails.command(name="disable")
+    async def zork_on_rails_disable(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            ZorkEmulator.set_on_rails(campaign, False)
+            await ctx.send(f"On-rails mode disabled for campaign `{campaign.name}`.")
 
     @zork.group(name="timed-events", invoke_without_command=True)
     async def zork_timed_events(self, ctx):
@@ -557,6 +668,7 @@ class Zork(commands.Cog):
             return
 
         if isinstance(ctx.channel, discord.Thread):
+            setup_message = None
             with app.app_context():
                 channel, _ = ZorkEmulator.enable_channel(
                     ctx.guild.id, ctx.channel.id, ctx.author.id
@@ -570,19 +682,20 @@ class Zork(commands.Cog):
                     enforce_activity_window=False,
                 )
                 campaign_state = ZorkEmulator.get_campaign_state(campaign)
-                if not campaign_state.get("default_persona"):
-                    persona = await ZorkEmulator.generate_campaign_persona(
-                        campaign_name
+                if not campaign_state.get("setup_phase") and not campaign_state.get("default_persona"):
+                    setup_message = await ZorkEmulator.start_campaign_setup(
+                        campaign, campaign_name
                     )
-                    campaign_state["default_persona"] = persona
-                    campaign.state_json = ZorkEmulator._dump_json(campaign_state)
-                    campaign.updated = db.func.now()
-                    db.session.commit()
                 resolved_campaign_name = campaign.name
-            await ctx.send(
-                f"Thread mode enabled here. Active campaign: `{resolved_campaign_name}`. "
-                f"This thread is tracked independently."
-            )
+            if setup_message:
+                await ctx.send(
+                    f"Thread mode enabled. Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
+                )
+            else:
+                await ctx.send(
+                    f"Thread mode enabled here. Active campaign: `{resolved_campaign_name}`. "
+                    f"This thread is tracked independently."
+                )
             return
 
         thread_name = (name or f"zork-{ctx.author.display_name}").strip()
@@ -613,19 +726,14 @@ class Zork(commands.Cog):
                 ctx.author.id,
                 enforce_activity_window=False,
             )
-            campaign_state = ZorkEmulator.get_campaign_state(campaign)
-            if not campaign_state.get("default_persona"):
-                persona = await ZorkEmulator.generate_campaign_persona(campaign_name)
-                campaign_state["default_persona"] = persona
-                campaign.state_json = ZorkEmulator._dump_json(campaign_state)
-                campaign.updated = db.func.now()
-                db.session.commit()
+            setup_message = await ZorkEmulator.start_campaign_setup(
+                campaign, name or thread_name
+            )
             resolved_campaign_name = campaign.name
 
         await ctx.send(f"Created Zork thread: {thread.mention}")
         await thread.send(
-            f"{ctx.author.mention} Thread campaign ready: `{resolved_campaign_name}`.\n"
-            f"Use `{self._prefix()}zork` or just type actions here."
+            f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
         )
 
     @zork.command(name="avatar")

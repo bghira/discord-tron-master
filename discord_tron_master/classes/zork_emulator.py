@@ -91,7 +91,18 @@ class ZorkEmulator:
         "location",
         "room_id",
     }
-    MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {"last_narration"}
+    MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {
+        "last_narration",
+        "room_scene_images",
+        "scene_image_model",
+        "default_persona",
+        "start_room",
+        "story_outline",
+        "current_chapter",
+        "current_scene",
+        "setup_phase",
+        "setup_data",
+    }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
 
     _locks: Dict[int, asyncio.Lock] = {}
@@ -233,6 +244,24 @@ class ZorkEmulator:
         "or the world should move without the player.\n"
         "- Your narration should hint at urgency narratively (e.g. 'the footsteps grow louder') but NEVER include countdowns, timestamps, emoji clocks, or explicit seconds. The system adds its own countdown display automatically.\n"
         "- Use at least once every few turns when dramatic pacing allows. Do not use on consecutive turns.\n"
+    )
+
+    ON_RAILS_SYSTEM_PROMPT = (
+        "\nON-RAILS MODE IS ENABLED.\n"
+        "- You CANNOT create new characters not in WORLD_CHARACTERS. New character slugs will be rejected.\n"
+        "- You CANNOT introduce locations/landmarks not in story_outline or landmarks list.\n"
+        "- You CANNOT add new chapters or scenes beyond STORY_CONTEXT.\n"
+        "- You MUST advance along the current chapter/scene trajectory.\n"
+        "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
+        "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
+        "- If player tries to derail, steer back via NPC actions or environmental events.\n"
+    )
+    STORY_OUTLINE_TOOL_PROMPT = (
+        "\nYou have a story_outline tool. To use it, return ONLY:\n"
+        '{"tool_call": "story_outline", "chapter": "chapter-slug"}\n'
+        "No other keys alongside tool_call.\n"
+        "Returns full expanded chapter with all scene details.\n"
+        "Use when you need details about a chapter not fully shown in STORY_CONTEXT.\n"
     )
 
     MAP_SYSTEM_PROMPT = (
@@ -630,6 +659,420 @@ class ZorkEmulator:
             logger.warning(f"Failed to generate campaign persona: {e}")
         return cls.DEFAULT_CAMPAIGN_PERSONA
 
+    # ── Campaign Setup State Machine ──────────────────────────────────────
+
+    @classmethod
+    def is_in_setup_mode(cls, campaign) -> bool:
+        """Check if a campaign is still in interactive setup."""
+        state = cls.get_campaign_state(campaign)
+        return bool(state.get("setup_phase"))
+
+    @classmethod
+    async def start_campaign_setup(cls, campaign, raw_name: str) -> str:
+        """Step 1: LLM classifies the campaign name, stores result, returns message."""
+        gpt = GPT()
+        classify_prompt = (
+            f"The user wants to play a campaign called: '{raw_name}'.\n"
+            "Determine if this references a known movie, book, TV show, video game, "
+            "or other existing published work.\n"
+            "Return ONLY valid JSON with these keys:\n"
+            '- "is_known_work": boolean\n'
+            '- "work_type": string (e.g. "film", "novel", "tv_series", "video_game", "other") or null if not known\n'
+            '- "work_description": string (1-2 sentence description of the work) or null\n'
+            '- "suggested_title": string (the canonical title if known, else the raw name)\n'
+            "No markdown, no code fences."
+        )
+        try:
+            response = await gpt.turbo_completion(
+                classify_prompt, "", temperature=0.3, max_tokens=300
+            )
+            response = cls._clean_response(response or "{}")
+            json_text = cls._extract_json(response)
+            result = json.loads(json_text) if json_text else {}
+        except Exception as e:
+            logger.warning(f"Campaign classify failed: {e}")
+            result = {}
+
+        is_known = bool(result.get("is_known_work", False))
+        work_type = result.get("work_type")
+        work_desc = result.get("work_description") or ""
+        suggested = result.get("suggested_title") or raw_name
+
+        setup_data = {
+            "raw_name": raw_name,
+            "is_known_work": is_known,
+            "work_type": work_type,
+            "work_description": work_desc,
+        }
+
+        state = cls.get_campaign_state(campaign)
+        state["setup_phase"] = "classify_confirm"
+        state["setup_data"] = setup_data
+        campaign.state_json = cls._dump_json(state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+
+        if is_known:
+            msg = (
+                f"I recognize **{suggested}** as a known {work_type or 'work'}.\n"
+                f"_{work_desc}_\n\n"
+                f"Is this correct? Reply **yes** to confirm, or tell me what it actually is."
+            )
+        else:
+            msg = (
+                f"I don't recognize **{raw_name}** as a known published work. "
+                f"I'll treat it as an original setting.\n\n"
+                f"Is this correct? Reply **yes** to confirm, or tell me what it actually is "
+                f"(e.g. 'it's a movie called ...')."
+            )
+        return msg
+
+    @classmethod
+    async def handle_setup_message(cls, ctx, content: str, campaign, command_prefix: str = "!") -> str:
+        """Router: dispatch to the correct phase handler."""
+        app = AppConfig.get_flask()
+        state = cls.get_campaign_state(campaign)
+        phase = state.get("setup_phase")
+        setup_data = state.get("setup_data") or {}
+
+        if phase == "classify_confirm":
+            return await cls._setup_handle_classify_confirm(ctx, content, campaign, state, setup_data)
+        elif phase == "storyline_pick":
+            return await cls._setup_handle_storyline_pick(ctx, content, campaign, state, setup_data)
+        elif phase == "novel_questions":
+            return await cls._setup_handle_novel_questions(ctx, content, campaign, state, setup_data)
+        elif phase == "finalize":
+            return await cls._setup_finalize(campaign, state, setup_data)
+        else:
+            # Unknown phase — clear setup and let normal play proceed.
+            state.pop("setup_phase", None)
+            state.pop("setup_data", None)
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return "Setup cleared. You can now play normally."
+
+    @classmethod
+    async def _setup_handle_classify_confirm(cls, ctx, content, campaign, state, setup_data) -> str:
+        """Parse confirmation, then generate storyline variants."""
+        answer = content.strip().lower()
+
+        if answer in ("yes", "y", "correct", "yep", "yeah"):
+            pass  # Confirmed as-is
+        elif answer in ("no", "n", "nope"):
+            # User says it's NOT a known work — flip to novel
+            setup_data["is_known_work"] = False
+            setup_data["work_type"] = None
+            setup_data["work_description"] = ""
+        else:
+            # User is providing a correction — re-classify with their input
+            gpt = GPT()
+            re_classify_prompt = (
+                f"The user clarified their campaign: '{content}'\n"
+                f"Original input was: '{setup_data.get('raw_name', '')}'\n"
+                "Determine if this references a known published work.\n"
+                "Return ONLY valid JSON with keys: is_known_work (bool), "
+                "work_type (string or null), work_description (string or null), "
+                "suggested_title (string).\n"
+                "No markdown, no code fences."
+            )
+            try:
+                response = await gpt.turbo_completion(
+                    re_classify_prompt, "", temperature=0.3, max_tokens=300
+                )
+                response = cls._clean_response(response or "{}")
+                json_text = cls._extract_json(response)
+                result = json.loads(json_text) if json_text else {}
+            except Exception:
+                result = {}
+            setup_data["is_known_work"] = bool(result.get("is_known_work", False))
+            setup_data["work_type"] = result.get("work_type")
+            setup_data["work_description"] = result.get("work_description") or ""
+
+        # Generate storyline variants
+        variants_msg = await cls._setup_generate_storyline_variants(campaign, setup_data)
+        state["setup_phase"] = "storyline_pick"
+        state["setup_data"] = setup_data
+        campaign.state_json = cls._dump_json(state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return variants_msg
+
+    @classmethod
+    async def _setup_generate_storyline_variants(cls, campaign, setup_data) -> str:
+        """LLM generates 2-3 storyline variants, returns formatted message."""
+        gpt = GPT()
+        is_known = setup_data.get("is_known_work", False)
+        raw_name = setup_data.get("raw_name", "unknown")
+        work_desc = setup_data.get("work_description", "")
+
+        if is_known:
+            context = (
+                f"This is a known work: '{raw_name}'.\n"
+                f"Description: {work_desc}\n"
+                f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
+                f"based on this work. Variants can be: faithful retelling, alternate timeline, "
+                f"prequel/sequel, or a 'what-if' divergence."
+            )
+        else:
+            context = (
+                f"This is an original setting: '{raw_name}'.\n"
+                f"Generate 2-3 storyline variants for an interactive text-adventure campaign. "
+                f"Each variant should have a different tone, central conflict, or protagonist archetype."
+            )
+
+        variant_prompt = (
+            f"{context}\n\n"
+            "Return ONLY valid JSON with a single key 'variants' containing an array of objects.\n"
+            "Each object must have:\n"
+            '- "id": string (e.g. "variant-1")\n'
+            '- "title": string (short catchy title)\n'
+            '- "summary": string (2-3 sentences describing the storyline)\n'
+            '- "main_character": string (protagonist name and brief role)\n'
+            '- "essential_npcs": array of strings (3-5 key NPC names)\n'
+            '- "chapter_outline": array of objects with "title" and "summary" (3-5 chapters)\n'
+            "No markdown, no code fences."
+        )
+        try:
+            response = await gpt.turbo_completion(
+                variant_prompt, "", temperature=0.8, max_tokens=3000
+            )
+            response = cls._clean_response(response or "{}")
+            json_text = cls._extract_json(response)
+            result = json.loads(json_text) if json_text else {}
+        except Exception as e:
+            logger.warning(f"Storyline variant generation failed: {e}")
+            result = {}
+
+        variants = result.get("variants", [])
+        if not isinstance(variants, list) or not variants:
+            # Fallback: create a single default variant
+            variants = [{
+                "id": "variant-1",
+                "title": f"Adventure in {raw_name}",
+                "summary": f"An interactive adventure set in the world of {raw_name}.",
+                "main_character": "The Protagonist",
+                "essential_npcs": [],
+                "chapter_outline": [
+                    {"title": "Chapter 1: The Beginning", "summary": "The adventure begins."},
+                    {"title": "Chapter 2: The Challenge", "summary": "Obstacles arise."},
+                    {"title": "Chapter 3: The Resolution", "summary": "The story concludes."},
+                ],
+            }]
+
+        setup_data["storyline_variants"] = variants
+
+        # Format for Discord
+        lines = ["**Choose a storyline variant:**\n"]
+        for i, v in enumerate(variants, 1):
+            lines.append(f"**{i}. {v.get('title', 'Untitled')}**")
+            lines.append(f"_{v.get('summary', '')}_")
+            lines.append(f"Main character: {v.get('main_character', 'TBD')}")
+            npcs = v.get("essential_npcs", [])
+            if npcs:
+                lines.append(f"Key NPCs: {', '.join(npcs)}")
+            chapters = v.get("chapter_outline", [])
+            if chapters:
+                ch_titles = [ch.get("title", "?") for ch in chapters]
+                lines.append(f"Chapters: {' → '.join(ch_titles)}")
+            lines.append("")
+
+        lines.append(f"Reply with **1**, **2**, or **3** to pick your storyline.")
+        return "\n".join(lines)
+
+    @classmethod
+    async def _setup_handle_storyline_pick(cls, ctx, content, campaign, state, setup_data) -> str:
+        """Parse user's choice. Known work → finalize. Novel → novel_questions."""
+        choice = content.strip()
+        variants = setup_data.get("storyline_variants", [])
+
+        try:
+            idx = int(choice) - 1
+        except (ValueError, TypeError):
+            return f"Please reply with a number (1-{len(variants)})."
+
+        if idx < 0 or idx >= len(variants):
+            return f"Please reply with a number between 1 and {len(variants)}."
+
+        chosen = variants[idx]
+        setup_data["chosen_variant_id"] = chosen.get("id", f"variant-{idx + 1}")
+
+        is_known = setup_data.get("is_known_work", False)
+        if is_known:
+            # Known works go straight to finalize with on_rails=true default
+            state["setup_phase"] = "finalize"
+            state["setup_data"] = setup_data
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return await cls._setup_finalize(campaign, state, setup_data)
+        else:
+            # Novel stories get extra questions
+            state["setup_phase"] = "novel_questions"
+            state["setup_data"] = setup_data
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return (
+                "A few more questions for your original campaign:\n\n"
+                "1. **On-rails mode?** Should the story strictly follow the chapter outline, "
+                "or allow freeform exploration? (reply **on-rails** or **freeform**)\n"
+            )
+
+    @classmethod
+    async def _setup_handle_novel_questions(cls, ctx, content, campaign, state, setup_data) -> str:
+        """Parse preferences, then finalize."""
+        answer = content.strip().lower()
+        prefs = setup_data.get("novel_preferences", {})
+
+        if answer in ("on-rails", "onrails", "on rails", "rails", "strict"):
+            prefs["on_rails"] = True
+        else:
+            prefs["on_rails"] = False
+
+        setup_data["novel_preferences"] = prefs
+        state["setup_phase"] = "finalize"
+        state["setup_data"] = setup_data
+        campaign.state_json = cls._dump_json(state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return await cls._setup_finalize(campaign, state, setup_data)
+
+    @classmethod
+    async def _setup_finalize(cls, campaign, state, setup_data) -> str:
+        """LLM generates the full world. Populates characters, outline, summary, etc."""
+        gpt = GPT()
+        variants = setup_data.get("storyline_variants", [])
+        chosen_id = setup_data.get("chosen_variant_id", "variant-1")
+        chosen = None
+        for v in variants:
+            if v.get("id") == chosen_id:
+                chosen = v
+                break
+        if chosen is None and variants:
+            chosen = variants[0]
+        if chosen is None:
+            chosen = {"title": "Adventure", "summary": "", "main_character": "The Protagonist",
+                       "essential_npcs": [], "chapter_outline": []}
+
+        is_known = setup_data.get("is_known_work", False)
+        raw_name = setup_data.get("raw_name", "unknown")
+        novel_prefs = setup_data.get("novel_preferences", {})
+
+        # Determine on_rails
+        if is_known:
+            on_rails = True
+        else:
+            on_rails = bool(novel_prefs.get("on_rails", False))
+
+        finalize_prompt = (
+            f"You are building a complete world for a text-adventure campaign.\n"
+            f"Campaign name: '{raw_name}'\n"
+            f"Known work: {is_known}\n"
+            f"Chosen storyline: {json.dumps(chosen)}\n\n"
+            "Generate the full world. Return ONLY valid JSON with these keys:\n"
+            '- "characters": object keyed by slug-id. Each character has: name, personality, '
+            "background, appearance, location, current_status, allegiance, relationship.\n"
+            f"  Include the main character '{chosen.get('main_character', '')}' and all essential NPCs.\n"
+            '- "story_outline": object with "chapters" array. Each chapter has: slug, title, summary, '
+            "scenes (array of: slug, title, summary, setting, key_characters).\n"
+            '- "summary": string (2-4 sentence world summary for the campaign)\n'
+            '- "start_room": object with room_title, room_summary, room_description, exits, location\n'
+            '- "landmarks": array of strings (key locations in the world)\n'
+            '- "setting": string (one-line setting description)\n'
+            '- "tone": string (tone/mood description)\n'
+            '- "default_persona": string (1-2 sentence protagonist persona, max 140 chars)\n'
+            '- "opening_narration": string (the opening narration text the player sees first, '
+            "vivid second-person, 200-400 chars)\n"
+            "No markdown, no code fences."
+        )
+        try:
+            response = await gpt.turbo_completion(
+                finalize_prompt, "", temperature=0.7, max_tokens=4000
+            )
+            response = cls._clean_response(response or "{}")
+            json_text = cls._extract_json(response)
+            world = json.loads(json_text) if json_text else {}
+        except Exception as e:
+            logger.warning(f"Campaign finalize failed: {e}")
+            world = {}
+
+        # Populate characters_json
+        characters = world.get("characters", {})
+        if isinstance(characters, dict) and characters:
+            campaign.characters_json = cls._dump_json(characters)
+
+        # Populate campaign state
+        story_outline = world.get("story_outline", {})
+        start_room = world.get("start_room", {})
+        landmarks = world.get("landmarks", [])
+        setting = world.get("setting", "")
+        tone = world.get("tone", "")
+        default_persona = world.get("default_persona", "")
+        summary = world.get("summary", "")
+        opening = world.get("opening_narration", "")
+
+        if summary:
+            campaign.summary = summary
+
+        # Build final state — remove setup keys
+        state.pop("setup_phase", None)
+        state.pop("setup_data", None)
+
+        if isinstance(story_outline, dict):
+            state["story_outline"] = story_outline
+            state["current_chapter"] = 0
+            state["current_scene"] = 0
+        if isinstance(start_room, dict):
+            state["start_room"] = start_room
+        if isinstance(landmarks, list):
+            state["landmarks"] = landmarks
+        if setting:
+            state["setting"] = setting
+        if tone:
+            state["tone"] = tone
+        if default_persona:
+            state["default_persona"] = default_persona
+        state["on_rails"] = on_rails
+
+        campaign.state_json = cls._dump_json(state)
+        campaign.updated = db.func.now()
+
+        # Set opening narration
+        if opening:
+            # Build narration with room details
+            room_title = start_room.get("room_title", "")
+            narration = f"{room_title}\n{opening}" if room_title else opening
+            exits = start_room.get("exits")
+            if exits and isinstance(exits, list):
+                narration += f"\nExits: {', '.join(exits)}"
+            campaign.last_narration = narration
+        db.session.commit()
+
+        rails_label = "**On-Rails**" if on_rails else "**Freeform**"
+        char_count = len(characters) if isinstance(characters, dict) else 0
+        chapter_count = len(story_outline.get("chapters", [])) if isinstance(story_outline, dict) else 0
+
+        result_msg = (
+            f"Campaign **{raw_name}** is ready! ({rails_label} mode)\n"
+            f"Characters: {char_count} | Chapters: {chapter_count} | "
+            f"Landmarks: {len(landmarks) if isinstance(landmarks, list) else 0}\n\n"
+        )
+        if opening:
+            room_title = start_room.get("room_title", "")
+            result_msg += f"**{room_title}**\n{opening}" if room_title else opening
+            exits = start_room.get("exits")
+            if exits and isinstance(exits, list):
+                result_msg += f"\nExits: {', '.join(exits)}"
+
+        _zork_log(
+            f"CAMPAIGN SETUP FINALIZED campaign={campaign.id}",
+            f"characters={char_count} chapters={chapter_count} on_rails={on_rails}",
+        )
+        return result_msg
+
+    # ── End Campaign Setup ─────────────────────────────────────────────
+
     @classmethod
     def _trim_text(cls, text: str, max_chars: int) -> str:
         if text is None:
@@ -735,6 +1178,65 @@ class ZorkEmulator:
                 continue
             model_state[key] = value
         return cls._prune_stale_state(model_state)
+
+    @classmethod
+    def _build_story_context(cls, campaign_state: Dict[str, object]) -> Optional[str]:
+        """Build STORY_CONTEXT section for the prompt from story_outline.
+
+        Returns None if no story_outline exists (freeform campaigns unaffected).
+        """
+        outline = campaign_state.get("story_outline")
+        if not isinstance(outline, dict):
+            return None
+        chapters = outline.get("chapters")
+        if not isinstance(chapters, list) or not chapters:
+            return None
+
+        current_ch = campaign_state.get("current_chapter", 0)
+        current_sc = campaign_state.get("current_scene", 0)
+        if not isinstance(current_ch, int):
+            current_ch = 0
+        if not isinstance(current_sc, int):
+            current_sc = 0
+
+        lines: List[str] = []
+
+        # Previous chapter (condensed)
+        if current_ch > 0 and current_ch - 1 < len(chapters):
+            prev = chapters[current_ch - 1]
+            lines.append(f"PREVIOUS CHAPTER: {prev.get('title', 'Untitled')}")
+            lines.append(f"  Summary: {prev.get('summary', '')}")
+            lines.append("")
+
+        # Current chapter (expanded)
+        if current_ch < len(chapters):
+            cur = chapters[current_ch]
+            lines.append(f"CURRENT CHAPTER: {cur.get('title', 'Untitled')}")
+            lines.append(f"  Summary: {cur.get('summary', '')}")
+            scenes = cur.get("scenes")
+            if isinstance(scenes, list):
+                for i, scene in enumerate(scenes):
+                    marker = " >>> CURRENT SCENE <<<" if i == current_sc else ""
+                    lines.append(f"  Scene {i + 1}: {scene.get('title', 'Untitled')}{marker}")
+                    lines.append(f"    Summary: {scene.get('summary', '')}")
+                    setting = scene.get("setting")
+                    if setting:
+                        lines.append(f"    Setting: {setting}")
+                    key_chars = scene.get("key_characters")
+                    if key_chars:
+                        lines.append(f"    Key characters: {', '.join(key_chars)}")
+            lines.append("")
+
+        # Next chapter (preview)
+        if current_ch + 1 < len(chapters):
+            nxt = chapters[current_ch + 1]
+            lines.append(f"NEXT CHAPTER: {nxt.get('title', 'Untitled')}")
+            summary = nxt.get("summary", "")
+            # One-line preview
+            if summary:
+                lines.append(f"  Preview: {summary[:200]}")
+
+        return "\n".join(lines) if lines else None
 
     @classmethod
     def _split_room_state(
@@ -2065,12 +2567,14 @@ class ZorkEmulator:
 
     @classmethod
     def _apply_character_updates(
-        cls, existing: Dict[str, dict], updates: Dict[str, dict]
+        cls, existing: Dict[str, dict], updates: Dict[str, dict],
+        on_rails: bool = False,
     ) -> Dict[str, dict]:
         """Merge character updates into existing characters dict.
 
         New slugs get all fields stored.  Existing slugs only get mutable
         fields updated — immutable fields are silently dropped.
+        When *on_rails* is True, new slugs are rejected entirely.
         """
         if not isinstance(updates, dict):
             return existing
@@ -2086,6 +2590,11 @@ class ZorkEmulator:
                     if key not in cls.IMMUTABLE_CHARACTER_FIELDS:
                         existing[slug][key] = value
             else:
+                if on_rails:
+                    logger.info(
+                        "On-rails: rejected new character slug %r", slug
+                    )
+                    continue
                 # New character — store everything.
                 existing[slug] = dict(fields)
         return existing
@@ -2171,6 +2680,26 @@ class ZorkEmulator:
             return False
         campaign_state = cls.get_campaign_state(campaign)
         campaign_state["guardrails_enabled"] = bool(enabled)
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
+    def is_on_rails(cls, campaign: Optional[ZorkCampaign]) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        return bool(campaign_state.get("on_rails", False))
+
+    @classmethod
+    def set_on_rails(
+        cls, campaign: Optional[ZorkCampaign], enabled: bool
+    ) -> bool:
+        if campaign is None:
+            return False
+        campaign_state = cls.get_campaign_state(campaign)
+        campaign_state["on_rails"] = bool(enabled)
         campaign.state_json = cls._dump_json(campaign_state)
         campaign.updated = db.func.now()
         db.session.commit()
@@ -2397,6 +2926,9 @@ class ZorkEmulator:
             characters_for_prompt, cls.MAX_CHARACTERS_CHARS
         )
 
+        story_context = cls._build_story_context(state)
+        on_rails = bool(state.get("on_rails", False))
+
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
@@ -2405,6 +2937,10 @@ class ZorkEmulator:
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+        )
+        if story_context:
+            user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
+        user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
@@ -2414,9 +2950,13 @@ class ZorkEmulator:
         system_prompt = cls.SYSTEM_PROMPT
         if guardrails_enabled:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
+        if on_rails:
+            system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
         system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
         if state.get("timed_events_enabled", True):
             system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
+        if story_context:
+            system_prompt = f"{system_prompt}{cls.STORY_OUTLINE_TOOL_PROMPT}"
         return system_prompt, user_prompt
 
     @staticmethod
@@ -2594,6 +3134,11 @@ class ZorkEmulator:
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
+
+                    # Defensive guard: if still in setup mode, skip gameplay.
+                    if cls.is_in_setup_mode(campaign):
+                        return "Campaign setup is still in progress. Please complete setup first."
+
                     timer_interrupt_context = None
                     pending = cls._pending_timers.get(campaign_id)
                     if pending is not None:
@@ -2984,6 +3529,35 @@ class ZorkEmulator:
                                 else:
                                     response = cls._clean_response(response)
 
+                            elif tool_name == "story_outline":
+                                chapter_slug = str(first_payload.get("chapter") or "").strip()
+                                _zork_log("STORY OUTLINE TOOL CALL", f"chapter={chapter_slug!r}")
+                                outline_result = ""
+                                campaign_state_so = cls.get_campaign_state(campaign)
+                                so = campaign_state_so.get("story_outline")
+                                if isinstance(so, dict):
+                                    for ch in so.get("chapters", []):
+                                        if ch.get("slug") == chapter_slug:
+                                            outline_result = json.dumps(ch, indent=2)
+                                            break
+                                if not outline_result:
+                                    outline_result = f"No chapter found with slug '{chapter_slug}'."
+                                outline_block = (
+                                    f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
+                                )
+                                augmented_prompt = f"{user_prompt}\n{outline_block}\n"
+                                response = await gpt.turbo_completion(
+                                    system_prompt,
+                                    augmented_prompt,
+                                    temperature=0.8,
+                                    max_tokens=2048,
+                                )
+                                if not response:
+                                    response = "A hollow silence answers. Try again."
+                                else:
+                                    response = cls._clean_response(response)
+                                _zork_log("STORY OUTLINE AUGMENTED RESPONSE", response)
+
                         # Fallback: LLM returned set_timer alongside narration.
                         # _is_tool_call rejects that, but we still honour the timer.
                         elif (
@@ -3161,10 +3735,30 @@ class ZorkEmulator:
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
+                    # Chapter/scene advancement from state_update
+                    story_outline = campaign_state.get("story_outline")
+                    if isinstance(story_outline, dict):
+                        new_ch = state_update.get("current_chapter")
+                        new_sc = state_update.get("current_scene")
+                        old_ch = campaign_state.get("current_chapter", 0)
+                        if isinstance(new_ch, int) and new_ch != old_ch:
+                            chapters = story_outline.get("chapters", [])
+                            if isinstance(chapters, list) and 0 <= old_ch < len(chapters):
+                                chapters[old_ch]["completed"] = True
+                            campaign_state["current_chapter"] = new_ch
+                        if isinstance(new_sc, int):
+                            campaign_state["current_scene"] = new_sc
+                        # Remove from state_update so they don't pollute model state
+                        state_update.pop("current_chapter", None)
+                        state_update.pop("current_scene", None)
+                        campaign.state_json = cls._dump_json(campaign_state)
+
+                    _on_rails = bool(campaign_state.get("on_rails", False))
                     if character_updates and isinstance(character_updates, dict):
                         existing_chars = cls.get_campaign_characters(campaign)
                         existing_chars = cls._apply_character_updates(
-                            existing_chars, character_updates
+                            existing_chars, character_updates,
+                            on_rails=_on_rails,
                         )
                         campaign.characters_json = cls._dump_json(existing_chars)
                         _zork_log(
@@ -3457,10 +4051,12 @@ class ZorkEmulator:
                 campaign_state = cls._scrub_inventory_from_state(campaign_state)
                 campaign.state_json = cls._dump_json(campaign_state)
 
+                _on_rails = bool(campaign_state.get("on_rails", False))
                 if character_updates and isinstance(character_updates, dict):
                     existing_chars = cls.get_campaign_characters(campaign)
                     existing_chars = cls._apply_character_updates(
-                        existing_chars, character_updates
+                        existing_chars, character_updates,
+                        on_rails=_on_rails,
                     )
                     campaign.characters_json = cls._dump_json(existing_chars)
                     _zork_log(
@@ -3584,6 +4180,45 @@ class ZorkEmulator:
                 player_state.get("character_name")
                 or f"Adventurer-{str(ctx.author.id)[-4:]}"
             )
+
+            # Enhanced map context
+            campaign_state = cls.get_campaign_state(campaign)
+            model_state = cls._build_model_state(campaign_state)
+            model_state = cls._fit_state_to_budget(model_state, 800)
+
+            landmarks = campaign_state.get("landmarks", [])
+            landmarks_text = ", ".join(landmarks) if isinstance(landmarks, list) and landmarks else "none"
+
+            # Condensed characters: name + location only, living, max 20
+            characters = cls.get_campaign_characters(campaign)
+            char_entries = []
+            if isinstance(characters, dict):
+                for slug, info in list(characters.items())[:20]:
+                    if not isinstance(info, dict):
+                        continue
+                    if info.get("deceased_reason"):
+                        continue
+                    char_name = info.get("name", slug)
+                    char_loc = info.get("location", "unknown")
+                    char_entries.append(f"{char_name} ({char_loc})")
+            chars_text = ", ".join(char_entries) if char_entries else "none"
+
+            # Story progress
+            story_progress = ""
+            outline = campaign_state.get("story_outline")
+            if isinstance(outline, dict):
+                chapters = outline.get("chapters", [])
+                cur_ch = campaign_state.get("current_chapter", 0)
+                cur_sc = campaign_state.get("current_scene", 0)
+                if isinstance(chapters, list) and 0 <= cur_ch < len(chapters):
+                    ch = chapters[cur_ch]
+                    ch_title = ch.get("title", "")
+                    scenes = ch.get("scenes", [])
+                    sc_title = ""
+                    if isinstance(scenes, list) and 0 <= cur_sc < len(scenes):
+                        sc_title = scenes[cur_sc].get("title", "")
+                    story_progress = f"{ch_title} / {sc_title}" if sc_title else ch_title
+
             map_prompt = (
                 f"CAMPAIGN: {campaign.name}\n"
                 f"PLAYER_NAME: {player_name}\n"
@@ -3591,6 +4226,13 @@ class ZorkEmulator:
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
                 f"WORLD_SUMMARY: {cls._trim_text(campaign.summary or '', 1200)}\n"
+                f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+                f"LANDMARKS: {landmarks_text}\n"
+                f"WORLD_CHARACTERS: {chars_text}\n"
+            )
+            if story_progress:
+                map_prompt += f"STORY_PROGRESS: {story_progress}\n"
+            map_prompt += (
                 f"OTHER_PLAYERS: {cls._dump_json(other_entries)}\n"
                 "Draw a compact map with @ marking the player's location.\n"
             )
@@ -3599,7 +4241,7 @@ class ZorkEmulator:
                 cls.MAP_SYSTEM_PROMPT,
                 map_prompt,
                 temperature=0.2,
-                max_tokens=400,
+                max_tokens=600,
             )
             ascii_map = cls._extract_ascii_map(response)
             if not ascii_map:
