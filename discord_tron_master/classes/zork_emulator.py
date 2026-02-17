@@ -460,10 +460,11 @@ class ZorkEmulator:
 
     @classmethod
     def execute_rewind(
-        cls, campaign_id: int, target_discord_message_id: int
+        cls, campaign_id: int, target_discord_message_id: int, channel_id: int = None
     ) -> Optional[Tuple[int, int]]:
         """Restore campaign state to the snapshot at *target_discord_message_id*.
 
+        When *channel_id* is provided, only turns from that channel are deleted.
         Returns ``(turn_id, deleted_count)`` on success, or ``None`` if the
         target turn/snapshot could not be found.
         """
@@ -522,23 +523,44 @@ class ZorkEmulator:
             player.state_json = pdata["state_json"]
             player.updated = db.func.now()
 
-        # 5. Delete snapshots after target (must precede turns due to FK)
-        ZorkSnapshot.query.filter(
-            ZorkSnapshot.campaign_id == campaign_id,
-            ZorkSnapshot.turn_id > target_turn.id,
-        ).delete(synchronize_session=False)
-
-        # 6. Delete turns after target
-        deleted_count = ZorkTurn.query.filter(
+        # 5. Build channel-scoped filter for deletion
+        turn_filter = [
             ZorkTurn.campaign_id == campaign_id,
             ZorkTurn.id > target_turn.id,
-        ).delete(synchronize_session=False)
+        ]
+        if channel_id is not None:
+            turn_filter.append(ZorkTurn.channel_id == channel_id)
+
+        # Collect turn IDs to delete so we can remove their snapshots first (FK).
+        turn_ids_to_delete = [
+            t.id for t in ZorkTurn.query.filter(*turn_filter).with_entities(ZorkTurn.id).all()
+        ]
+
+        if turn_ids_to_delete:
+            ZorkSnapshot.query.filter(
+                ZorkSnapshot.turn_id.in_(turn_ids_to_delete),
+            ).delete(synchronize_session=False)
+
+            deleted_count = ZorkTurn.query.filter(
+                ZorkTurn.id.in_(turn_ids_to_delete),
+            ).delete(synchronize_session=False)
+        else:
+            deleted_count = 0
 
         db.session.commit()
 
-        # 7. Clean embeddings
+        # 6. Clean embeddings for deleted turns
         try:
-            ZorkMemory.delete_turns_after(campaign_id, target_turn.id)
+            if channel_id is not None and turn_ids_to_delete:
+                conn = ZorkMemory._get_conn()
+                placeholders = ",".join("?" for _ in turn_ids_to_delete)
+                conn.execute(
+                    f"DELETE FROM turn_embeddings WHERE turn_id IN ({placeholders})",
+                    turn_ids_to_delete,
+                )
+                conn.commit()
+            else:
+                ZorkMemory.delete_turns_after(campaign_id, target_turn.id)
         except Exception:
             logger.debug(
                 "Zork rewind: embedding cleanup failed for campaign %s",
@@ -3638,6 +3660,7 @@ class ZorkEmulator:
                                         user_id=ctx.author.id,
                                         kind="narrator",
                                         content=interrupt_note,
+                                        channel_id=ctx.channel.id,
                                     )
                                 )
                                 db.session.commit()
@@ -3792,6 +3815,7 @@ class ZorkEmulator:
                                 user_id=ctx.author.id,
                                 kind="player",
                                 content=action,
+                                channel_id=ctx.channel.id,
                             )
                         )
                         db.session.add(
@@ -3800,6 +3824,7 @@ class ZorkEmulator:
                                 user_id=ctx.author.id,
                                 kind="narrator",
                                 content=narration,
+                                channel_id=ctx.channel.id,
                             )
                         )
                         campaign.last_narration = narration
@@ -3817,6 +3842,7 @@ class ZorkEmulator:
                                 user_id=ctx.author.id,
                                 kind="player",
                                 content=action,
+                                channel_id=ctx.channel.id,
                             )
                         )
                         db.session.add(
@@ -3825,6 +3851,7 @@ class ZorkEmulator:
                                 user_id=ctx.author.id,
                                 kind="narrator",
                                 content=narration,
+                                channel_id=ctx.channel.id,
                             )
                         )
                         campaign.last_narration = narration
@@ -4292,6 +4319,7 @@ class ZorkEmulator:
                                 user_id=ctx.author.id,
                                 kind="player",
                                 content=action,
+                                channel_id=ctx.channel.id,
                             )
                         )
                     narrator_turn = ZorkTurn(
@@ -4299,6 +4327,7 @@ class ZorkEmulator:
                         user_id=ctx.author.id,
                         kind="narrator",
                         content=narration,
+                        channel_id=ctx.channel.id,
                     )
                     db.session.add(narrator_turn)
                     db.session.commit()
@@ -4567,6 +4596,7 @@ class ZorkEmulator:
                     user_id=None,
                     kind="narrator",
                     content=f"[TIMED EVENT] {narration}",
+                    channel_id=channel_id,
                 )
                 db.session.add(narrator_turn)
                 db.session.commit()

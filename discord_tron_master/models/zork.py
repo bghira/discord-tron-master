@@ -110,6 +110,7 @@ class ZorkTurn(db.Model):
     content = db.Column(db.Text(), nullable=False)
     discord_message_id = db.Column(db.BigInteger(), nullable=True)
     user_message_id = db.Column(db.BigInteger(), nullable=True)
+    channel_id = db.Column(db.BigInteger(), nullable=True)
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
 
     def to_dict(self):
@@ -121,6 +122,7 @@ class ZorkTurn(db.Model):
             "content": self.content,
             "discord_message_id": self.discord_message_id,
             "user_message_id": self.user_message_id,
+            "channel_id": self.channel_id,
             "created": self.created,
         }
 

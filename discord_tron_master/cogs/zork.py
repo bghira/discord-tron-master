@@ -102,7 +102,9 @@ class Zork(commands.Cog):
         lock = ZorkEmulator._get_lock(campaign_id)
         async with lock:
             with app.app_context():
-                result = ZorkEmulator.execute_rewind(campaign_id, target_msg_id)
+                result = ZorkEmulator.execute_rewind(
+                    campaign_id, target_msg_id, channel_id=message.channel.id
+                )
 
             if result is None:
                 await message.channel.send(
