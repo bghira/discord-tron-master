@@ -767,18 +767,22 @@ class ZorkEmulator:
         else:
             # User is providing a correction — re-classify with their input
             gpt = GPT()
-            re_classify_prompt = (
-                f"The user clarified their campaign: '{content}'\n"
-                f"Original input was: '{setup_data.get('raw_name', '')}'\n"
-                "Determine if this references a known published work.\n"
+            re_classify_system = (
+                "You classify whether text references a known published work "
+                "(movie, book, TV show, video game, etc).\n"
                 "Return ONLY valid JSON with keys: is_known_work (bool), "
                 "work_type (string or null), work_description (string or null), "
-                "suggested_title (string).\n"
+                "suggested_title (string — the canonical full title).\n"
                 "No markdown, no code fences."
+            )
+            re_classify_user = (
+                f"The user clarified their campaign: '{content}'\n"
+                f"Original input was: '{setup_data.get('raw_name', '')}'\n"
+                "Is this a known published work? Provide the canonical title and a description."
             )
             try:
                 response = await gpt.turbo_completion(
-                    re_classify_prompt, "", temperature=0.3, max_tokens=300
+                    re_classify_system, re_classify_user, temperature=0.3, max_tokens=300
                 )
                 response = cls._clean_response(response or "{}")
                 json_text = cls._extract_json(response)
@@ -788,6 +792,8 @@ class ZorkEmulator:
             setup_data["is_known_work"] = bool(result.get("is_known_work", False))
             setup_data["work_type"] = result.get("work_type")
             setup_data["work_description"] = result.get("work_description") or ""
+            suggested = result.get("suggested_title") or content.strip()
+            setup_data["raw_name"] = suggested
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(campaign, setup_data)
@@ -805,25 +811,11 @@ class ZorkEmulator:
         is_known = setup_data.get("is_known_work", False)
         raw_name = setup_data.get("raw_name", "unknown")
         work_desc = setup_data.get("work_description", "")
+        work_type = setup_data.get("work_type", "work")
 
-        if is_known:
-            context = (
-                f"This is a known work: '{raw_name}'.\n"
-                f"Description: {work_desc}\n"
-                f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
-                f"based on this work. Variants can be: faithful retelling, alternate timeline, "
-                f"prequel/sequel, or a 'what-if' divergence."
-            )
-        else:
-            context = (
-                f"This is an original setting: '{raw_name}'.\n"
-                f"Generate 2-3 storyline variants for an interactive text-adventure campaign. "
-                f"Each variant should have a different tone, central conflict, or protagonist archetype."
-            )
-
-        variant_prompt = (
-            f"{context}\n\n"
-            "Return ONLY valid JSON with a single key 'variants' containing an array of objects.\n"
+        system_prompt = (
+            "You are a creative game designer who builds interactive text-adventure campaigns.\n"
+            "Return ONLY valid JSON with a single key 'variants' containing an array of 2-3 objects.\n"
             "Each object must have:\n"
             '- "id": string (e.g. "variant-1")\n'
             '- "title": string (short catchy title)\n'
@@ -831,21 +823,48 @@ class ZorkEmulator:
             '- "main_character": string (protagonist name and brief role)\n'
             '- "essential_npcs": array of strings (3-5 key NPC names)\n'
             '- "chapter_outline": array of objects with "title" and "summary" (3-5 chapters)\n'
-            "No markdown, no code fences."
+            "No markdown, no code fences, no explanation. ONLY the JSON object."
+        )
+
+        if is_known:
+            user_prompt = (
+                f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
+                f"based on the {work_type or 'work'}: '{raw_name}'.\n"
+                f"Description: {work_desc}\n\n"
+                f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
+                f"Variant ideas: faithful retelling from a character's perspective, "
+                f"alternate timeline, prequel/sequel, or a 'what-if' divergence.\n"
+                f"Each variant must reference real characters and events from the source material."
+            )
+        else:
+            user_prompt = (
+                f"Generate 2-3 storyline variants for an original text-adventure campaign "
+                f"called '{raw_name}'.\n"
+                f"Each variant should have a different tone, central conflict, or protagonist archetype. "
+                f"Be creative and specific with character names and chapter titles."
+            )
+
+        _zork_log(
+            f"SETUP VARIANT GENERATION campaign={campaign.id}",
+            f"is_known={is_known} raw_name={raw_name!r} work_desc={work_desc!r}\n"
+            f"--- SYSTEM ---\n{system_prompt}\n--- USER ---\n{user_prompt}",
         )
         try:
             response = await gpt.turbo_completion(
-                variant_prompt, "", temperature=0.8, max_tokens=3000
+                system_prompt, user_prompt, temperature=0.8, max_tokens=3000
             )
+            _zork_log("SETUP VARIANT RAW RESPONSE", response or "(empty)")
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
             result = json.loads(json_text) if json_text else {}
         except Exception as e:
             logger.warning(f"Storyline variant generation failed: {e}")
+            _zork_log("SETUP VARIANT GENERATION FAILED", str(e))
             result = {}
 
         variants = result.get("variants", [])
         if not isinstance(variants, list) or not variants:
+            _zork_log("SETUP VARIANT FALLBACK", f"result keys={list(result.keys()) if isinstance(result, dict) else 'not-dict'}")
             # Fallback: create a single default variant
             variants = [{
                 "id": "variant-1",
@@ -965,36 +984,46 @@ class ZorkEmulator:
         else:
             on_rails = bool(novel_prefs.get("on_rails", False))
 
-        finalize_prompt = (
-            f"You are building a complete world for a text-adventure campaign.\n"
-            f"Campaign name: '{raw_name}'\n"
-            f"Known work: {is_known}\n"
-            f"Chosen storyline: {json.dumps(chosen)}\n\n"
-            "Generate the full world. Return ONLY valid JSON with these keys:\n"
-            '- "characters": object keyed by slug-id. Each character has: name, personality, '
-            "background, appearance, location, current_status, allegiance, relationship.\n"
-            f"  Include the main character '{chosen.get('main_character', '')}' and all essential NPCs.\n"
+        finalize_system = (
+            "You are a world-builder for interactive text-adventure campaigns.\n"
+            "Return ONLY valid JSON with these keys:\n"
+            '- "characters": object keyed by slug-id (lowercase-hyphenated). Each character has: '
+            "name, personality, background, appearance, location, current_status, allegiance, relationship.\n"
             '- "story_outline": object with "chapters" array. Each chapter has: slug, title, summary, '
             "scenes (array of: slug, title, summary, setting, key_characters).\n"
-            '- "summary": string (2-4 sentence world summary for the campaign)\n'
+            '- "summary": string (2-4 sentence world summary)\n'
             '- "start_room": object with room_title, room_summary, room_description, exits, location\n'
-            '- "landmarks": array of strings (key locations in the world)\n'
+            '- "landmarks": array of strings (key locations)\n'
             '- "setting": string (one-line setting description)\n'
-            '- "tone": string (tone/mood description)\n'
+            '- "tone": string (tone/mood)\n'
             '- "default_persona": string (1-2 sentence protagonist persona, max 140 chars)\n'
-            '- "opening_narration": string (the opening narration text the player sees first, '
-            "vivid second-person, 200-400 chars)\n"
-            "No markdown, no code fences."
+            '- "opening_narration": string (vivid second-person opening, 200-400 chars)\n'
+            "No markdown, no code fences, no explanation. ONLY the JSON object."
+        )
+        finalize_user = (
+            f"Build the complete world for: '{raw_name}'\n"
+            f"Known work: {is_known}\n"
+            f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
+            f"Include the main character '{chosen.get('main_character', '')}' and all essential NPCs "
+            f"({', '.join(chosen.get('essential_npcs', []))}).\n"
+            f"Expand the chapter outline into full chapters with 2-4 scenes each. "
+            f"Use real names, locations, and plot points from the source material if this is a known work."
+        )
+        _zork_log(
+            f"SETUP FINALIZE campaign={campaign.id}",
+            f"--- SYSTEM ---\n{finalize_system}\n--- USER ---\n{finalize_user}",
         )
         try:
             response = await gpt.turbo_completion(
-                finalize_prompt, "", temperature=0.7, max_tokens=4000
+                finalize_system, finalize_user, temperature=0.7, max_tokens=4000
             )
+            _zork_log("SETUP FINALIZE RAW RESPONSE", response or "(empty)")
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
             world = json.loads(json_text) if json_text else {}
         except Exception as e:
             logger.warning(f"Campaign finalize failed: {e}")
+            _zork_log("SETUP FINALIZE FAILED", str(e))
             world = {}
 
         # Populate characters_json
