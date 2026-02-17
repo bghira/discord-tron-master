@@ -734,6 +734,66 @@ class ZorkEmulator:
             return []
 
     @classmethod
+    def _imdb_fetch_details(cls, imdb_id: str) -> dict:
+        """Fetch synopsis/description from an IMDB title page via JSON-LD.
+
+        Returns a dict with optional keys: description, genre, actors.
+        Returns empty dict on failure.
+        """
+        if not imdb_id or not imdb_id.startswith("tt"):
+            return {}
+        url = f"https://www.imdb.com/title/{imdb_id}/"
+        try:
+            resp = requests.get(
+                url,
+                timeout=cls.IMDB_TIMEOUT + 3,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+            )
+            if resp.status_code != 200:
+                return {}
+            # Extract JSON-LD block from <script type="application/ld+json">
+            match = re.search(
+                r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>',
+                resp.text,
+                re.DOTALL,
+            )
+            if not match:
+                return {}
+            ld_data = json.loads(match.group(1))
+            details = {}
+            if ld_data.get("description"):
+                details["description"] = ld_data["description"]
+            genre = ld_data.get("genre")
+            if genre:
+                details["genre"] = genre if isinstance(genre, list) else [genre]
+            actors = ld_data.get("actor", [])
+            if actors and isinstance(actors, list):
+                details["actors"] = [a.get("name", "") for a in actors[:6] if a.get("name")]
+            return details
+        except Exception as e:
+            logger.debug("IMDB detail fetch failed for %s: %s", imdb_id, e)
+            return {}
+
+    @classmethod
+    def _imdb_enrich_results(cls, results: List[dict], max_enrich: int = 1) -> List[dict]:
+        """Enrich the top N IMDB results with synopsis via _imdb_fetch_details."""
+        for r in results[:max_enrich]:
+            imdb_id = r.get("imdb_id", "")
+            if imdb_id:
+                details = cls._imdb_fetch_details(imdb_id)
+                if details.get("description"):
+                    r["description"] = details["description"]
+                if details.get("genre"):
+                    r["genre"] = details["genre"]
+                if details.get("actors"):
+                    r["stars"] = ", ".join(details["actors"])
+        return results
+
+    @classmethod
     def _format_imdb_results(cls, results: List[dict]) -> str:
         """Format IMDB results into a short text block for LLM context."""
         if not results:
@@ -743,7 +803,13 @@ class ZorkEmulator:
             year_str = f" ({r['year']})" if r.get("year") else ""
             type_str = f" [{r['type']}]" if r.get("type") else ""
             stars_str = f" — {r['stars']}" if r.get("stars") else ""
-            lines.append(f"- {r['title']}{year_str}{type_str}{stars_str}")
+            genre_str = ""
+            if r.get("genre"):
+                genre_str = f" [{', '.join(r['genre'])}]" if isinstance(r["genre"], list) else f" [{r['genre']}]"
+            desc_str = ""
+            if r.get("description"):
+                desc_str = f"\n  Synopsis: {r['description']}"
+            lines.append(f"- {r['title']}{year_str}{type_str}{genre_str}{stars_str}{desc_str}")
         return "\n".join(lines)
 
     @classmethod
@@ -806,14 +872,18 @@ class ZorkEmulator:
         # If LLM missed it but IMDB found results, promote the top hit.
         if not is_known and imdb_results:
             top = imdb_results[0]
+            # Enrich with synopsis for a better description
+            cls._imdb_enrich_results([top], max_enrich=1)
             is_known = True
             suggested = top["title"]
             year_str = f" ({top['year']})" if top.get("year") else ""
             work_type = (top.get("type") or "").lower().replace(" ", "_") or "other"
-            stars = top.get("stars", "")
-            work_desc = f"{top['title']}{year_str}"
-            if stars:
-                work_desc += f" starring {stars}"
+            work_desc = top.get("description") or ""
+            if not work_desc:
+                stars = top.get("stars", "")
+                work_desc = f"{top['title']}{year_str}"
+                if stars:
+                    work_desc += f" starring {stars}"
             _zork_log("SETUP CLASSIFY IMDB OVERRIDE", f"LLM missed, using IMDB top hit: {suggested}")
 
         setup_data = {
@@ -877,12 +947,26 @@ class ZorkEmulator:
         answer = content.strip().lower()
 
         if answer in ("yes", "y", "correct", "yep", "yeah"):
-            pass  # Confirmed as-is
+            # Confirmed — filter IMDB results to just the best match
+            confirmed_name = setup_data.get("raw_name", "").lower()
+            old_results = setup_data.get("imdb_results", [])
+            if old_results and confirmed_name:
+                # Keep only the result whose title best matches the confirmed name
+                best = None
+                for r in old_results:
+                    if r.get("title", "").lower() in confirmed_name or confirmed_name in r.get("title", "").lower():
+                        best = r
+                        break
+                setup_data["imdb_results"] = [best] if best else [old_results[0]]
+            # Enrich with synopsis
+            if setup_data.get("imdb_results"):
+                cls._imdb_enrich_results(setup_data["imdb_results"], max_enrich=1)
         elif answer in ("no", "n", "nope"):
             # User says it's NOT a known work — flip to novel
             setup_data["is_known_work"] = False
             setup_data["work_type"] = None
             setup_data["work_description"] = ""
+            setup_data["imdb_results"] = []
         else:
             # User is providing a correction — IMDB search + re-classify
             imdb_results = cls._imdb_search(content)
@@ -938,12 +1022,39 @@ class ZorkEmulator:
                 setup_data["work_type"] = (
                     (top.get("type") or "").lower().replace(" ", "_") or "other"
                 )
-                stars = top.get("stars", "")
+                # Use enriched description if available (enrichment happens below)
                 setup_data["work_description"] = f"{top['title']}{year_str}"
-                if stars:
-                    setup_data["work_description"] += f" starring {stars}"
 
-            setup_data["imdb_results"] = imdb_results or []
+            # Filter to confirmed match only
+            confirmed_name = setup_data.get("raw_name", "").lower()
+            if imdb_results and confirmed_name:
+                best = None
+                for r in imdb_results:
+                    if r.get("title", "").lower() in confirmed_name or confirmed_name in r.get("title", "").lower():
+                        best = r
+                        break
+                setup_data["imdb_results"] = [best] if best else [imdb_results[0]]
+            else:
+                setup_data["imdb_results"] = imdb_results or []
+            # Enrich with synopsis
+            if setup_data.get("imdb_results"):
+                cls._imdb_enrich_results(setup_data["imdb_results"], max_enrich=1)
+                # Update work_description with enriched synopsis if available
+                top_enriched = setup_data["imdb_results"][0]
+                if top_enriched.get("description") and not setup_data.get("work_description"):
+                    setup_data["work_description"] = top_enriched["description"]
+
+        # After confirmation (all paths), update work_description from enriched IMDB if still shallow
+        if setup_data.get("imdb_results") and setup_data.get("is_known_work"):
+            top = setup_data["imdb_results"][0]
+            if top.get("description") and len(setup_data.get("work_description", "")) < len(top["description"]):
+                setup_data["work_description"] = top["description"]
+            _zork_log(
+                f"SETUP POST-CONFIRM IMDB campaign={campaign.id}",
+                f"filtered_results={len(setup_data['imdb_results'])} "
+                f"top={setup_data['imdb_results'][0].get('title', '?')!r} "
+                f"has_synopsis={bool(setup_data['imdb_results'][0].get('description'))}",
+            )
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(campaign, setup_data)
