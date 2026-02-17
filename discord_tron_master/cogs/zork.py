@@ -12,6 +12,7 @@ from discord_tron_master.models.zork import (
     ZorkCampaign,
     ZorkChannel,
     ZorkPlayer,
+    ZorkSnapshot,
     ZorkTurn,
 )
 
@@ -78,6 +79,70 @@ class Zork(commands.Cog):
             ZorkEmulator.register_timer_message(campaign_id, msg.id)
         return msg
 
+    async def _handle_rewind(self, message, app):
+        """Process a 'rewind' reply: restore state and purge messages."""
+        target_msg_id = message.reference.message_id
+
+        with app.app_context():
+            channel_rec = ZorkEmulator.get_or_create_channel(
+                message.guild.id, message.channel.id
+            )
+            if not channel_rec.enabled or channel_rec.active_campaign_id is None:
+                await message.channel.send("No active campaign in this channel.")
+                return
+            campaign_id = channel_rec.active_campaign_id
+            campaign = ZorkCampaign.query.get(campaign_id)
+            if campaign is None:
+                await message.channel.send("Campaign not found.")
+                return
+            if ZorkEmulator.is_in_setup_mode(campaign):
+                await message.channel.send("Cannot rewind during campaign setup.")
+                return
+
+        lock = ZorkEmulator._get_lock(campaign_id)
+        async with lock:
+            with app.app_context():
+                result = ZorkEmulator.execute_rewind(campaign_id, target_msg_id)
+
+            if result is None:
+                await message.channel.send(
+                    "Could not find a snapshot for that message. "
+                    "Only messages created after the rewind feature was added can be rewound to."
+                )
+                return
+
+            turn_id, deleted_count = result
+
+            # Purge Discord messages after the target.
+            try:
+                target_msg = await message.channel.fetch_message(target_msg_id)
+                await self._purge_messages_after(
+                    message.channel, target_msg, message
+                )
+            except discord.NotFound:
+                pass
+            except Exception:
+                logger.exception("Zork rewind: failed to purge messages")
+
+            # Cancel any pending timed events.
+            ZorkEmulator.cancel_pending_timer(campaign_id)
+
+            await message.channel.send(
+                f"Rewound to turn {turn_id}. Removed {deleted_count} subsequent turn(s)."
+            )
+
+    async def _purge_messages_after(self, channel, target_message, rewind_message):
+        """Delete messages in *channel* that come after *target_message*."""
+        keep_ids = {target_message.id, rewind_message.id}
+
+        def should_delete(m):
+            return m.id not in keep_ids
+
+        try:
+            await channel.purge(after=target_message, check=should_delete, limit=200)
+        except Exception:
+            logger.exception("Zork rewind: purge failed")
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.guild is None:
@@ -95,6 +160,17 @@ class Zork(commands.Cog):
         content = self._strip_bot_mention(message.content)
         if not content:
             return
+
+        # Rewind detection — must happen before begin_turn.
+        content_stripped = message.content.strip().lower()
+        if (
+            content_stripped == "rewind"
+            and message.reference is not None
+            and message.reference.message_id is not None
+        ):
+            await self._handle_rewind(message, app)
+            return
+
         campaign_id, error_text = await ZorkEmulator.begin_turn(
             message, command_prefix=self._prefix()
         )
@@ -134,7 +210,10 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            await self._send_action_reply(message, narration, campaign_id=campaign_id)
+            msg = await self._send_action_reply(message, narration, campaign_id=campaign_id)
+            if msg is not None:
+                with app.app_context():
+                    ZorkEmulator.record_turn_message_ids(campaign_id, message.id, msg.id)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(message)
@@ -227,7 +306,10 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            await self._send_action_reply(ctx, narration, campaign_id=campaign_id)
+            msg = await self._send_action_reply(ctx, narration, campaign_id=campaign_id)
+            if msg is not None:
+                with app.app_context():
+                    ZorkEmulator.record_turn_message_ids(campaign_id, ctx.message.id, msg.id)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
@@ -1038,6 +1120,9 @@ class Zork(commands.Cog):
                 new_campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, reset_name, ctx.author.id
                 )
+                ZorkSnapshot.query.filter_by(campaign_id=new_campaign.id).delete(
+                    synchronize_session=False
+                )
                 ZorkTurn.query.filter_by(campaign_id=new_campaign.id).delete(
                     synchronize_session=False
                 )
@@ -1057,6 +1142,9 @@ class Zork(commands.Cog):
                 )
                 return
 
+            ZorkSnapshot.query.filter_by(campaign_id=campaign.id).delete(
+                synchronize_session=False
+            )
             ZorkTurn.query.filter_by(campaign_id=campaign.id).delete(
                 synchronize_session=False
             )

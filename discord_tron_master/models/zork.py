@@ -108,6 +108,8 @@ class ZorkTurn(db.Model):
     user_id = db.Column(db.BigInteger(), nullable=True)
     kind = db.Column(db.String(32), nullable=False)  # player, narrator, system
     content = db.Column(db.Text(), nullable=False)
+    discord_message_id = db.Column(db.BigInteger(), nullable=True)
+    user_message_id = db.Column(db.BigInteger(), nullable=True)
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
 
     def to_dict(self):
@@ -117,5 +119,24 @@ class ZorkTurn(db.Model):
             "user_id": self.user_id,
             "kind": self.kind,
             "content": self.content,
+            "discord_message_id": self.discord_message_id,
+            "user_message_id": self.user_message_id,
             "created": self.created,
         }
+
+
+class ZorkSnapshot(db.Model):
+    __tablename__ = "zork_snapshots"
+    id = db.Column(db.Integer, primary_key=True)
+    turn_id = db.Column(
+        db.Integer, db.ForeignKey("zork_turns.id"), nullable=False, unique=True
+    )
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False
+    )
+    campaign_state_json = db.Column(db.Text(), nullable=False)
+    campaign_characters_json = db.Column(db.Text(), nullable=False)
+    campaign_summary = db.Column(db.Text(), nullable=False, default="")
+    campaign_last_narration = db.Column(db.Text(), nullable=True)
+    players_json = db.Column(db.Text(), nullable=False)
+    created = db.Column(db.DateTime, nullable=False, default=db.func.now())

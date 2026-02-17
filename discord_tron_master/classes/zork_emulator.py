@@ -21,6 +21,7 @@ from discord_tron_master.models.zork import (
     ZorkCampaign,
     ZorkChannel,
     ZorkPlayer,
+    ZorkSnapshot,
     ZorkTurn,
 )
 
@@ -389,6 +390,163 @@ class ZorkEmulator:
     @classmethod
     def end_turn(cls, campaign_id: int, user_id: int):
         cls._clear_inflight_turn(campaign_id, user_id)
+
+    # ------------------------------------------------------------------
+    # Snapshot / Rewind helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _create_snapshot(cls, narrator_turn: "ZorkTurn", campaign: "ZorkCampaign"):
+        """Persist a full world-state snapshot tied to *narrator_turn*."""
+        try:
+            players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).all()
+            players_data = [
+                {
+                    "player_id": p.id,
+                    "user_id": p.user_id,
+                    "level": p.level,
+                    "xp": p.xp,
+                    "attributes_json": p.attributes_json,
+                    "state_json": p.state_json,
+                }
+                for p in players
+            ]
+            snapshot = ZorkSnapshot(
+                turn_id=narrator_turn.id,
+                campaign_id=campaign.id,
+                campaign_state_json=campaign.state_json or "{}",
+                campaign_characters_json=campaign.characters_json or "{}",
+                campaign_summary=campaign.summary or "",
+                campaign_last_narration=campaign.last_narration,
+                players_json=json.dumps(players_data),
+            )
+            db.session.add(snapshot)
+            db.session.commit()
+        except Exception:
+            logger.exception(
+                "Zork: failed to create snapshot for turn %s campaign %s",
+                narrator_turn.id,
+                campaign.id,
+            )
+
+    @classmethod
+    def record_turn_message_ids(
+        cls, campaign_id: int, user_message_id: int, bot_message_id: int
+    ):
+        """Stamp Discord message IDs onto the most recent narrator + player turn pair."""
+        try:
+            narrator_turn = (
+                ZorkTurn.query.filter_by(campaign_id=campaign_id, kind="narrator")
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+            if narrator_turn is not None:
+                narrator_turn.discord_message_id = bot_message_id
+                narrator_turn.user_message_id = user_message_id
+
+            player_turn = (
+                ZorkTurn.query.filter_by(campaign_id=campaign_id, kind="player")
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+            if player_turn is not None:
+                player_turn.user_message_id = user_message_id
+
+            db.session.commit()
+        except Exception:
+            logger.exception(
+                "Zork: failed to record message IDs for campaign %s", campaign_id
+            )
+
+    @classmethod
+    def execute_rewind(
+        cls, campaign_id: int, target_discord_message_id: int
+    ) -> Optional[Tuple[int, int]]:
+        """Restore campaign state to the snapshot at *target_discord_message_id*.
+
+        Returns ``(turn_id, deleted_count)`` on success, or ``None`` if the
+        target turn/snapshot could not be found.
+        """
+        # 1. Find the narrator turn by discord_message_id
+        target_turn = ZorkTurn.query.filter_by(
+            campaign_id=campaign_id,
+            discord_message_id=target_discord_message_id,
+        ).first()
+
+        # Fallback: check user_message_id and find companion narrator turn
+        if target_turn is None:
+            player_turn = ZorkTurn.query.filter_by(
+                campaign_id=campaign_id,
+                user_message_id=target_discord_message_id,
+            ).first()
+            if player_turn is not None:
+                # Find the narrator turn that immediately follows
+                target_turn = (
+                    ZorkTurn.query.filter(
+                        ZorkTurn.campaign_id == campaign_id,
+                        ZorkTurn.kind == "narrator",
+                        ZorkTurn.id >= player_turn.id,
+                    )
+                    .order_by(ZorkTurn.id.asc())
+                    .first()
+                )
+
+        if target_turn is None:
+            return None
+
+        # 2. Load snapshot
+        snapshot = ZorkSnapshot.query.filter_by(turn_id=target_turn.id).first()
+        if snapshot is None:
+            return None
+
+        # 3. Restore campaign state
+        campaign = ZorkCampaign.query.get(campaign_id)
+        if campaign is None:
+            return None
+
+        campaign.state_json = snapshot.campaign_state_json
+        campaign.characters_json = snapshot.campaign_characters_json
+        campaign.summary = snapshot.campaign_summary
+        campaign.last_narration = snapshot.campaign_last_narration
+        campaign.updated = db.func.now()
+
+        # 4. Restore player states
+        players_data = json.loads(snapshot.players_json)
+        for pdata in players_data:
+            player = ZorkPlayer.query.get(pdata["player_id"])
+            if player is None:
+                continue
+            player.level = pdata["level"]
+            player.xp = pdata["xp"]
+            player.attributes_json = pdata["attributes_json"]
+            player.state_json = pdata["state_json"]
+            player.updated = db.func.now()
+
+        # 5. Delete turns after target
+        deleted_count = ZorkTurn.query.filter(
+            ZorkTurn.campaign_id == campaign_id,
+            ZorkTurn.id > target_turn.id,
+        ).delete(synchronize_session=False)
+
+        # 6. Delete snapshots after target
+        ZorkSnapshot.query.filter(
+            ZorkSnapshot.campaign_id == campaign_id,
+            ZorkSnapshot.turn_id > target_turn.id,
+        ).delete(synchronize_session=False)
+
+        db.session.commit()
+
+        # 7. Clean embeddings
+        try:
+            ZorkMemory.delete_turns_after(campaign_id, target_turn.id)
+        except Exception:
+            logger.debug(
+                "Zork rewind: embedding cleanup failed for campaign %s",
+                campaign_id,
+                exc_info=True,
+            )
+
+        return (target_turn.id, deleted_count)
 
     @classmethod
     async def _delete_context_message(cls, ctx):
@@ -1352,7 +1510,13 @@ class ZorkEmulator:
             narration = f"{room_title}\n{opening}" if room_title else opening
             exits = start_room.get("exits")
             if exits and isinstance(exits, list):
-                narration += f"\nExits: {', '.join(exits)}"
+                exit_labels = []
+                for e in exits:
+                    if isinstance(e, dict):
+                        exit_labels.append(e.get("direction") or e.get("name") or str(e))
+                    else:
+                        exit_labels.append(str(e))
+                narration += f"\nExits: {', '.join(exit_labels)}"
             campaign.last_narration = narration
         db.session.commit()
 
@@ -4139,6 +4303,8 @@ class ZorkEmulator:
                     db.session.add(narrator_turn)
                     db.session.commit()
 
+                    cls._create_snapshot(narrator_turn, campaign)
+
                     # Fire-and-forget: embed the narrator turn for memory search.
                     try:
                         ZorkMemory.store_turn_embedding(
@@ -4240,6 +4406,7 @@ class ZorkEmulator:
         app = AppConfig.get_flask()
         if app is None:
             return
+        timed_narrator_turn_id = None
         lock = cls._get_lock(campaign_id)
         async with lock:
             with app.app_context():
@@ -4404,7 +4571,10 @@ class ZorkEmulator:
                 db.session.add(narrator_turn)
                 db.session.commit()
 
+                cls._create_snapshot(narrator_turn, campaign)
+
                 target_user_id = active_player.user_id
+                timed_narrator_turn_id = narrator_turn.id
 
         # Post to Discord outside the lock / app context.
         bot_instance = DiscordBot.get_instance()
@@ -4415,7 +4585,21 @@ class ZorkEmulator:
             return
         mention = f"<@{target_user_id}>" if target_user_id else ""
         output = f"**[Timed Event]** {mention}\n{narration}"
-        await DiscordBot.send_large_message(channel, output)
+        msg = await DiscordBot.send_large_message(channel, output)
+        if msg is not None and timed_narrator_turn_id is not None:
+            app = AppConfig.get_flask()
+            if app is not None:
+                with app.app_context():
+                    try:
+                        turn = ZorkTurn.query.get(timed_narrator_turn_id)
+                        if turn is not None:
+                            turn.discord_message_id = msg.id
+                            db.session.commit()
+                    except Exception:
+                        logger.debug(
+                            "Zork: failed to record timed event message ID",
+                            exc_info=True,
+                        )
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:

@@ -190,6 +190,35 @@ class ZorkMemory:
             )
             return 0
 
+    @classmethod
+    def delete_turns_after(cls, campaign_id: int, turn_id: int) -> int:
+        """Remove embeddings for *campaign_id* where turn_id > *turn_id*.
+
+        Returns rows deleted.
+        """
+        try:
+            conn = cls._get_conn()
+            cursor = conn.execute(
+                "DELETE FROM turn_embeddings WHERE campaign_id = ? AND turn_id > ?",
+                (campaign_id, turn_id),
+            )
+            conn.commit()
+            deleted = cursor.rowcount
+            logger.info(
+                "Zork memory: deleted %d embeddings after turn %s for campaign %s",
+                deleted,
+                turn_id,
+                campaign_id,
+            )
+            return deleted
+        except Exception:
+            logger.exception(
+                "Zork memory: failed to delete embeddings after turn %s for campaign %s",
+                turn_id,
+                campaign_id,
+            )
+            return 0
+
     # ------------------------------------------------------------------
     # Backfill
     # ------------------------------------------------------------------
