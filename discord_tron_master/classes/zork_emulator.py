@@ -230,7 +230,7 @@ class ZorkEmulator:
         "- Use ~60s for urgent, ~120s for moderate, ~180-300s for slow-building tension.\n"
         "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
         "or the world should move without the player.\n"
-        "- Your narration MUST mention the time pressure so the player knows to act.\n"
+        "- Your narration should hint at urgency narratively (e.g. 'the footsteps grow louder') but NEVER include countdowns, timestamps, emoji clocks, or explicit seconds. The system adds its own countdown display automatically.\n"
         "- Use at least once every few turns when dramatic pacing allows. Do not use on consecutive turns.\n"
     )
 
