@@ -2371,8 +2371,19 @@ class ZorkEmulator:
                 # Skip error/fallback narrations.
                 if content.lower() in _ERROR_PHRASES:
                     continue
-                clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
-                clipped = cls._strip_inventory_mentions(clipped)
+                # Strip timer countdown and inventory lines from context.
+                clipped_lines = []
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("\u23f0"):
+                        continue
+                    if stripped.lower().startswith("inventory:"):
+                        continue
+                    clipped_lines.append(line)
+                clipped = "\n".join(clipped_lines).strip()
+                if not clipped:
+                    continue
+                clipped = cls._trim_text(clipped, cls.MAX_TURN_CHARS)
                 recent_lines.append(f"NARRATOR: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
         rails_context = cls._build_rails_context(player_state, party_snapshot)
