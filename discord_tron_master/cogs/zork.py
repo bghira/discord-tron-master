@@ -880,6 +880,18 @@ class Zork(commands.Cog):
                 await ctx.send(message)
                 return
 
+            # Direct URL — set avatar immediately, skip generation.
+            if clean_input.lower().startswith(("http://", "https://")):
+                player_state["avatar_url"] = clean_input
+                player_state.pop("pending_avatar_url", None)
+                player_state.pop("pending_avatar_prompt", None)
+                player_state.pop("pending_avatar_generated_at", None)
+                player.state_json = ZorkEmulator._dump_json(player_state)
+                player.updated = db.func.now()
+                db.session.commit()
+                await ctx.send(f"Avatar set: {clean_input}")
+                return
+
             ok, message = await ZorkEmulator.enqueue_avatar_generation(
                 ctx,
                 campaign=campaign,
