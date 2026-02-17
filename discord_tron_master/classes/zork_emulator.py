@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import datetime
 import json
@@ -2441,11 +2442,33 @@ class ZorkEmulator:
         return text[start : end + 1]
 
     @staticmethod
-    def _parse_json_lenient(text: str) -> Optional[dict]:
-        """Parse a JSON object from *text*, tolerating trailing extra data.
+    def _coerce_python_dict(text: str) -> Optional[dict]:
+        """Try to parse *text* as a Python dict literal (single-quoted keys/values).
 
-        If the text contains multiple JSON objects (JSONL-style), parse each
-        one and shallow-merge them into a single dict so no data is lost.
+        Handles JSON keywords (null/true/false) by replacing them with Python
+        equivalents before calling ast.literal_eval.
+        """
+        try:
+            # Replace JSON keywords with Python equivalents.
+            # Only target standalone tokens — \b prevents matching inside words.
+            fixed = re.sub(r"\bnull\b", "None", text)
+            fixed = re.sub(r"\btrue\b", "True", fixed)
+            fixed = re.sub(r"\bfalse\b", "False", fixed)
+            result = ast.literal_eval(fixed)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def _parse_json_lenient(cls, text: str) -> dict:
+        """Parse a JSON object from *text*, tolerating common LLM quirks.
+
+        Tries in order:
+        1. Standard json.loads
+        2. Python dict literal (single quotes) via ast.literal_eval
+        3. JSONL-style (multiple JSON objects) via raw_decode + merge
         """
         try:
             result = json.loads(text)
@@ -2453,6 +2476,11 @@ class ZorkEmulator:
                 return result
             return {}
         except json.JSONDecodeError as exc:
+            # Try coercing single-quoted Python dict before anything else.
+            coerced = cls._coerce_python_dict(text)
+            if coerced is not None:
+                return coerced
+
             if "Extra data" not in str(exc):
                 raise
             # JSONL-style: decode successive objects and merge them.
