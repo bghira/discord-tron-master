@@ -2937,8 +2937,8 @@ class ZorkEmulator:
                                 timer_block = (
                                     f"TIMER_SET (system confirmation): A timed event has been scheduled.\n"
                                     f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
-                                    f"Now narrate the current scene. You MUST mention the time pressure\n"
-                                    f"and tell the player approximately how long they have."
+                                    f"Now narrate the current scene. Hint at urgency narratively but do NOT include "
+                                    f"countdowns, timestamps, emoji clocks, or explicit seconds — the system adds its own countdown."
                                 )
                                 _zork_log(
                                     "TIMER TOOL CALL",
