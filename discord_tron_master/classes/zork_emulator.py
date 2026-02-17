@@ -793,7 +793,7 @@ class ZorkEmulator:
             )
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
-            result = json.loads(json_text) if json_text else {}
+            result = cls._parse_json_lenient(json_text) if json_text else {}
         except Exception as e:
             logger.warning(f"Campaign classify failed: {e}")
             result = {}
@@ -920,7 +920,7 @@ class ZorkEmulator:
                 )
                 response = cls._clean_response(response or "{}")
                 json_text = cls._extract_json(response)
-                result = json.loads(json_text) if json_text else {}
+                result = cls._parse_json_lenient(json_text) if json_text else {}
             except Exception:
                 result = {}
             setup_data["is_known_work"] = bool(result.get("is_known_work", False))
@@ -1014,7 +1014,7 @@ class ZorkEmulator:
             _zork_log("SETUP VARIANT RAW RESPONSE", response or "(empty)")
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
-            result = json.loads(json_text) if json_text else {}
+            result = cls._parse_json_lenient(json_text) if json_text else {}
         except Exception as e:
             logger.warning(f"Storyline variant generation failed: {e}")
             _zork_log("SETUP VARIANT GENERATION FAILED", str(e))
@@ -1187,7 +1187,7 @@ class ZorkEmulator:
             _zork_log("SETUP FINALIZE RAW RESPONSE", response or "(empty)")
             response = cls._clean_response(response or "{}")
             json_text = cls._extract_json(response)
-            world = json.loads(json_text) if json_text else {}
+            world = cls._parse_json_lenient(json_text) if json_text else {}
         except Exception as e:
             logger.warning(f"Campaign finalize failed: {e}")
             _zork_log("SETUP FINALIZE FAILED", str(e))
