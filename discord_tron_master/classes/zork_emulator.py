@@ -3586,7 +3586,8 @@ class ZorkEmulator:
                     continue
                 clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
                 clipped = cls._strip_inventory_mentions(clipped)
-                label = _player_names.get(turn.user_id, "PLAYER")
+                name = _player_names.get(turn.user_id)
+                label = f"PLAYER ({name.upper()})" if name else "PLAYER"
                 recent_lines.append(f"{label}: {clipped}")
             elif turn.kind == "narrator":
                 # Skip error/fallback narrations.
