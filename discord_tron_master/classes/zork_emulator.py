@@ -167,7 +167,8 @@ class ZorkEmulator:
         "Respect item origins — never contradict or reinvent an item's backstory.\n"
         "- When a player must pick a path, accept only exact responses: 'main party' or 'new path'.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
-        "- Do not print an Inventory section; the emulator appends authoritative inventory.\n"
+        "- NEVER include any inventory listing, summary, or 'Inventory:' line in narration. The emulator appends authoritative inventory automatically. "
+        "Do not list, enumerate, or summarise what the player is carrying anywhere in the narration text — not at the end, not inline, not as a parenthetical.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
         "- scene_image_prompt should describe the visible scene, not inventory lists.\n"
         "- When you output scene_image_prompt, it MUST be specific: include the room/location name and named characters from PARTY_SNAPSHOT (never generic 'group of adventurers').\n"
@@ -2670,6 +2671,17 @@ class ZorkEmulator:
 
         return cleaned
 
+    _INVENTORY_LINE_PREFIXES = (
+        "inventory:",
+        "inventory -",
+        "items:",
+        "items carried:",
+        "you are carrying:",
+        "you carry:",
+        "your inventory:",
+        "current inventory:",
+    )
+
     @classmethod
     def _strip_inventory_from_narration(cls, narration: str) -> str:
         if not narration:
@@ -2677,7 +2689,8 @@ class ZorkEmulator:
         # Drop any model-authored inventory line(s); we append canonical inventory later.
         kept_lines = []
         for line in narration.splitlines():
-            if line.strip().lower().startswith("inventory:"):
+            stripped = line.strip().lower()
+            if any(stripped.startswith(p) for p in cls._INVENTORY_LINE_PREFIXES):
                 continue
             kept_lines.append(line)
         cleaned = "\n".join(kept_lines).strip()
