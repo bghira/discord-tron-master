@@ -135,10 +135,11 @@ class ZorkEmulator:
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
         "- set_timer_interruptible: boolean (optional; default true)\n"
         "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n"
-        "- give_item: object (optional; transfer an item from the acting player to another player in the same room. "
+        "- give_item: object (REQUIRED when the acting player gives/hands/passes an item to another player character. "
         "Keys: 'item' (string, exact item name from acting player's inventory), "
         "'to_discord_mention' (string, discord_mention of the recipient from PARTY_SNAPSHOT, e.g. '<@123456>'). "
-        "The item is automatically removed from the giver and added to the recipient. "
+        "The emulator handles removing from the giver and adding to the recipient automatically. "
+        "Do NOT use inventory_remove for the given item — give_item handles both sides. "
         "Only use when both players are in the same room per PARTY_SNAPSHOT. Only one item per turn.)\n"
         "- character_updates: object (optional; keyed by stable slug IDs like 'marcus-blackwell'. "
         "Use this to create or update NPCs in the world character tracker. "
@@ -4595,6 +4596,10 @@ class ZorkEmulator:
                         )
 
                     player_state = cls.get_player_state(player)
+                    _pre_update_inv = {
+                        e["name"].lower(): e["name"]
+                        for e in cls._get_inventory_rich(player_state)
+                    }
                     player_state_update = cls._sanitize_player_state_update(
                         player_state,
                         player_state_update,
@@ -4607,6 +4612,48 @@ class ZorkEmulator:
                     player.state_json = cls._dump_json(player_state)
 
                     # --- give_item: cross-player item transfer ---
+                    # Heuristic fallback: if model forgot give_item but removed
+                    # items + narration mentions giving to another player, infer it.
+                    if give_item is None:
+                        _cur_inv_names = {
+                            e["name"].lower()
+                            for e in cls._get_inventory_rich(player_state)
+                        }
+                        _removed = [
+                            _pre_update_inv[k]
+                            for k in _pre_update_inv
+                            if k not in _cur_inv_names
+                        ]
+                        if _removed:
+                            _give_re = re.compile(
+                                r"\b(?:give|hand|pass|toss|offer|slide)\b",
+                                re.IGNORECASE,
+                            )
+                            if _give_re.search(action) or _give_re.search(raw_narration or ""):
+                                # Find first other-player mention in narration
+                                _mention_re = re.compile(r"<@!?(\d+)>")
+                                for _m in _mention_re.finditer(raw_narration or ""):
+                                    _target_uid = int(_m.group(1))
+                                    if _target_uid != player.user_id:
+                                        _inferred_item = _removed[0] if len(_removed) == 1 else None
+                                        if _inferred_item is None:
+                                            # Multiple items removed; try matching action text
+                                            _action_lower = action.lower()
+                                            for _ri in _removed:
+                                                if _ri.lower() in _action_lower:
+                                                    _inferred_item = _ri
+                                                    break
+                                        if _inferred_item:
+                                            give_item = {
+                                                "item": _inferred_item,
+                                                "to_discord_mention": f"<@{_target_uid}>",
+                                            }
+                                            logger.info(
+                                                "give_item inferred from action/narration: %s -> user %s",
+                                                _inferred_item, _target_uid,
+                                            )
+                                            break
+
                     if isinstance(give_item, dict):
                         gi_item_name = str(give_item.get("item") or "").strip()
                         gi_mention = str(give_item.get("to_discord_mention") or "").strip()
@@ -4618,22 +4665,24 @@ class ZorkEmulator:
                             except (ValueError, TypeError):
                                 pass
                         if gi_item_name and gi_target_uid and gi_target_uid != player.user_id:
-                            # Verify item is in giver's inventory (rich dicts)
+                            # Check if item is still in giver's inventory or was
+                            # already removed by inventory_remove (pre-update had it).
                             giver_inv = cls._get_inventory_rich(player_state)
-                            giver_has = any(
+                            giver_has_now = any(
                                 e["name"].lower() == gi_item_name.lower() for e in giver_inv
                             )
-                            if giver_has:
-                                # Find the target player in the same campaign
+                            giver_had_before = gi_item_name.lower() in _pre_update_inv
+                            if giver_has_now or giver_had_before:
                                 target_player = ZorkPlayer.query.filter_by(
                                     campaign_id=campaign.id, user_id=gi_target_uid
                                 ).first()
                                 if target_player is not None:
-                                    # Remove from giver
-                                    player_state["inventory"] = cls._apply_inventory_delta(
-                                        giver_inv, [], [gi_item_name], origin_hint=""
-                                    )
-                                    player.state_json = cls._dump_json(player_state)
+                                    # Remove from giver if still present
+                                    if giver_has_now:
+                                        player_state["inventory"] = cls._apply_inventory_delta(
+                                            giver_inv, [], [gi_item_name], origin_hint=""
+                                        )
+                                        player.state_json = cls._dump_json(player_state)
                                     # Add to receiver
                                     target_state = cls.get_player_state(target_player)
                                     target_inv = cls._get_inventory_rich(target_state)
