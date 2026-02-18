@@ -4618,8 +4618,8 @@ class ZorkEmulator:
                             except (ValueError, TypeError):
                                 pass
                         if gi_item_name and gi_target_uid and gi_target_uid != player.user_id:
-                            # Verify item is in giver's inventory
-                            giver_inv = cls._normalize_inventory_items(player_state.get("inventory"))
+                            # Verify item is in giver's inventory (rich dicts)
+                            giver_inv = cls._get_inventory_rich(player_state)
                             giver_has = any(
                                 e["name"].lower() == gi_item_name.lower() for e in giver_inv
                             )
@@ -4630,16 +4630,13 @@ class ZorkEmulator:
                                 ).first()
                                 if target_player is not None:
                                     # Remove from giver
-                                    origin_hint = f"Given to <@{gi_target_uid}>"
                                     player_state["inventory"] = cls._apply_inventory_delta(
                                         giver_inv, [], [gi_item_name], origin_hint=""
                                     )
                                     player.state_json = cls._dump_json(player_state)
                                     # Add to receiver
                                     target_state = cls.get_player_state(target_player)
-                                    target_inv = cls._normalize_inventory_items(
-                                        target_state.get("inventory")
-                                    )
+                                    target_inv = cls._get_inventory_rich(target_state)
                                     received_origin = f"Received from <@{player.user_id}>"
                                     target_state["inventory"] = cls._apply_inventory_delta(
                                         target_inv, [gi_item_name], [], origin_hint=received_origin
