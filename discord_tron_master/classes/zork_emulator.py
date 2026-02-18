@@ -4629,7 +4629,14 @@ class ZorkEmulator:
                                 r"\b(?:give|hand|pass|toss|offer|slide)\b",
                                 re.IGNORECASE,
                             )
-                            if _give_re.search(action) or _give_re.search(raw_narration or ""):
+                            _refuse_re = re.compile(
+                                r"\b(?:doesn'?t take|does not take|refuse[sd]?|reject[sd]?|decline[sd]?"
+                                r"|push(?:es|ed)? (?:it |the \w+ )?(?:back|away)"
+                                r"|won'?t (?:take|accept)|shake[sd]? (?:his|her|their) head"
+                                r"|hands? it back|gives? it back|returns? (?:it|the))\b",
+                                re.IGNORECASE,
+                            )
+                            if (_give_re.search(action) or _give_re.search(raw_narration or "")) and not _refuse_re.search(raw_narration or ""):
                                 # Find first other-player mention in narration
                                 _mention_re = re.compile(r"<@!?(\d+)>")
                                 for _m in _mention_re.finditer(raw_narration or ""):
