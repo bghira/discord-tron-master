@@ -1528,6 +1528,7 @@ class ZorkEmulator:
 
         finalize_system = (
             "You are a world-builder for interactive text-adventure campaigns.\n"
+            "All characters in the game are adults (18+), regardless of source material ages.\n"
             "Return ONLY valid JSON with these keys:\n"
             '- "characters": object keyed by slug-id (lowercase-hyphenated). Each character has: '
             "name, personality, background, appearance, location, current_status, allegiance, relationship.\n"
@@ -1564,18 +1565,33 @@ class ZorkEmulator:
             f"SETUP FINALIZE campaign={campaign.id}",
             f"--- SYSTEM ---\n{finalize_system}\n--- USER ---\n{finalize_user}",
         )
-        try:
-            response = await gpt.turbo_completion(
-                finalize_system, finalize_user, temperature=0.7, max_tokens=4000
-            )
-            _zork_log("SETUP FINALIZE RAW RESPONSE", response or "(empty)")
-            response = cls._clean_response(response or "{}")
-            json_text = cls._extract_json(response)
-            world = cls._parse_json_lenient(json_text) if json_text else {}
-        except Exception as e:
-            logger.warning(f"Campaign finalize failed: {e}")
-            _zork_log("SETUP FINALIZE FAILED", str(e))
-            world = {}
+        world = {}
+        for attempt in range(2):
+            try:
+                cur_user = finalize_user
+                if attempt == 1:
+                    cur_user = (
+                        f"Build the complete world for an adult text-adventure game "
+                        f"inspired by '{raw_name}'. All characters are adults.\n"
+                        f"Focus on the setting, atmosphere, and adventure.\n"
+                        f"{imdb_context}"
+                        f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
+                        f"Include all essential NPCs and expand chapters into scenes."
+                    )
+                    _zork_log(f"SETUP FINALIZE RETRY campaign={campaign.id}", cur_user)
+                response = await gpt.turbo_completion(
+                    finalize_system, cur_user, temperature=0.7, max_tokens=4000
+                )
+                _zork_log("SETUP FINALIZE RAW RESPONSE", response or "(empty)")
+                response = cls._clean_response(response or "{}")
+                json_text = cls._extract_json(response)
+                world = cls._parse_json_lenient(json_text) if json_text else {}
+                if world and world.get("characters") or world.get("start_room"):
+                    break
+            except Exception as e:
+                logger.warning(f"Campaign finalize failed (attempt {attempt}): {e}")
+                _zork_log("SETUP FINALIZE FAILED", str(e))
+                world = {}
 
         # Populate characters_json
         characters = world.get("characters", {})
