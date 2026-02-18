@@ -135,6 +135,11 @@ class ZorkEmulator:
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
         "- set_timer_interruptible: boolean (optional; default true)\n"
         "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n"
+        "- give_item: object (optional; transfer an item from the acting player to another player in the same room. "
+        "Keys: 'item' (string, exact item name from acting player's inventory), "
+        "'to_discord_mention' (string, discord_mention of the recipient from PARTY_SNAPSHOT, e.g. '<@123456>'). "
+        "The item is automatically removed from the giver and added to the recipient. "
+        "Only use when both players are in the same room per PARTY_SNAPSHOT. Only one item per turn.)\n"
         "- character_updates: object (optional; keyed by stable slug IDs like 'marcus-blackwell'. "
         "Use this to create or update NPCs in the world character tracker. "
         "Slug IDs must be lowercase-hyphenated, derived from the character name, and stable across turns. "
@@ -177,9 +182,22 @@ class ZorkEmulator:
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
-        "- CRITICAL: PARTY_SNAPSHOT contains REAL HUMAN PLAYERS. You must NEVER write their dialogue, actions, reactions, or decisions.\n"
-        "- If another character from PARTY_SNAPSHOT is present, you may describe their passive state (standing, watching, breathing) but NO dialogue, NO gestures in response, NO reactions to events.\n"
-        "- Never write quoted speech for any character except NPCs you create. Players speak for themselves.\n"
+        "- CRITICAL — OTHER PLAYER CHARACTERS ARE OFF-LIMITS:\n"
+        "  PARTY_SNAPSHOT entries (except the acting player) are REAL HUMANS controlling their own characters.\n"
+        "  You MUST NOT write ANY of the following for another player character:\n"
+        "    * Dialogue or quoted speech\n"
+        "    * Actions, movements, or decisions (e.g. 'she draws her sword', 'he follows you')\n"
+        "    * Emotional reactions, facial expressions, or gestures in response to events\n"
+        "    * Plot advancement involving them (e.g. 'together you storm the gate')\n"
+        "    * Moving them to a new location or changing their state in any way\n"
+        "  You MAY reference another player character in two cases:\n"
+        "    1. Static presence — note they are in the room (e.g. 'X is here'), nothing more.\n"
+        "    2. Continuing a prior action — if RECENT_TURNS shows that player ALREADY performed an action on their own turn\n"
+        "       (e.g. 'I toss the key to you', 'I hold the door open'), you may narrate the CONSEQUENCE of that\n"
+        "       established action as it affects the acting player (e.g. 'You catch the key X tossed'). \n"
+        "       You are acknowledging what they did, not inventing new behaviour for them.\n"
+        "  In ALL other cases, treat other player characters as scenery — they exist but do nothing until THEY act.\n"
+        "  This turn's narration concerns ONLY the acting player identified by PLAYER_ACTION.\n"
         "- When mentioning a player character in narration, use their Discord mention from PARTY_SNAPSHOT followed by their name in parentheses, e.g. '<@123456> (Bruce Wayne)'. This pings the player in Discord so they know they were referenced.\n"
         "- NEVER skip or fast-forward time when a player sleeps, rests, or waits. Narrate only the moment of settling in (closing eyes, finding a spot to rest). Do NOT write 'hours pass', 'you wake at dawn', or advance to morning/next day. Other players share this world and time must not jump for one player's action. End the turn in the present moment.\n"
     )
@@ -4357,6 +4375,7 @@ class ZorkEmulator:
                     player_state_update = {}
                     scene_image_prompt = None
                     character_updates = {}
+                    give_item = None
                     timer_scheduled_delay = None
                     timer_scheduled_event = None
                     timer_scheduled_interruptible = True
@@ -4376,6 +4395,7 @@ class ZorkEmulator:
                             character_updates = (
                                 payload.get("character_updates", {}) or {}
                             )
+                            give_item = payload.get("give_item")
 
                             # Inline timed event fields.
                             inline_timer_delay = payload.get("set_timer_delay")
@@ -4572,6 +4592,60 @@ class ZorkEmulator:
                         player_state, player_state_update
                     )
                     player.state_json = cls._dump_json(player_state)
+
+                    # --- give_item: cross-player item transfer ---
+                    if isinstance(give_item, dict):
+                        gi_item_name = str(give_item.get("item") or "").strip()
+                        gi_mention = str(give_item.get("to_discord_mention") or "").strip()
+                        # Parse user id from mention format <@123456>
+                        gi_target_uid = None
+                        if gi_mention.startswith("<@") and gi_mention.endswith(">"):
+                            try:
+                                gi_target_uid = int(gi_mention.strip("<@!>"))
+                            except (ValueError, TypeError):
+                                pass
+                        if gi_item_name and gi_target_uid and gi_target_uid != player.user_id:
+                            # Verify item is in giver's inventory
+                            giver_inv = cls._normalize_inventory_items(player_state.get("inventory"))
+                            giver_has = any(
+                                e["name"].lower() == gi_item_name.lower() for e in giver_inv
+                            )
+                            if giver_has:
+                                # Find the target player in the same campaign
+                                target_player = ZorkPlayer.query.filter_by(
+                                    campaign_id=campaign.id, user_id=gi_target_uid
+                                ).first()
+                                if target_player is not None:
+                                    # Remove from giver
+                                    origin_hint = f"Given to <@{gi_target_uid}>"
+                                    player_state["inventory"] = cls._apply_inventory_delta(
+                                        giver_inv, [], [gi_item_name], origin_hint=""
+                                    )
+                                    player.state_json = cls._dump_json(player_state)
+                                    # Add to receiver
+                                    target_state = cls.get_player_state(target_player)
+                                    target_inv = cls._normalize_inventory_items(
+                                        target_state.get("inventory")
+                                    )
+                                    received_origin = f"Received from <@{player.user_id}>"
+                                    target_state["inventory"] = cls._apply_inventory_delta(
+                                        target_inv, [gi_item_name], [], origin_hint=received_origin
+                                    )
+                                    target_player.state_json = cls._dump_json(target_state)
+                                    target_player.updated = db.func.now()
+                                    logger.info(
+                                        "give_item: '%s' transferred from user %s to user %s (campaign %s)",
+                                        gi_item_name, player.user_id, gi_target_uid, campaign.id,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "give_item: target user %s not found in campaign %s",
+                                        gi_target_uid, campaign.id,
+                                    )
+                            else:
+                                logger.warning(
+                                    "give_item: item '%s' not in giver's inventory", gi_item_name
+                                )
 
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
