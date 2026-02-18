@@ -804,6 +804,21 @@ class Zork(commands.Cog):
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign, campaign_name
                     )
+                    # Handle .txt attachment
+                    att_text = await ZorkEmulator._extract_attachment_text(ctx.message)
+                    if isinstance(att_text, str) and att_text.startswith("ERROR:"):
+                        await ctx.send(att_text.replace("ERROR:", "", 1))
+                    elif att_text:
+                        summary = await ZorkEmulator._summarise_long_text(att_text, ctx.message)
+                        if summary:
+                            campaign = ZorkCampaign.query.get(campaign.id)
+                            state = ZorkEmulator.get_campaign_state(campaign)
+                            sd = state.get("setup_data") or {}
+                            sd["attachment_summary"] = summary
+                            state["setup_data"] = sd
+                            campaign.state_json = ZorkEmulator._dump_json(state)
+                            campaign.updated = db.func.now()
+                            db.session.commit()
                 resolved_campaign_name = campaign.name
             if setup_message:
                 await ctx.send(
@@ -847,6 +862,21 @@ class Zork(commands.Cog):
             setup_message = await ZorkEmulator.start_campaign_setup(
                 campaign, name or thread_name
             )
+            # Handle .txt attachment
+            att_text = await ZorkEmulator._extract_attachment_text(ctx.message)
+            if isinstance(att_text, str) and att_text.startswith("ERROR:"):
+                await thread.send(att_text.replace("ERROR:", "", 1))
+            elif att_text:
+                summary = await ZorkEmulator._summarise_long_text(att_text, ctx.message)
+                if summary:
+                    campaign = ZorkCampaign.query.get(campaign.id)
+                    state = ZorkEmulator.get_campaign_state(campaign)
+                    sd = state.get("setup_data") or {}
+                    sd["attachment_summary"] = summary
+                    state["setup_data"] = sd
+                    campaign.state_json = ZorkEmulator._dump_json(state)
+                    campaign.updated = db.func.now()
+                    db.session.commit()
             resolved_campaign_name = campaign.name
 
         await ctx.send(f"Created Zork thread: {thread.mention}")

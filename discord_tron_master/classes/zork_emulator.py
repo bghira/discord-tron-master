@@ -72,6 +72,11 @@ class ZorkEmulator:
     PLAYER_STATS_TIMERS_MISSED_KEY = "timers_missed"
     PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
+    ATTACHMENT_MAX_BYTES = 500_000
+    ATTACHMENT_CHUNK_CHARS = 8_000
+    ATTACHMENT_SUMMARY_BUDGET = 3_000
+    ATTACHMENT_MAX_PARALLEL = 4
+    ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_CAMPAIGN_PERSONA = (
@@ -1302,6 +1307,15 @@ class ZorkEmulator:
                 f"has_synopsis={bool(setup_data['imdb_results'][0].get('description'))}",
             )
 
+        # Check for .txt attachment
+        att_text = await cls._extract_attachment_text(ctx)
+        if isinstance(att_text, str) and att_text.startswith("ERROR:"):
+            await ctx.channel.send(att_text.replace("ERROR:", "", 1))
+        elif att_text:
+            summary = await cls._summarise_long_text(att_text, ctx)
+            if summary:
+                setup_data["attachment_summary"] = summary
+
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(
             campaign, setup_data
@@ -1343,12 +1357,21 @@ class ZorkEmulator:
             imdb_text = cls._format_imdb_results(imdb_results)
             imdb_context = f"\nIMDB reference data:\n{imdb_text}\n"
 
+        attachment_context = ""
+        attachment_summary = setup_data.get("attachment_summary")
+        if attachment_summary:
+            attachment_context = (
+                f"\nDetailed source material summary:\n{attachment_summary}\n"
+                "Use this summary to create accurate, faithful storyline variants.\n"
+            )
+
         if is_known:
             user_prompt = (
                 f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
                 f"based on the {work_type or 'work'}: '{raw_name}'.\n"
                 f"Description: {work_desc}\n"
-                f"{imdb_context}\n"
+                f"{imdb_context}"
+                f"{attachment_context}\n"
                 f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
                 f"Variant ideas: faithful retelling from a character's perspective, "
                 f"alternate timeline, prequel/sequel, or a 'what-if' divergence.\n"
@@ -1358,6 +1381,7 @@ class ZorkEmulator:
             user_prompt = (
                 f"Generate 2-3 storyline variants for an original text-adventure campaign "
                 f"called '{raw_name}'.\n"
+                f"{attachment_context}"
                 f"Each variant should have a different tone, central conflict, or protagonist archetype. "
                 f"Be creative and specific with character names and chapter titles."
             )
@@ -1572,11 +1596,20 @@ class ZorkEmulator:
             imdb_text = cls._format_imdb_results(imdb_results)
             imdb_context = f"\nIMDB reference data:\n{imdb_text}\n"
 
+        attachment_context = ""
+        attachment_summary = setup_data.get("attachment_summary")
+        if attachment_summary:
+            attachment_context = (
+                f"\nDetailed source material:\n{attachment_summary}\n"
+                "Use this to create an accurate world with faithful characters, locations, and plot.\n"
+            )
+
         finalize_user = (
             f"Build the complete world for: '{raw_name}'\n"
             f"Known work: {is_known}\n"
             f"Description: {setup_data.get('work_description', '')}\n"
             f"{imdb_context}"
+            f"{attachment_context}"
             f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
             f"Include the main character '{chosen.get('main_character', '')}' and all essential NPCs "
             f"({', '.join(chosen.get('essential_npcs', []))}).\n"
@@ -1718,6 +1751,216 @@ class ZorkEmulator:
             f"characters={char_count} chapters={chapter_count} on_rails={on_rails}",
         )
         return result_msg
+
+    # ── Attachment helpers ─────────────────────────────────────────────
+
+    @classmethod
+    async def _extract_attachment_text(cls, message) -> Optional[str]:
+        """Return raw text from first .txt attachment, error string, or None."""
+        attachments = getattr(message, "attachments", None)
+        if not attachments:
+            return None
+        txt_att = None
+        for att in attachments:
+            if att.filename and att.filename.lower().endswith(".txt"):
+                txt_att = att
+                break
+        if txt_att is None:
+            return None
+        if txt_att.size and txt_att.size > cls.ATTACHMENT_MAX_BYTES:
+            size_kb = txt_att.size // 1024
+            limit_kb = cls.ATTACHMENT_MAX_BYTES // 1024
+            return f"ERROR:File too large ({size_kb}KB, limit {limit_kb}KB)"
+        try:
+            raw = await txt_att.read()
+        except Exception as e:
+            logger.warning(f"Attachment read failed: {e}")
+            return None
+        if not raw:
+            return None
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+        text = text.strip()
+        return text if text else None
+
+    @classmethod
+    async def _summarise_long_text(cls, text: str, ctx_message) -> str:
+        """Chunk, summarise in parallel, condense to budget. Returns summary."""
+        gpt = GPT()
+        budget = cls.ATTACHMENT_SUMMARY_BUDGET
+        chunk_size = cls.ATTACHMENT_CHUNK_CHARS
+        max_parallel = cls.ATTACHMENT_MAX_PARALLEL
+        guard = cls.ATTACHMENT_GUARD_TOKEN
+
+        # Step 1 — chunk on paragraph boundaries
+        paragraphs = text.split("\n\n")
+        chunks: List[str] = []
+        current_chunk: List[str] = []
+        current_len = 0
+        for para in paragraphs:
+            para_len = len(para)
+            if current_len + para_len + 2 > chunk_size and current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = [para]
+                current_len = para_len
+            else:
+                current_chunk.append(para)
+                current_len += para_len + 2
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+
+        if not chunks:
+            return ""
+
+        # If single chunk within budget, return as-is
+        if len(chunks) == 1 and len(chunks[0]) <= budget:
+            return chunks[0]
+
+        total = len(chunks)
+        status_msg = await ctx_message.channel.send(
+            f"Summarising uploaded file... [0/{total}]"
+        )
+
+        # Step 2 — parallel summarise
+        summarise_system = (
+            "Summarise the following text passage for a text-adventure campaign. "
+            "Preserve all character names, plot points, locations, and key events. "
+            f"Be detailed but concise. End with the exact line: {guard}"
+        )
+
+        async def _summarise_chunk(chunk_text: str) -> str:
+            try:
+                result = await gpt.turbo_completion(
+                    summarise_system, chunk_text,
+                    max_tokens=800, temperature=0.3,
+                )
+                result = (result or "").strip()
+                if guard not in result:
+                    # retry once
+                    logger.warning("Guard token missing, retrying chunk")
+                    result = await gpt.turbo_completion(
+                        summarise_system, chunk_text,
+                        max_tokens=800, temperature=0.3,
+                    )
+                    result = (result or "").strip()
+                    if guard not in result:
+                        logger.warning("Guard token still missing, accepting as-is")
+                return result.replace(guard, "").strip()
+            except Exception as e:
+                logger.warning(f"Chunk summarisation failed: {e}")
+                return ""
+
+        summaries: List[str] = []
+        processed = 0
+        for batch_start in range(0, total, max_parallel):
+            batch = chunks[batch_start : batch_start + max_parallel]
+            tasks = [_summarise_chunk(c) for c in batch]
+            results = await asyncio.gather(*tasks)
+            summaries.extend(results)
+            processed += len(batch)
+            try:
+                await status_msg.edit(
+                    content=f"Summarising uploaded file... [{processed}/{total}]"
+                )
+            except Exception:
+                pass
+
+        # Filter empty summaries
+        summaries = [s for s in summaries if s]
+        if not summaries:
+            logger.error("All chunk summaries failed")
+            try:
+                await status_msg.edit(content="Summary failed — continuing without attachment.")
+                await asyncio.sleep(5)
+                await status_msg.delete()
+            except Exception:
+                pass
+            return ""
+
+        # Step 3 — check total length
+        joined = "\n\n".join(summaries)
+        if len(joined) <= budget:
+            try:
+                file_kb = len(text) // 1024
+                await status_msg.edit(
+                    content=f"Summary complete. ({len(joined)} chars from {file_kb}KB file)"
+                )
+                await asyncio.sleep(5)
+                await status_msg.delete()
+            except Exception:
+                pass
+            return joined
+
+        # Step 4 — condensation pass
+        num_summaries = len(summaries)
+        target_per = budget // num_summaries
+
+        # Sort indices by length descending (longest first)
+        indexed = sorted(enumerate(summaries), key=lambda x: len(x[1]), reverse=True)
+        to_condense = [(i, s) for i, s in indexed if len(s) > target_per]
+
+        if to_condense:
+            condense_total = len(to_condense)
+            condense_done = 0
+            try:
+                await status_msg.edit(
+                    content=f"Condensing summaries... [0/{condense_total}]"
+                )
+            except Exception:
+                pass
+
+            async def _condense(idx: int, summary_text: str) -> Tuple[int, str]:
+                condense_system = (
+                    f"Condense this summary to roughly {target_per} characters "
+                    "while preserving all character names, plot points, and locations. "
+                    f"End with: {guard}"
+                )
+                try:
+                    result = await gpt.turbo_completion(
+                        condense_system, summary_text,
+                        max_tokens=500, temperature=0.2,
+                    )
+                    result = (result or "").strip()
+                    if guard not in result:
+                        logger.warning("Guard token missing in condensation, accepting as-is")
+                    return idx, result.replace(guard, "").strip()
+                except Exception as e:
+                    logger.warning(f"Condensation failed: {e}")
+                    return idx, summary_text
+
+            for batch_start in range(0, len(to_condense), max_parallel):
+                batch = to_condense[batch_start : batch_start + max_parallel]
+                tasks = [_condense(i, s) for i, s in batch]
+                results = await asyncio.gather(*tasks)
+                for idx, condensed in results:
+                    if condensed:
+                        summaries[idx] = condensed
+                condense_done += len(batch)
+                try:
+                    await status_msg.edit(
+                        content=f"Condensing summaries... [{condense_done}/{condense_total}]"
+                    )
+                except Exception:
+                    pass
+
+        joined = "\n\n".join(summaries)
+        if len(joined) > budget:
+            joined = joined[: budget - len("... [truncated]")] + "... [truncated]"
+
+        # Step 5 — final edit + cleanup
+        try:
+            file_kb = len(text) // 1024
+            await status_msg.edit(
+                content=f"Summary complete. ({len(joined)} chars from {file_kb}KB file)"
+            )
+            await asyncio.sleep(5)
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        return joined
 
     # ── End Campaign Setup ─────────────────────────────────────────────
 
