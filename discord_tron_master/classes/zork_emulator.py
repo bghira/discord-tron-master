@@ -181,6 +181,7 @@ class ZorkEmulator:
         "- If another character from PARTY_SNAPSHOT is present, you may describe their passive state (standing, watching, breathing) but NO dialogue, NO gestures in response, NO reactions to events.\n"
         "- Never write quoted speech for any character except NPCs you create. Players speak for themselves.\n"
         "- When mentioning a player character in narration, use their Discord mention from PARTY_SNAPSHOT followed by their name in parentheses, e.g. '<@123456> (Bruce Wayne)'. This pings the player in Discord so they know they were referenced.\n"
+        "- NEVER skip or fast-forward time when a player sleeps, rests, or waits. Narrate only the moment of settling in (closing eyes, finding a spot to rest). Do NOT write 'hours pass', 'you wake at dawn', or advance to morning/next day. Other players share this world and time must not jump for one player's action. End the turn in the present moment.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
