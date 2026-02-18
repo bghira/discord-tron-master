@@ -5045,8 +5045,14 @@ class ZorkEmulator:
             outline = campaign_state.get("story_outline")
             if isinstance(outline, dict):
                 chapters = outline.get("chapters", [])
-                cur_ch = campaign_state.get("current_chapter", 0)
-                cur_sc = campaign_state.get("current_scene", 0)
+                try:
+                    cur_ch = int(campaign_state.get("current_chapter", 0))
+                except (ValueError, TypeError):
+                    cur_ch = 0
+                try:
+                    cur_sc = int(campaign_state.get("current_scene", 0))
+                except (ValueError, TypeError):
+                    cur_sc = 0
                 if isinstance(chapters, list) and 0 <= cur_ch < len(chapters):
                     ch = chapters[cur_ch]
                     ch_title = ch.get("title", "")
