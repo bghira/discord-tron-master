@@ -180,6 +180,7 @@ class ZorkEmulator:
         "- CRITICAL: PARTY_SNAPSHOT contains REAL HUMAN PLAYERS. You must NEVER write their dialogue, actions, reactions, or decisions.\n"
         "- If another character from PARTY_SNAPSHOT is present, you may describe their passive state (standing, watching, breathing) but NO dialogue, NO gestures in response, NO reactions to events.\n"
         "- Never write quoted speech for any character except NPCs you create. Players speak for themselves.\n"
+        "- When mentioning a player character in narration, use their Discord mention from PARTY_SNAPSHOT followed by their name in parentheses, e.g. '<@123456> (Bruce Wayne)'. This pings the player in Discord so they know they were referenced.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -2310,7 +2311,7 @@ class ZorkEmulator:
                 ]
             out.append(
                 {
-                    "user_id": entry.user_id,
+                    "discord_mention": f"<@{entry.user_id}>",
                     "name": display_name,
                     "is_actor": entry.user_id == actor.user_id,
                     "level": entry.level,
@@ -3587,7 +3588,15 @@ class ZorkEmulator:
                 clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
                 clipped = cls._strip_inventory_mentions(clipped)
                 name = _player_names.get(turn.user_id)
-                label = f"PLAYER ({name.upper()})" if name else "PLAYER"
+                mention = f"<@{turn.user_id}>" if turn.user_id else ""
+                if name and mention:
+                    label = f"PLAYER {mention} ({name.upper()})"
+                elif name:
+                    label = f"PLAYER ({name.upper()})"
+                elif mention:
+                    label = f"PLAYER {mention}"
+                else:
+                    label = "PLAYER"
                 recent_lines.append(f"{label}: {clipped}")
             elif turn.kind == "narrator":
                 # Skip error/fallback narrations.
@@ -3632,12 +3641,20 @@ class ZorkEmulator:
         )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
+        _active_name = (player_state.get("character_name") or "").strip()
+        _active_mention = f"<@{player.user_id}>" if player.user_id else ""
+        if _active_name and _active_mention:
+            _action_label = f"PLAYER_ACTION {_active_mention} ({_active_name.upper()})"
+        elif _active_name:
+            _action_label = f"PLAYER_ACTION ({_active_name.upper()})"
+        else:
+            _action_label = "PLAYER_ACTION"
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
-            f"PLAYER_ACTION: {action}\n"
+            f"{_action_label}: {action}\n"
         )
         system_prompt = cls.SYSTEM_PROMPT
         if guardrails_enabled:
