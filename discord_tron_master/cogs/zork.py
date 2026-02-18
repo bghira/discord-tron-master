@@ -68,10 +68,14 @@ class Zork(commands.Cog):
             .strip()
         )
 
-    async def _send_action_reply(self, ctx_like, narration: str, campaign_id: int = None):
+    async def _send_action_reply(
+        self, ctx_like, narration: str, campaign_id: int = None
+    ):
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:
-            msg = await DiscordBot.send_large_message(ctx_like, f"{mention}\n{narration}")
+            msg = await DiscordBot.send_large_message(
+                ctx_like, f"{mention}\n{narration}"
+            )
         else:
             msg = await DiscordBot.send_large_message(ctx_like, narration)
         # If a timer was just scheduled, register the message for later editing.
@@ -118,9 +122,7 @@ class Zork(commands.Cog):
             # Purge Discord messages after the target.
             try:
                 target_msg = await message.channel.fetch_message(target_msg_id)
-                await self._purge_messages_after(
-                    message.channel, target_msg, message
-                )
+                await self._purge_messages_after(message.channel, target_msg, message)
             except discord.NotFound:
                 pass
             except Exception:
@@ -184,7 +186,9 @@ class Zork(commands.Cog):
         # Setup mode intercept — route to setup handler instead of play_action.
         with app.app_context():
             _setup_campaign = ZorkCampaign.query.get(campaign_id)
-            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(_setup_campaign)
+            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
+                _setup_campaign
+            )
         if _in_setup:
             reaction_added = await ZorkEmulator._add_processing_reaction(message)
             try:
@@ -212,10 +216,14 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            msg = await self._send_action_reply(message, narration, campaign_id=campaign_id)
+            msg = await self._send_action_reply(
+                message, narration, campaign_id=campaign_id
+            )
             if msg is not None:
                 with app.app_context():
-                    ZorkEmulator.record_turn_message_ids(campaign_id, message.id, msg.id)
+                    ZorkEmulator.record_turn_message_ids(
+                        campaign_id, message.id, msg.id
+                    )
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(message)
@@ -280,7 +288,9 @@ class Zork(commands.Cog):
         # Setup mode intercept
         with app.app_context():
             _setup_campaign = ZorkCampaign.query.get(campaign_id)
-            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(_setup_campaign)
+            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
+                _setup_campaign
+            )
         if _in_setup:
             reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
             try:
@@ -311,7 +321,9 @@ class Zork(commands.Cog):
             msg = await self._send_action_reply(ctx, narration, campaign_id=campaign_id)
             if msg is not None:
                 with app.app_context():
-                    ZorkEmulator.record_turn_message_ids(campaign_id, ctx.message.id, msg.id)
+                    ZorkEmulator.record_turn_message_ids(
+                        campaign_id, ctx.message.id, msg.id
+                    )
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
@@ -613,8 +625,12 @@ class Zork(commands.Cog):
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
-                await ctx.send("Only the campaign creator or an Image Admin can change this setting.")
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(
+                ctx
+            ):
+                await ctx.send(
+                    "Only the campaign creator or an Image Admin can change this setting."
+                )
                 return
             ZorkEmulator.set_timed_events_enabled(campaign, True)
             await ctx.send(f"Timed events enabled for campaign `{campaign.name}`.")
@@ -637,8 +653,12 @@ class Zork(commands.Cog):
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
-                await ctx.send("Only the campaign creator or an Image Admin can change this setting.")
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(
+                ctx
+            ):
+                await ctx.send(
+                    "Only the campaign creator or an Image Admin can change this setting."
+                )
                 return
             ZorkEmulator.set_timed_events_enabled(campaign, False)
             await ctx.send(f"Timed events disabled for campaign `{campaign.name}`.")
@@ -766,7 +786,9 @@ class Zork(commands.Cog):
                     enforce_activity_window=False,
                 )
                 campaign_state = ZorkEmulator.get_campaign_state(campaign)
-                if not campaign_state.get("setup_phase") and not campaign_state.get("default_persona"):
+                if not campaign_state.get("setup_phase") and not campaign_state.get(
+                    "default_persona"
+                ):
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign, campaign_name
                     )

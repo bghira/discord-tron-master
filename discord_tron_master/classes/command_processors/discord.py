@@ -365,9 +365,9 @@ async def send_message(
                     for image_url in arguments["image_url_list"]:
                         if "mp4" in image_url:
                             if not suppress_body:
-                                arguments["message"] = (
-                                    f"{arguments['message']}\nVideo URL: {image_url}"
-                                )
+                                arguments[
+                                    "message"
+                                ] = f"{arguments['message']}\nVideo URL: {image_url}"
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             embed = discord.Embed(url="http://tripleback.net")
@@ -379,18 +379,18 @@ async def send_message(
                 if arguments["audio_url"] is not None:
                     logger.debug(f"Incoming message to send, has an audio url.")
                     if not suppress_body:
-                        arguments["message"] = (
-                            f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
-                        )
+                        arguments[
+                            "message"
+                        ] = f"{arguments['message']}\nAudio URL: {arguments['audio_url']}"
                 else:
                     logger.debug(f"Incoming message to send, has zero audio url.")
             if "video_url" in arguments:
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
                     if not suppress_body:
-                        arguments["message"] = (
-                            f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
-                        )
+                        arguments[
+                            "message"
+                        ] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
                     embed = discord.Embed(url="https://tripleback.net")
                     embed.set_image(url=arguments["video_url"])
                 else:
@@ -617,9 +617,9 @@ async def create_thread(
             if "video_url" in arguments:
                 if arguments["video_url"] is not None:
                     logger.debug(f"Incoming message to send, has a video url.")
-                    arguments["message"] = (
-                        f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
-                    )
+                    arguments[
+                        "message"
+                    ] = f"{arguments['message']}\nVideo URL: {arguments['video_url']}"
                     embed = discord.Embed(url="https://tripleback.net")
                     embed.set_image(url=arguments["video_url"])
                 else:
@@ -664,9 +664,9 @@ async def create_thread(
                     for image_url in arguments["image_url_list"]:
                         if "mp4" in image_url:
                             if not suppress_body:
-                                arguments["message"] = (
-                                    f"{arguments['message']}\nVideo URL: {image_url}"
-                                )
+                                arguments[
+                                    "message"
+                                ] = f"{arguments['message']}\nVideo URL: {image_url}"
                         else:
                             logger.debug(f"Adding {image_url} to embed")
                             new_embed = discord.Embed(url="http://tripleback.net")
@@ -677,9 +677,9 @@ async def create_thread(
             logger.debug(f"Sending message to thread: {arguments['message']}")
             if not suppress_body and "mention" in arguments:
                 logger.debug(f"Mentioning user: {arguments['mention']}")
-                arguments["message"] = (
-                    f"<@{arguments['mention']}> {arguments['message']}"
-                )
+                arguments[
+                    "message"
+                ] = f"<@{arguments['mention']}> {arguments['message']}"
             content_to_send = arguments.get("message")
             if suppress_body and embeds is not None:
                 content_to_send = None

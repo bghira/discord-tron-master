@@ -118,7 +118,9 @@ class ZorkMemory:
             )
             conn.commit()
         except Exception:
-            logger.exception("Zork memory: failed to store embedding for turn %s", turn_id)
+            logger.exception(
+                "Zork memory: failed to store embedding for turn %s", turn_id
+            )
 
     # ------------------------------------------------------------------
     # Search

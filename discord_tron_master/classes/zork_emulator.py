@@ -198,7 +198,7 @@ class ZorkEmulator:
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
-        "NOT: {\"tool_call\": \"memory_search\", \"queries\": [\"Marcus Anastasia relationship\"]}\n"
+        'NOT: {"tool_call": "memory_search", "queries": ["Marcus Anastasia relationship"]}\n'
         "USE memory_search when:\n"
         "- A character or NPC appears or is mentioned who has not been in the recent conversation turns. "
         "Search their name to recall what happened with them before.\n"
@@ -533,7 +533,10 @@ class ZorkEmulator:
 
         # Collect turn IDs to delete so we can remove their snapshots first (FK).
         turn_ids_to_delete = [
-            t.id for t in ZorkTurn.query.filter(*turn_filter).with_entities(ZorkTurn.id).all()
+            t.id
+            for t in ZorkTurn.query.filter(*turn_filter)
+            .with_entities(ZorkTurn.id)
+            .all()
         ]
 
         if turn_ids_to_delete:
@@ -724,11 +727,12 @@ class ZorkEmulator:
         if last_message_at is not None:
             gap_seconds = (now_dt - last_message_at).total_seconds()
             if 0 < gap_seconds < cls.ATTENTION_WINDOW_SECONDS:
-                stats[cls.PLAYER_STATS_ATTENTION_SECONDS_KEY] = (
-                    cls._coerce_non_negative_int(
-                        stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
-                    )
-                    + int(gap_seconds)
+                stats[
+                    cls.PLAYER_STATS_ATTENTION_SECONDS_KEY
+                ] = cls._coerce_non_negative_int(
+                    stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
+                ) + int(
+                    gap_seconds
                 )
 
         stats[cls.PLAYER_STATS_MESSAGES_KEY] = (
@@ -866,13 +870,17 @@ class ZorkEmulator:
             title = item.get("l")
             if not title:
                 continue
-            results.append({
-                "imdb_id": item.get("id", ""),
-                "title": title,
-                "year": item.get("y"),
-                "type": item.get("q", ""),  # "TV series", "feature", "TV episode", etc.
-                "stars": item.get("s", ""),
-            })
+            results.append(
+                {
+                    "imdb_id": item.get("id", ""),
+                    "title": title,
+                    "year": item.get("y"),
+                    "type": item.get(
+                        "q", ""
+                    ),  # "TV series", "feature", "TV episode", etc.
+                    "stars": item.get("s", ""),
+                }
+            )
         return results
 
     @classmethod
@@ -929,7 +937,7 @@ class ZorkEmulator:
                 timeout=cls.IMDB_TIMEOUT + 3,
                 headers={
                     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept-Language": "en-US,en;q=0.9",
                 },
             )
@@ -952,14 +960,18 @@ class ZorkEmulator:
                 details["genre"] = genre if isinstance(genre, list) else [genre]
             actors = ld_data.get("actor", [])
             if actors and isinstance(actors, list):
-                details["actors"] = [a.get("name", "") for a in actors[:6] if a.get("name")]
+                details["actors"] = [
+                    a.get("name", "") for a in actors[:6] if a.get("name")
+                ]
             return details
         except Exception as e:
             logger.debug("IMDB detail fetch failed for %s: %s", imdb_id, e)
             return {}
 
     @classmethod
-    def _imdb_enrich_results(cls, results: List[dict], max_enrich: int = 1) -> List[dict]:
+    def _imdb_enrich_results(
+        cls, results: List[dict], max_enrich: int = 1
+    ) -> List[dict]:
         """Enrich the top N IMDB results with synopsis via _imdb_fetch_details."""
         for r in results[:max_enrich]:
             imdb_id = r.get("imdb_id", "")
@@ -985,11 +997,17 @@ class ZorkEmulator:
             stars_str = f" — {r['stars']}" if r.get("stars") else ""
             genre_str = ""
             if r.get("genre"):
-                genre_str = f" [{', '.join(r['genre'])}]" if isinstance(r["genre"], list) else f" [{r['genre']}]"
+                genre_str = (
+                    f" [{', '.join(r['genre'])}]"
+                    if isinstance(r["genre"], list)
+                    else f" [{r['genre']}]"
+                )
             desc_str = ""
             if r.get("description"):
                 desc_str = f"\n  Synopsis: {r['description']}"
-            lines.append(f"- {r['title']}{year_str}{type_str}{genre_str}{stars_str}{desc_str}")
+            lines.append(
+                f"- {r['title']}{year_str}{type_str}{genre_str}{stars_str}{desc_str}"
+            )
         return "\n".join(lines)
 
     @classmethod
@@ -1064,7 +1082,10 @@ class ZorkEmulator:
                 work_desc = f"{top['title']}{year_str}"
                 if stars:
                     work_desc += f" starring {stars}"
-            _zork_log("SETUP CLASSIFY IMDB OVERRIDE", f"LLM missed, using IMDB top hit: {suggested}")
+            _zork_log(
+                "SETUP CLASSIFY IMDB OVERRIDE",
+                f"LLM missed, using IMDB top hit: {suggested}",
+            )
 
         setup_data = {
             "raw_name": suggested if is_known else raw_name,
@@ -1097,7 +1118,9 @@ class ZorkEmulator:
         return msg
 
     @classmethod
-    async def handle_setup_message(cls, ctx, content: str, campaign, command_prefix: str = "!") -> str:
+    async def handle_setup_message(
+        cls, ctx, content: str, campaign, command_prefix: str = "!"
+    ) -> str:
         """Router: dispatch to the correct phase handler."""
         app = AppConfig.get_flask()
         state = cls.get_campaign_state(campaign)
@@ -1105,11 +1128,17 @@ class ZorkEmulator:
         setup_data = state.get("setup_data") or {}
 
         if phase == "classify_confirm":
-            return await cls._setup_handle_classify_confirm(ctx, content, campaign, state, setup_data)
+            return await cls._setup_handle_classify_confirm(
+                ctx, content, campaign, state, setup_data
+            )
         elif phase == "storyline_pick":
-            return await cls._setup_handle_storyline_pick(ctx, content, campaign, state, setup_data)
+            return await cls._setup_handle_storyline_pick(
+                ctx, content, campaign, state, setup_data
+            )
         elif phase == "novel_questions":
-            return await cls._setup_handle_novel_questions(ctx, content, campaign, state, setup_data)
+            return await cls._setup_handle_novel_questions(
+                ctx, content, campaign, state, setup_data
+            )
         elif phase == "finalize":
             return await cls._setup_finalize(campaign, state, setup_data)
         else:
@@ -1122,7 +1151,9 @@ class ZorkEmulator:
             return "Setup cleared. You can now play normally."
 
     @classmethod
-    async def _setup_handle_classify_confirm(cls, ctx, content, campaign, state, setup_data) -> str:
+    async def _setup_handle_classify_confirm(
+        cls, ctx, content, campaign, state, setup_data
+    ) -> str:
         """Parse confirmation, then generate storyline variants."""
         answer = content.strip().lower()
 
@@ -1134,7 +1165,10 @@ class ZorkEmulator:
                 # Keep only the result whose title best matches the confirmed name
                 best = None
                 for r in old_results:
-                    if r.get("title", "").lower() in confirmed_name or confirmed_name in r.get("title", "").lower():
+                    if (
+                        r.get("title", "").lower() in confirmed_name
+                        or confirmed_name in r.get("title", "").lower()
+                    ):
                         best = r
                         break
                 setup_data["imdb_results"] = [best] if best else [old_results[0]]
@@ -1180,7 +1214,10 @@ class ZorkEmulator:
             )
             try:
                 response = await gpt.turbo_completion(
-                    re_classify_system, re_classify_user, temperature=0.3, max_tokens=300
+                    re_classify_system,
+                    re_classify_user,
+                    temperature=0.3,
+                    max_tokens=300,
                 )
                 response = cls._clean_response(response or "{}")
                 json_text = cls._extract_json(response)
@@ -1199,9 +1236,9 @@ class ZorkEmulator:
                 setup_data["is_known_work"] = True
                 setup_data["raw_name"] = top["title"]
                 year_str = f" ({top['year']})" if top.get("year") else ""
-                setup_data["work_type"] = (
-                    (top.get("type") or "").lower().replace(" ", "_") or "other"
-                )
+                setup_data["work_type"] = (top.get("type") or "").lower().replace(
+                    " ", "_"
+                ) or "other"
                 # Use enriched description if available (enrichment happens below)
                 setup_data["work_description"] = f"{top['title']}{year_str}"
 
@@ -1210,7 +1247,10 @@ class ZorkEmulator:
             if imdb_results and confirmed_name:
                 best = None
                 for r in imdb_results:
-                    if r.get("title", "").lower() in confirmed_name or confirmed_name in r.get("title", "").lower():
+                    if (
+                        r.get("title", "").lower() in confirmed_name
+                        or confirmed_name in r.get("title", "").lower()
+                    ):
                         best = r
                         break
                 setup_data["imdb_results"] = [best] if best else [imdb_results[0]]
@@ -1221,13 +1261,17 @@ class ZorkEmulator:
                 cls._imdb_enrich_results(setup_data["imdb_results"], max_enrich=1)
                 # Update work_description with enriched synopsis if available
                 top_enriched = setup_data["imdb_results"][0]
-                if top_enriched.get("description") and not setup_data.get("work_description"):
+                if top_enriched.get("description") and not setup_data.get(
+                    "work_description"
+                ):
                     setup_data["work_description"] = top_enriched["description"]
 
         # After confirmation (all paths), update work_description from enriched IMDB if still shallow
         if setup_data.get("imdb_results") and setup_data.get("is_known_work"):
             top = setup_data["imdb_results"][0]
-            if top.get("description") and len(setup_data.get("work_description", "")) < len(top["description"]):
+            if top.get("description") and len(
+                setup_data.get("work_description", "")
+            ) < len(top["description"]):
                 setup_data["work_description"] = top["description"]
             _zork_log(
                 f"SETUP POST-CONFIRM IMDB campaign={campaign.id}",
@@ -1237,7 +1281,9 @@ class ZorkEmulator:
             )
 
         # Generate storyline variants
-        variants_msg = await cls._setup_generate_storyline_variants(campaign, setup_data)
+        variants_msg = await cls._setup_generate_storyline_variants(
+            campaign, setup_data
+        )
         state["setup_phase"] = "storyline_pick"
         state["setup_data"] = setup_data
         campaign.state_json = cls._dump_json(state)
@@ -1256,6 +1302,7 @@ class ZorkEmulator:
 
         system_prompt = (
             "You are a creative game designer who builds interactive text-adventure campaigns.\n"
+            "All characters in the game are adults (18+), regardless of source material ages.\n"
             "Return ONLY valid JSON with a single key 'variants' containing an array of 2-3 objects.\n"
             "Each object must have:\n"
             '- "id": string (e.g. "variant-1")\n'
@@ -1298,35 +1345,72 @@ class ZorkEmulator:
             f"is_known={is_known} raw_name={raw_name!r} work_desc={work_desc!r}\n"
             f"--- SYSTEM ---\n{system_prompt}\n--- USER ---\n{user_prompt}",
         )
-        try:
-            response = await gpt.turbo_completion(
-                system_prompt, user_prompt, temperature=0.8, max_tokens=3000
-            )
-            _zork_log("SETUP VARIANT RAW RESPONSE", response or "(empty)")
-            response = cls._clean_response(response or "{}")
-            json_text = cls._extract_json(response)
-            result = cls._parse_json_lenient(json_text) if json_text else {}
-        except Exception as e:
-            logger.warning(f"Storyline variant generation failed: {e}")
-            _zork_log("SETUP VARIANT GENERATION FAILED", str(e))
-            result = {}
+        result = {}
+        for attempt in range(2):
+            try:
+                cur_prompt = user_prompt
+                if attempt == 1:
+                    # Retry with simplified prompt on empty first response.
+                    cur_prompt = (
+                        f"Generate 2-3 adventure storyline variants for an adult text-adventure "
+                        f"game inspired by '{raw_name}'. All characters are adults. "
+                        f"Focus on the setting, survival themes, and exploration.\n"
+                        f"{imdb_context}"
+                    )
+                    _zork_log(f"SETUP VARIANT RETRY campaign={campaign.id}", cur_prompt)
+                response = await gpt.turbo_completion(
+                    system_prompt, cur_prompt, temperature=0.8, max_tokens=3000
+                )
+                _zork_log("SETUP VARIANT RAW RESPONSE", response or "(empty)")
+                response = cls._clean_response(response or "{}")
+                json_text = cls._extract_json(response)
+                result = cls._parse_json_lenient(json_text) if json_text else {}
+                if isinstance(result.get("variants"), list) and result["variants"]:
+                    break
+            except Exception as e:
+                logger.warning(
+                    f"Storyline variant generation failed (attempt {attempt}): {e}"
+                )
+                _zork_log("SETUP VARIANT GENERATION FAILED", str(e))
+                result = {}
 
         variants = result.get("variants", [])
         if not isinstance(variants, list) or not variants:
-            _zork_log("SETUP VARIANT FALLBACK", f"result keys={list(result.keys()) if isinstance(result, dict) else 'not-dict'}")
-            # Fallback: create a single default variant
-            variants = [{
-                "id": "variant-1",
-                "title": f"Adventure in {raw_name}",
-                "summary": f"An interactive adventure set in the world of {raw_name}.",
-                "main_character": "The Protagonist",
-                "essential_npcs": [],
-                "chapter_outline": [
-                    {"title": "Chapter 1: The Beginning", "summary": "The adventure begins."},
-                    {"title": "Chapter 2: The Challenge", "summary": "Obstacles arise."},
-                    {"title": "Chapter 3: The Resolution", "summary": "The story concludes."},
-                ],
-            }]
+            _zork_log(
+                "SETUP VARIANT FALLBACK",
+                f"result keys={list(result.keys()) if isinstance(result, dict) else 'not-dict'}",
+            )
+            # Build a richer fallback from IMDB data when available.
+            top_imdb = imdb_results[0] if imdb_results else {}
+            cast = top_imdb.get("cast", [])
+            main_char = cast[0] if cast else "The Protagonist"
+            npcs = cast[1:5] if len(cast) > 1 else []
+            synopsis = top_imdb.get("synopsis") or work_desc or ""
+            variants = [
+                {
+                    "id": "variant-1",
+                    "title": f"{raw_name}: Faithful Retelling",
+                    "summary": synopsis[:300]
+                    if synopsis
+                    else f"An interactive adventure set in the world of {raw_name}.",
+                    "main_character": main_char,
+                    "essential_npcs": npcs,
+                    "chapter_outline": [
+                        {
+                            "title": "Chapter 1: The Beginning",
+                            "summary": "The adventure begins.",
+                        },
+                        {
+                            "title": "Chapter 2: The Challenge",
+                            "summary": "Obstacles arise.",
+                        },
+                        {
+                            "title": "Chapter 3: The Resolution",
+                            "summary": "The story concludes.",
+                        },
+                    ],
+                }
+            ]
 
         setup_data["storyline_variants"] = variants
 
@@ -1349,7 +1433,9 @@ class ZorkEmulator:
         return "\n".join(lines)
 
     @classmethod
-    async def _setup_handle_storyline_pick(cls, ctx, content, campaign, state, setup_data) -> str:
+    async def _setup_handle_storyline_pick(
+        cls, ctx, content, campaign, state, setup_data
+    ) -> str:
         """Parse user's choice. Known work → finalize. Novel → novel_questions."""
         choice = content.strip()
         variants = setup_data.get("storyline_variants", [])
@@ -1388,7 +1474,9 @@ class ZorkEmulator:
             )
 
     @classmethod
-    async def _setup_handle_novel_questions(cls, ctx, content, campaign, state, setup_data) -> str:
+    async def _setup_handle_novel_questions(
+        cls, ctx, content, campaign, state, setup_data
+    ) -> str:
         """Parse preferences, then finalize."""
         answer = content.strip().lower()
         prefs = setup_data.get("novel_preferences", {})
@@ -1420,8 +1508,13 @@ class ZorkEmulator:
         if chosen is None and variants:
             chosen = variants[0]
         if chosen is None:
-            chosen = {"title": "Adventure", "summary": "", "main_character": "The Protagonist",
-                       "essential_npcs": [], "chapter_outline": []}
+            chosen = {
+                "title": "Adventure",
+                "summary": "",
+                "main_character": "The Protagonist",
+                "essential_npcs": [],
+                "chapter_outline": [],
+            }
 
         is_known = setup_data.get("is_known_work", False)
         raw_name = setup_data.get("raw_name", "unknown")
@@ -1535,7 +1628,9 @@ class ZorkEmulator:
                 exit_labels = []
                 for e in exits:
                     if isinstance(e, dict):
-                        exit_labels.append(e.get("direction") or e.get("name") or str(e))
+                        exit_labels.append(
+                            e.get("direction") or e.get("name") or str(e)
+                        )
                     else:
                         exit_labels.append(str(e))
                 narration += f"\nExits: {', '.join(exit_labels)}"
@@ -1544,7 +1639,11 @@ class ZorkEmulator:
 
         rails_label = "**On-Rails**" if on_rails else "**Freeform**"
         char_count = len(characters) if isinstance(characters, dict) else 0
-        chapter_count = len(story_outline.get("chapters", [])) if isinstance(story_outline, dict) else 0
+        chapter_count = (
+            len(story_outline.get("chapters", []))
+            if isinstance(story_outline, dict)
+            else 0
+        )
 
         result_msg = (
             f"Campaign **{raw_name}** is ready! ({rails_label} mode)\n"
@@ -1620,14 +1719,28 @@ class ZorkEmulator:
         return state
 
     _COMPLETED_VALUES = {
-        "complete", "completed", "done", "resolved", "finished",
-        "concluded", "vacated", "dispersed", "avoided", "departed",
+        "complete",
+        "completed",
+        "done",
+        "resolved",
+        "finished",
+        "concluded",
+        "vacated",
+        "dispersed",
+        "avoided",
+        "departed",
     }
 
     # Value patterns (strings) that indicate a past/resolved state.
     _STALE_VALUE_PATTERNS = _COMPLETED_VALUES | {
-        "secured", "confirmed", "received", "granted",
-        "initiated", "accepted", "placed", "offered",
+        "secured",
+        "confirmed",
+        "received",
+        "granted",
+        "initiated",
+        "accepted",
+        "placed",
+        "offered",
     }
 
     @classmethod
@@ -1636,20 +1749,39 @@ class ZorkEmulator:
         pruned = {}
         for key, value in state.items():
             # Drop string values that signal completion/past events.
-            if isinstance(value, str) and value.strip().lower() in cls._STALE_VALUE_PATTERNS:
+            if (
+                isinstance(value, str)
+                and value.strip().lower() in cls._STALE_VALUE_PATTERNS
+            ):
                 continue
             # Drop boolean True flags whose key name indicates a past one-shot event.
-            if value is True and any(key.endswith(s) for s in (
-                "_complete", "_arrived", "_announced", "_revealed",
-                "_concluded", "_departed", "_dispatched", "_offered",
-                "_introduced", "_unlocked",
-            )):
+            if value is True and any(
+                key.endswith(s)
+                for s in (
+                    "_complete",
+                    "_arrived",
+                    "_announced",
+                    "_revealed",
+                    "_concluded",
+                    "_departed",
+                    "_dispatched",
+                    "_offered",
+                    "_introduced",
+                    "_unlocked",
+                )
+            ):
                 continue
             # Drop stale ETA/countdown/elapsed keys with numeric values.
             if isinstance(value, (int, float)) and any(
-                key.endswith(s) for s in (
-                    "_eta_minutes", "_eta", "_countdown_minutes", "_countdown_hours",
-                    "_countdown", "_deadline_seconds", "_time_elapsed",
+                key.endswith(s)
+                for s in (
+                    "_eta_minutes",
+                    "_eta",
+                    "_countdown_minutes",
+                    "_countdown_hours",
+                    "_countdown",
+                    "_deadline_seconds",
+                    "_time_elapsed",
                 )
             ):
                 continue
@@ -1710,7 +1842,9 @@ class ZorkEmulator:
             if isinstance(scenes, list):
                 for i, scene in enumerate(scenes):
                     marker = " >>> CURRENT SCENE <<<" if i == current_sc else ""
-                    lines.append(f"  Scene {i + 1}: {scene.get('title', 'Untitled')}{marker}")
+                    lines.append(
+                        f"  Scene {i + 1}: {scene.get('title', 'Untitled')}{marker}"
+                    )
                     lines.append(f"    Summary: {scene.get('summary', '')}")
                     setting = scene.get("setting")
                     if setting:
@@ -2291,7 +2425,9 @@ class ZorkEmulator:
         return cleaned
 
     @classmethod
-    def _get_inventory_rich(cls, player_state: Dict[str, object]) -> List[Dict[str, str]]:
+    def _get_inventory_rich(
+        cls, player_state: Dict[str, object]
+    ) -> List[Dict[str, str]]:
         """Return inventory as a list of ``{"name": ..., "origin": ...}`` dicts.
 
         Handles both legacy plain-string inventories and the newer rich format.
@@ -2305,7 +2441,9 @@ class ZorkEmulator:
         seen = set()
         for item in raw:
             if isinstance(item, dict):
-                name = str(item.get("name") or item.get("item") or item.get("title") or "").strip()
+                name = str(
+                    item.get("name") or item.get("item") or item.get("title") or ""
+                ).strip()
                 origin = str(item.get("origin") or "").strip()
             else:
                 name = str(item).strip()
@@ -2354,7 +2492,7 @@ class ZorkEmulator:
         if not source:
             return ""
         # Take the first sentence (or first 120 chars) as a concise origin.
-        first_sentence = re.split(r'(?<=[.!?])\s', source, maxsplit=1)[0]
+        first_sentence = re.split(r"(?<=[.!?])\s", source, maxsplit=1)[0]
         return first_sentence[:120]
 
     _ITEM_STOPWORDS = {"a", "an", "the", "of", "and", "or", "to", "in", "on", "for"}
@@ -2372,7 +2510,8 @@ class ZorkEmulator:
         if item_l in text_lower:
             return True
         words = [
-            w for w in re.findall(r"[a-z0-9]+", item_l)
+            w
+            for w in re.findall(r"[a-z0-9]+", item_l)
             if len(w) > 2 and w not in cls._ITEM_STOPWORDS
         ]
         if not words:
@@ -2449,7 +2588,9 @@ class ZorkEmulator:
 
         if inventory_add or inventory_remove:
             cleaned["inventory"] = cls._apply_inventory_delta(
-                previous_inventory_rich, inventory_add, inventory_remove,
+                previous_inventory_rich,
+                inventory_add,
+                inventory_remove,
                 origin_hint=origin_hint,
             )
         else:
@@ -2464,7 +2605,10 @@ class ZorkEmulator:
         new_location = cleaned.get("location")
         if new_location is not None:
             old_location = previous_state.get("location")
-            if str(new_location).strip().lower() != str(old_location or "").strip().lower():
+            if (
+                str(new_location).strip().lower()
+                != str(old_location or "").strip().lower()
+            ):
                 if "room_description" not in cleaned:
                     cleaned["room_description"] = None
                 if "room_title" not in cleaned:
@@ -3060,7 +3204,9 @@ class ZorkEmulator:
 
     @classmethod
     def _apply_character_updates(
-        cls, existing: Dict[str, dict], updates: Dict[str, dict],
+        cls,
+        existing: Dict[str, dict],
+        updates: Dict[str, dict],
         on_rails: bool = False,
     ) -> Dict[str, dict]:
         """Merge character updates into existing characters dict.
@@ -3084,9 +3230,7 @@ class ZorkEmulator:
                         existing[slug][key] = value
             else:
                 if on_rails:
-                    logger.info(
-                        "On-rails: rejected new character slug %r", slug
-                    )
+                    logger.info("On-rails: rejected new character slug %r", slug)
                     continue
                 # New character — store everything.
                 existing[slug] = dict(fields)
@@ -3186,9 +3330,7 @@ class ZorkEmulator:
         return bool(campaign_state.get("on_rails", False))
 
     @classmethod
-    def set_on_rails(
-        cls, campaign: Optional[ZorkCampaign], enabled: bool
-    ) -> bool:
+    def set_on_rails(cls, campaign: Optional[ZorkCampaign], enabled: bool) -> bool:
         if campaign is None:
             return False
         campaign_state = cls.get_campaign_state(campaign)
@@ -3235,7 +3377,11 @@ class ZorkEmulator:
         if message_id and channel_id:
             event = ctx_dict.get("event", "unknown event")
             asyncio.ensure_future(
-                cls._edit_timer_line(channel_id, message_id, f"\u2705 *Timer cancelled — you acted in time. (Averted: {event})*")
+                cls._edit_timer_line(
+                    channel_id,
+                    message_id,
+                    f"\u2705 *Timer cancelled — you acted in time. (Averted: {event})*",
+                )
             )
         return ctx_dict
 
@@ -3378,7 +3524,10 @@ class ZorkEmulator:
 
         recent_lines = []
         _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
-        _ERROR_PHRASES = ("a hollow silence answers", "the world shifts, but nothing clear emerges")
+        _ERROR_PHRASES = (
+            "a hollow silence answers",
+            "the world shifts, but nothing clear emerges",
+        )
         for turn in turns:
             content = (turn.content or "").strip()
             if not content:
@@ -3585,7 +3734,10 @@ class ZorkEmulator:
         for key, value in update.items():
             if value is None:
                 state.pop(key, None)
-            elif isinstance(value, str) and value.strip().lower() in cls._COMPLETED_VALUES:
+            elif (
+                isinstance(value, str)
+                and value.strip().lower() in cls._COMPLETED_VALUES
+            ):
                 # Resolved entries don't need to stay in active state.
                 state.pop(key, None)
             else:
@@ -3643,17 +3795,23 @@ class ZorkEmulator:
                                 )
                                 player.updated = db.func.now()
                                 db.session.commit()
-                                interrupt_action = cancelled_timer.get("interrupt_action")
+                                interrupt_action = cancelled_timer.get(
+                                    "interrupt_action"
+                                )
                                 if interrupt_action:
                                     timer_interrupt_context = interrupt_action
                                 # Persist the interruption as a turn so it appears in RECENT_TURNS.
-                                event_desc = cancelled_timer.get("event", "an impending event")
+                                event_desc = cancelled_timer.get(
+                                    "event", "an impending event"
+                                )
                                 interrupt_note = (
                                     f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
-                                    f"Averted event: \"{event_desc}\""
+                                    f'Averted event: "{event_desc}"'
                                 )
                                 if interrupt_action:
-                                    interrupt_note += f" Interruption context: \"{interrupt_action}\""
+                                    interrupt_note += (
+                                        f' Interruption context: "{interrupt_action}"'
+                                    )
                                 db.session.add(
                                     ZorkTurn(
                                         campaign_id=campaign.id,
@@ -3875,8 +4033,8 @@ class ZorkEmulator:
                         user_prompt = (
                             f"{user_prompt}\n"
                             f"TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
-                            f"The interrupted event was: \"{timer_interrupt_context}\"\n"
-                            f"The player's action that interrupted it: \"{action}\"\n"
+                            f'The interrupted event was: "{timer_interrupt_context}"\n'
+                            f'The player\'s action that interrupted it: "{action}"\n'
                             f"Incorporate the interruption naturally into your narration.\n"
                         )
                     if action_clean in ("time skip", "time-skip", "timeskip"):
@@ -3910,16 +4068,24 @@ class ZorkEmulator:
                         except Exception:
                             first_payload = None
                         if first_payload and cls._is_tool_call(first_payload):
-                            tool_name = str(first_payload.get("tool_call") or "").strip()
+                            tool_name = str(
+                                first_payload.get("tool_call") or ""
+                            ).strip()
 
                             if tool_name == "memory_search":
                                 # Support both "queries": [...] and legacy "query": "..."
                                 raw_queries = first_payload.get("queries") or []
                                 if not raw_queries:
-                                    legacy = str(first_payload.get("query") or "").strip()
+                                    legacy = str(
+                                        first_payload.get("query") or ""
+                                    ).strip()
                                     if legacy:
                                         raw_queries = [legacy]
-                                queries = [str(q).strip() for q in raw_queries if str(q).strip()]
+                                queries = [
+                                    str(q).strip()
+                                    for q in raw_queries
+                                    if str(q).strip()
+                                ]
                                 if queries:
                                     _zork_log("MEMORY SEARCH", f"queries={queries}")
                                     recall_sections = []
@@ -3930,7 +4096,9 @@ class ZorkEmulator:
                                             campaign.id,
                                             query,
                                         )
-                                        results = ZorkMemory.search(query, campaign.id, top_k=5)
+                                        results = ZorkMemory.search(
+                                            query, campaign.id, top_k=5
+                                        )
                                         if results:
                                             top_score = max(s for _, _, _, s in results)
                                             _zork_log(
@@ -3946,7 +4114,8 @@ class ZorkEmulator:
                                         relevant = [
                                             (turn_id, kind, content, score)
                                             for turn_id, kind, content, score in results
-                                            if score >= 0.35 and turn_id not in seen_turn_ids
+                                            if score >= 0.35
+                                            and turn_id not in seen_turn_ids
                                         ]
                                         # Sort chronologically so the model sees events in order.
                                         relevant.sort(key=lambda t: t[0])
@@ -3958,7 +4127,8 @@ class ZorkEmulator:
                                             )
                                         if recall_lines:
                                             recall_sections.append(
-                                                f"Results for '{query}':\n" + "\n".join(recall_lines)
+                                                f"Results for '{query}':\n"
+                                                + "\n".join(recall_lines)
                                             )
                                     if recall_sections:
                                         recall_block = (
@@ -3966,9 +4136,13 @@ class ZorkEmulator:
                                             + "\n".join(recall_sections)
                                         )
                                     else:
-                                        recall_block = "MEMORY_RECALL: No relevant memories found."
+                                        recall_block = (
+                                            "MEMORY_RECALL: No relevant memories found."
+                                        )
                                     _zork_log("MEMORY RECALL BLOCK", recall_block)
-                                    augmented_prompt = f"{user_prompt}\n{recall_block}\n"
+                                    augmented_prompt = (
+                                        f"{user_prompt}\n{recall_block}\n"
+                                    )
                                     response = await gpt.turbo_completion(
                                         system_prompt,
                                         augmented_prompt,
@@ -3976,12 +4150,17 @@ class ZorkEmulator:
                                         max_tokens=2048,
                                     )
                                     if not response:
-                                        response = "A hollow silence answers. Try again."
+                                        response = (
+                                            "A hollow silence answers. Try again."
+                                        )
                                     else:
                                         response = cls._clean_response(response)
                                     _zork_log("AUGMENTED API RESPONSE", response)
 
-                            elif tool_name == "set_timer" and cls.is_timed_events_enabled(campaign):
+                            elif (
+                                tool_name == "set_timer"
+                                and cls.is_timed_events_enabled(campaign)
+                            ):
                                 raw_delay = first_payload.get("delay_seconds", 60)
                                 try:
                                     delay_seconds = int(raw_delay)
@@ -3989,13 +4168,17 @@ class ZorkEmulator:
                                     delay_seconds = 60
                                 delay_seconds = max(30, min(300, delay_seconds))
                                 event_description = str(
-                                    first_payload.get("event_description") or "Something happens."
+                                    first_payload.get("event_description")
+                                    or "Something happens."
                                 ).strip()[:500]
 
                                 cls.cancel_pending_timer(campaign.id)
                                 channel_id = ctx.channel.id
                                 cls._schedule_timer(
-                                    campaign.id, channel_id, delay_seconds, event_description
+                                    campaign.id,
+                                    channel_id,
+                                    delay_seconds,
+                                    event_description,
                                 )
                                 timer_scheduled_delay = delay_seconds
                                 timer_scheduled_event = event_description
@@ -4028,8 +4211,13 @@ class ZorkEmulator:
                                     response = cls._clean_response(response)
 
                             elif tool_name == "story_outline":
-                                chapter_slug = str(first_payload.get("chapter") or "").strip()
-                                _zork_log("STORY OUTLINE TOOL CALL", f"chapter={chapter_slug!r}")
+                                chapter_slug = str(
+                                    first_payload.get("chapter") or ""
+                                ).strip()
+                                _zork_log(
+                                    "STORY OUTLINE TOOL CALL",
+                                    f"chapter={chapter_slug!r}",
+                                )
                                 outline_result = ""
                                 campaign_state_so = cls.get_campaign_state(campaign)
                                 so = campaign_state_so.get("story_outline")
@@ -4039,10 +4227,10 @@ class ZorkEmulator:
                                             outline_result = json.dumps(ch, indent=2)
                                             break
                                 if not outline_result:
-                                    outline_result = f"No chapter found with slug '{chapter_slug}'."
-                                outline_block = (
-                                    f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
-                                )
+                                    outline_result = (
+                                        f"No chapter found with slug '{chapter_slug}'."
+                                    )
+                                outline_block = f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
                                 augmented_prompt = f"{user_prompt}\n{outline_block}\n"
                                 response = await gpt.turbo_completion(
                                     system_prompt,
@@ -4061,7 +4249,8 @@ class ZorkEmulator:
                         elif (
                             first_payload
                             and isinstance(first_payload, dict)
-                            and str(first_payload.get("tool_call") or "").strip() == "set_timer"
+                            and str(first_payload.get("tool_call") or "").strip()
+                            == "set_timer"
                             and "narration" in first_payload
                             and cls.is_timed_events_enabled(campaign)
                         ):
@@ -4072,13 +4261,17 @@ class ZorkEmulator:
                                 delay_seconds = 60
                             delay_seconds = max(30, min(300, delay_seconds))
                             event_description = str(
-                                first_payload.get("event_description") or "Something happens."
+                                first_payload.get("event_description")
+                                or "Something happens."
                             ).strip()[:500]
 
                             cls.cancel_pending_timer(campaign.id)
                             channel_id = ctx.channel.id
                             cls._schedule_timer(
-                                campaign.id, channel_id, delay_seconds, event_description
+                                campaign.id,
+                                channel_id,
+                                delay_seconds,
+                                event_description,
                             )
                             timer_scheduled_delay = delay_seconds
                             timer_scheduled_event = event_description
@@ -4112,7 +4305,9 @@ class ZorkEmulator:
                                 payload.get("player_state_update", {}) or {}
                             )
                             scene_image_prompt = payload.get("scene_image_prompt")
-                            character_updates = payload.get("character_updates", {}) or {}
+                            character_updates = (
+                                payload.get("character_updates", {}) or {}
+                            )
 
                             # Inline timed event fields.
                             inline_timer_delay = payload.get("set_timer_delay")
@@ -4141,13 +4336,20 @@ class ZorkEmulator:
                                     t_interruptible = bool(
                                         payload.get("set_timer_interruptible", True)
                                     )
-                                    t_interrupt_action = payload.get("set_timer_interrupt_action")
+                                    t_interrupt_action = payload.get(
+                                        "set_timer_interrupt_action"
+                                    )
                                     if isinstance(t_interrupt_action, str):
-                                        t_interrupt_action = t_interrupt_action.strip()[:500] or None
+                                        t_interrupt_action = (
+                                            t_interrupt_action.strip()[:500] or None
+                                        )
                                     else:
                                         t_interrupt_action = None
                                     cls._schedule_timer(
-                                        campaign.id, ctx.channel.id, t_delay, t_event,
+                                        campaign.id,
+                                        ctx.channel.id,
+                                        t_delay,
+                                        t_event,
                                         interruptible=t_interruptible,
                                         interrupt_action=t_interrupt_action,
                                     )
@@ -4167,10 +4369,18 @@ class ZorkEmulator:
                                         t_interruptible,
                                     )
                         except json.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse Zork JSON response: {e} — retrying")
-                            _zork_log("JSON PARSE RETRY", f"error={e}\nresponse={response[:500]}")
+                            logger.warning(
+                                f"Failed to parse Zork JSON response: {e} — retrying"
+                            )
+                            _zork_log(
+                                "JSON PARSE RETRY",
+                                f"error={e}\nresponse={response[:500]}",
+                            )
                             response = await gpt.turbo_completion(
-                                system_prompt, user_prompt, temperature=0.7, max_tokens=2048
+                                system_prompt,
+                                user_prompt,
+                                temperature=0.7,
+                                max_tokens=2048,
                             )
                             if response:
                                 response = cls._clean_response(response)
@@ -4178,17 +4388,27 @@ class ZorkEmulator:
                                 if json_text:
                                     try:
                                         payload = cls._parse_json_lenient(json_text)
-                                        narration = payload.get("narration", narration).strip()
-                                        state_update = payload.get("state_update", {}) or {}
+                                        narration = payload.get(
+                                            "narration", narration
+                                        ).strip()
+                                        state_update = (
+                                            payload.get("state_update", {}) or {}
+                                        )
                                         summary_update = payload.get("summary_update")
                                         xp_awarded = payload.get("xp_awarded", 0) or 0
                                         player_state_update = (
                                             payload.get("player_state_update", {}) or {}
                                         )
-                                        scene_image_prompt = payload.get("scene_image_prompt")
-                                        character_updates = payload.get("character_updates", {}) or {}
+                                        scene_image_prompt = payload.get(
+                                            "scene_image_prompt"
+                                        )
+                                        character_updates = (
+                                            payload.get("character_updates", {}) or {}
+                                        )
                                     except Exception as e2:
-                                        logger.warning(f"Retry also failed to parse JSON: {e2}")
+                                        logger.warning(
+                                            f"Retry also failed to parse JSON: {e2}"
+                                        )
                         except Exception as e:
                             logger.warning(f"Failed to parse Zork JSON response: {e}")
 
@@ -4197,13 +4417,12 @@ class ZorkEmulator:
                     # key so raw JSON never leaks to Discord or stored turns.
                     if narration.lstrip().startswith("{"):
                         try:
-                            salvage = json.loads(
-                                cls._extract_json(narration) or "{}"
-                            )
+                            salvage = json.loads(cls._extract_json(narration) or "{}")
                             if isinstance(salvage, dict) and salvage:
-                                narration = str(
-                                    salvage.get("narration", "")
-                                ).strip() or "The world shifts, but nothing clear emerges."
+                                narration = (
+                                    str(salvage.get("narration", "")).strip()
+                                    or "The world shifts, but nothing clear emerges."
+                                )
                         except (json.JSONDecodeError, Exception):
                             narration = "The world shifts, but nothing clear emerges."
 
@@ -4241,7 +4460,9 @@ class ZorkEmulator:
                         old_ch = campaign_state.get("current_chapter", 0)
                         if isinstance(new_ch, int) and new_ch != old_ch:
                             chapters = story_outline.get("chapters", [])
-                            if isinstance(chapters, list) and 0 <= old_ch < len(chapters):
+                            if isinstance(chapters, list) and 0 <= old_ch < len(
+                                chapters
+                            ):
                                 chapters[old_ch]["completed"] = True
                             campaign_state["current_chapter"] = new_ch
                         if isinstance(new_sc, int):
@@ -4255,7 +4476,8 @@ class ZorkEmulator:
                     if character_updates and isinstance(character_updates, dict):
                         existing_chars = cls.get_campaign_characters(campaign)
                         existing_chars = cls._apply_character_updates(
-                            existing_chars, character_updates,
+                            existing_chars,
+                            character_updates,
                             on_rails=_on_rails,
                         )
                         campaign.characters_json = cls._dump_json(existing_chars)
@@ -4414,7 +4636,11 @@ class ZorkEmulator:
             ch_id = timer_ctx.get("channel_id")
             if msg_id and ch_id:
                 asyncio.ensure_future(
-                    cls._edit_timer_line(ch_id, msg_id, f"\u26a0\ufe0f *Timer expired — {event_description}*")
+                    cls._edit_timer_line(
+                        ch_id,
+                        msg_id,
+                        f"\u26a0\ufe0f *Timer expired — {event_description}*",
+                    )
                 )
         try:
             await cls._execute_timed_event(campaign_id, channel_id, event_description)
@@ -4453,7 +4679,9 @@ class ZorkEmulator:
                 )
                 if latest_turn and latest_turn.kind == "player":
                     if latest_turn.created:
-                        age = (datetime.datetime.utcnow() - latest_turn.created).total_seconds()
+                        age = (
+                            datetime.datetime.utcnow() - latest_turn.created
+                        ).total_seconds()
                         if age < 5:
                             return
 
@@ -4504,10 +4732,14 @@ class ZorkEmulator:
                         state_update = payload.get("state_update", {}) or {}
                         summary_update = payload.get("summary_update")
                         xp_awarded = payload.get("xp_awarded", 0) or 0
-                        player_state_update = payload.get("player_state_update", {}) or {}
+                        player_state_update = (
+                            payload.get("player_state_update", {}) or {}
+                        )
                         character_updates = payload.get("character_updates", {}) or {}
                     except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse timed event JSON: {e} — retrying")
+                        logger.warning(
+                            f"Failed to parse timed event JSON: {e} — retrying"
+                        )
                         response = await gpt.turbo_completion(
                             system_prompt, user_prompt, temperature=0.7, max_tokens=2048
                         )
@@ -4518,26 +4750,35 @@ class ZorkEmulator:
                             if json_text:
                                 try:
                                     payload = cls._parse_json_lenient(json_text)
-                                    narration = payload.get("narration", narration).strip()
+                                    narration = payload.get(
+                                        "narration", narration
+                                    ).strip()
                                     state_update = payload.get("state_update", {}) or {}
                                     summary_update = payload.get("summary_update")
                                     xp_awarded = payload.get("xp_awarded", 0) or 0
-                                    player_state_update = payload.get("player_state_update", {}) or {}
-                                    character_updates = payload.get("character_updates", {}) or {}
+                                    player_state_update = (
+                                        payload.get("player_state_update", {}) or {}
+                                    )
+                                    character_updates = (
+                                        payload.get("character_updates", {}) or {}
+                                    )
                                 except Exception as e2:
-                                    logger.warning(f"Timed event retry also failed: {e2}")
+                                    logger.warning(
+                                        f"Timed event retry also failed: {e2}"
+                                    )
                     except Exception as e:
-                        logger.warning(f"Failed to parse timed event JSON response: {e}")
+                        logger.warning(
+                            f"Failed to parse timed event JSON response: {e}"
+                        )
 
                 if narration.lstrip().startswith("{"):
                     try:
-                        salvage = json.loads(
-                            cls._extract_json(narration) or "{}"
-                        )
+                        salvage = json.loads(cls._extract_json(narration) or "{}")
                         if isinstance(salvage, dict) and salvage:
-                            narration = str(
-                                salvage.get("narration", "")
-                            ).strip() or "The world shifts, but nothing clear emerges."
+                            narration = (
+                                str(salvage.get("narration", "")).strip()
+                                or "The world shifts, but nothing clear emerges."
+                            )
                     except (json.JSONDecodeError, Exception):
                         narration = "The world shifts, but nothing clear emerges."
 
@@ -4558,7 +4799,8 @@ class ZorkEmulator:
                 if character_updates and isinstance(character_updates, dict):
                     existing_chars = cls.get_campaign_characters(campaign)
                     existing_chars = cls._apply_character_updates(
-                        existing_chars, character_updates,
+                        existing_chars,
+                        character_updates,
                         on_rails=_on_rails,
                     )
                     campaign.characters_json = cls._dump_json(existing_chars)
@@ -4581,7 +4823,9 @@ class ZorkEmulator:
                     action_text=action,
                     narration_text=narration,
                 )
-                player_state = cls._apply_state_update(player_state, player_state_update)
+                player_state = cls._apply_state_update(
+                    player_state, player_state_update
+                )
                 active_player.state_json = cls._dump_json(player_state)
 
                 if isinstance(xp_awarded, int) and xp_awarded > 0:
@@ -4708,7 +4952,11 @@ class ZorkEmulator:
             model_state = cls._fit_state_to_budget(model_state, 800)
 
             landmarks = campaign_state.get("landmarks", [])
-            landmarks_text = ", ".join(landmarks) if isinstance(landmarks, list) and landmarks else "none"
+            landmarks_text = (
+                ", ".join(landmarks)
+                if isinstance(landmarks, list) and landmarks
+                else "none"
+            )
 
             # Condensed characters: name + location only, living, max 20
             characters = cls.get_campaign_characters(campaign)
@@ -4738,7 +4986,9 @@ class ZorkEmulator:
                     sc_title = ""
                     if isinstance(scenes, list) and 0 <= cur_sc < len(scenes):
                         sc_title = scenes[cur_sc].get("title", "")
-                    story_progress = f"{ch_title} / {sc_title}" if sc_title else ch_title
+                    story_progress = (
+                        f"{ch_title} / {sc_title}" if sc_title else ch_title
+                    )
 
             map_prompt = (
                 f"CAMPAIGN: {campaign.name}\n"
