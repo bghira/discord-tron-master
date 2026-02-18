@@ -1140,7 +1140,7 @@ class ZorkEmulator:
                 ctx, content, campaign, state, setup_data
             )
         elif phase == "finalize":
-            return await cls._setup_finalize(campaign, state, setup_data)
+            return await cls._setup_finalize(campaign, state, setup_data, user_id=ctx.author.id)
         else:
             # Unknown phase — clear setup and let normal play proceed.
             state.pop("setup_phase", None)
@@ -1459,7 +1459,7 @@ class ZorkEmulator:
             campaign.state_json = cls._dump_json(state)
             campaign.updated = db.func.now()
             db.session.commit()
-            return await cls._setup_finalize(campaign, state, setup_data)
+            return await cls._setup_finalize(campaign, state, setup_data, user_id=ctx.author.id)
         else:
             # Novel stories get extra questions
             state["setup_phase"] = "novel_questions"
@@ -1492,10 +1492,10 @@ class ZorkEmulator:
         campaign.state_json = cls._dump_json(state)
         campaign.updated = db.func.now()
         db.session.commit()
-        return await cls._setup_finalize(campaign, state, setup_data)
+        return await cls._setup_finalize(campaign, state, setup_data, user_id=ctx.author.id)
 
     @classmethod
-    async def _setup_finalize(cls, campaign, state, setup_data) -> str:
+    async def _setup_finalize(cls, campaign, state, setup_data, user_id: int = None) -> str:
         """LLM generates the full world. Populates characters, outline, summary, etc."""
         gpt = GPT()
         variants = setup_data.get("storyline_variants", [])
@@ -1652,6 +1652,24 @@ class ZorkEmulator:
                 narration += f"\nExits: {', '.join(exit_labels)}"
             campaign.last_narration = narration
         db.session.commit()
+
+        # Auto-set the setup creator's character name and start room.
+        if user_id is not None:
+            player = cls.get_or_create_player(campaign.id, user_id, campaign=campaign)
+            player_state = cls.get_player_state(player)
+            main_char = chosen.get("main_character", "")
+            if main_char and not player_state.get("character_name"):
+                player_state["character_name"] = main_char
+            if default_persona and not player_state.get("persona"):
+                player_state["persona"] = cls._trim_text(default_persona, cls.MAX_PERSONA_PROMPT_CHARS)
+            if isinstance(start_room, dict):
+                for key in ("room_title", "room_summary", "room_description", "exits", "location"):
+                    val = start_room.get(key)
+                    if val is not None:
+                        player_state[key] = val
+            player.state_json = cls._dump_json(player_state)
+            player.updated = db.func.now()
+            db.session.commit()
 
         rails_label = "**On-Rails**" if on_rails else "**Freeform**"
         char_count = len(characters) if isinstance(characters, dict) else 0
@@ -3544,6 +3562,20 @@ class ZorkEmulator:
             "a hollow silence answers",
             "the world shifts, but nothing clear emerges",
         )
+        # Build user_id → character_name map for turn labels.
+        _player_names: Dict[int, str] = {}
+        _turn_user_ids = {t.user_id for t in turns if t.user_id is not None}
+        if _turn_user_ids:
+            _all_players = ZorkPlayer.query.filter(
+                ZorkPlayer.campaign_id == campaign.id,
+                ZorkPlayer.user_id.in_(_turn_user_ids),
+            ).all()
+            for p in _all_players:
+                ps = cls.get_player_state(p)
+                name = ps.get("character_name") or ""
+                if name:
+                    _player_names[p.user_id] = name
+
         for turn in turns:
             content = (turn.content or "").strip()
             if not content:
@@ -3554,7 +3586,8 @@ class ZorkEmulator:
                     continue
                 clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
                 clipped = cls._strip_inventory_mentions(clipped)
-                recent_lines.append(f"PLAYER: {clipped}")
+                label = _player_names.get(turn.user_id, "PLAYER")
+                recent_lines.append(f"{label}: {clipped}")
             elif turn.kind == "narrator":
                 # Skip error/fallback narrations.
                 if content.lower() in _ERROR_PHRASES:

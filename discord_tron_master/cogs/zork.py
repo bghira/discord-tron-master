@@ -68,9 +68,21 @@ class Zork(commands.Cog):
             .strip()
         )
 
+    _NARRATION_LINE_FILTERS = ("psychological distress",)
+
+    @staticmethod
+    def _filter_narration(text: str) -> str:
+        lines = text.split("\n")
+        filtered = [
+            line for line in lines
+            if not any(f in line.lower() for f in Zork._NARRATION_LINE_FILTERS)
+        ]
+        return "\n".join(filtered)
+
     async def _send_action_reply(
         self, ctx_like, narration: str, campaign_id: int = None
     ):
+        narration = self._filter_narration(narration)
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:
             msg = await DiscordBot.send_large_message(
