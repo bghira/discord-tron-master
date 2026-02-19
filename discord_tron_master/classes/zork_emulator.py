@@ -1792,7 +1792,15 @@ class ZorkEmulator:
             result_msg += f"**{room_title}**\n{opening}" if room_title else opening
             exits = start_room.get("exits")
             if exits and isinstance(exits, list):
-                result_msg += f"\nExits: {', '.join(exits)}"
+                exit_labels = []
+                for e in exits:
+                    if isinstance(e, dict):
+                        exit_labels.append(
+                            e.get("direction") or e.get("name") or str(e)
+                        )
+                    else:
+                        exit_labels.append(str(e))
+                result_msg += f"\nExits: {', '.join(exit_labels)}"
 
         _zork_log(
             f"CAMPAIGN SETUP FINALIZED campaign={campaign.id}",
