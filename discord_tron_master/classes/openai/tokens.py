@@ -19,7 +19,7 @@ class TokenTester:
 # ── GLM tokenizer (lazy-loaded, CPU-only) ──────────────────────────────
 
 _glm_tokenizer = None
-_GLM_MODEL_ID = "THUDM/glm-4-9b-chat"
+_GLM_MODEL_ID = "zai-org/GLM-5"
 
 
 def _get_glm_tokenizer():
