@@ -1047,7 +1047,9 @@ class ZorkEmulator:
         return bool(state.get("setup_phase"))
 
     @classmethod
-    async def start_campaign_setup(cls, campaign, raw_name: str) -> str:
+    async def start_campaign_setup(
+        cls, campaign, raw_name: str, attachment_summary: str = None
+    ) -> str:
         """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
         gpt = GPT()
 
@@ -1056,7 +1058,8 @@ class ZorkEmulator:
         imdb_text = cls._format_imdb_results(imdb_results)
         _zork_log(
             f"SETUP CLASSIFY campaign={campaign.id}",
-            f"raw_name={raw_name!r}\nIMDB results:\n{imdb_text or '(none)'}",
+            f"raw_name={raw_name!r}\nIMDB results:\n{imdb_text or '(none)'}"
+            f"\nattachment_summary={'yes (' + str(len(attachment_summary)) + ' chars)' if attachment_summary else 'no'}",
         )
 
         imdb_context = ""
@@ -1064,6 +1067,14 @@ class ZorkEmulator:
             imdb_context = (
                 f"\nIMDB search results for '{raw_name}':\n{imdb_text}\n"
                 "Use these results to help identify the work.\n"
+            )
+
+        attachment_context = ""
+        if attachment_summary:
+            attachment_context = (
+                f"\nThe user also uploaded source material. Summary of uploaded text:\n"
+                f"{attachment_summary}\n"
+                "Use this to identify the work.\n"
             )
 
         classify_system = (
@@ -1079,6 +1090,7 @@ class ZorkEmulator:
         classify_user = (
             f"The user wants to play a campaign called: '{raw_name}'.\n"
             f"{imdb_context}"
+            f"{attachment_context}"
             "Is this a known published work? Provide the canonical title and description."
         )
         try:
@@ -1124,6 +1136,8 @@ class ZorkEmulator:
             "work_description": work_desc,
             "imdb_results": imdb_results or [],
         }
+        if attachment_summary:
+            setup_data["attachment_summary"] = attachment_summary
 
         state = cls.get_campaign_state(campaign)
         state["setup_phase"] = "classify_confirm"
