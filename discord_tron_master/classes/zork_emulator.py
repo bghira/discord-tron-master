@@ -4410,7 +4410,15 @@ class ZorkEmulator:
                             or ""
                         )
                         exits = player_state.get("exits")
-                        exits_text = f"\nExits: {', '.join(exits)}" if exits else ""
+                        if exits and isinstance(exits, list):
+                            _el = [
+                                (e.get("direction") or e.get("name") or str(e))
+                                if isinstance(e, dict) else str(e)
+                                for e in exits
+                            ]
+                            exits_text = f"\nExits: {', '.join(_el)}"
+                        else:
+                            exits_text = ""
                         narration = f"{title}\n{desc}{exits_text}"
                         inventory_line = cls._format_inventory(player_state)
                         if inventory_line:
