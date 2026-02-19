@@ -1345,7 +1345,9 @@ class ZorkEmulator:
         return variants_msg
 
     @classmethod
-    async def _setup_generate_storyline_variants(cls, campaign, setup_data) -> str:
+    async def _setup_generate_storyline_variants(
+        cls, campaign, setup_data, user_guidance: str = None
+    ) -> str:
         """LLM generates 2-3 storyline variants, returns formatted message."""
         gpt = GPT()
         is_known = setup_data.get("is_known_work", False)
@@ -1382,13 +1384,22 @@ class ZorkEmulator:
                 "Use this summary to create accurate, faithful storyline variants.\n"
             )
 
+        guidance_context = ""
+        if user_guidance:
+            guidance_context = (
+                f"\nThe user gave this direction for the variants:\n"
+                f"{user_guidance}\n"
+                "Follow these instructions closely when designing the variants.\n"
+            )
+
         if is_known:
             user_prompt = (
                 f"Generate 2-3 storyline variants for an interactive text-adventure campaign "
                 f"based on the {work_type or 'work'}: '{raw_name}'.\n"
                 f"Description: {work_desc}\n"
                 f"{imdb_context}"
-                f"{attachment_context}\n"
+                f"{attachment_context}"
+                f"{guidance_context}\n"
                 f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
                 f"Variant ideas: faithful retelling from a character's perspective, "
                 f"alternate timeline, prequel/sequel, or a 'what-if' divergence.\n"
@@ -1399,6 +1410,7 @@ class ZorkEmulator:
                 f"Generate 2-3 storyline variants for an original text-adventure campaign "
                 f"called '{raw_name}'.\n"
                 f"{attachment_context}"
+                f"{guidance_context}"
                 f"Each variant should have a different tone, central conflict, or protagonist archetype. "
                 f"Be creative and specific with character names and chapter titles."
             )
@@ -1492,21 +1504,40 @@ class ZorkEmulator:
                 lines.append(f"Chapters: {' → '.join(ch_titles)}")
             lines.append("")
 
-        lines.append(f"Reply with **1**, **2**, or **3** to pick your storyline.")
+        lines.append(
+            f"Reply with **1**, **2**, or **3** to pick your storyline, "
+            f"or **retry: <guidance>** to regenerate (e.g. `retry: make it darker`)."
+        )
         return "\n".join(lines)
 
     @classmethod
     async def _setup_handle_storyline_pick(
         cls, ctx, content, campaign, state, setup_data
     ) -> str:
-        """Parse user's choice. Known work → finalize. Novel → novel_questions."""
+        """Parse user's choice. Known work → finalize. Novel → novel_questions.
+        Supports ``retry: <guidance>`` to regenerate variants."""
         choice = content.strip()
         variants = setup_data.get("storyline_variants", [])
+
+        # Handle retry with guidance
+        if choice.lower().startswith("retry"):
+            guidance = choice.split(":", 1)[1].strip() if ":" in choice else ""
+            variants_msg = await cls._setup_generate_storyline_variants(
+                campaign, setup_data, user_guidance=guidance or None
+            )
+            state["setup_data"] = setup_data
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return variants_msg
 
         try:
             idx = int(choice) - 1
         except (ValueError, TypeError):
-            return f"Please reply with a number (1-{len(variants)})."
+            return (
+                f"Please reply with a number (1-{len(variants)}), "
+                f"or **retry: <guidance>** to regenerate."
+            )
 
         if idx < 0 or idx >= len(variants):
             return f"Please reply with a number between 1 and {len(variants)}."
