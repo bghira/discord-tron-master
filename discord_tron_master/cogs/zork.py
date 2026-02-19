@@ -5,7 +5,7 @@ import discord
 
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
-from discord_tron_master.classes.zork_emulator import ZorkEmulator
+from discord_tron_master.classes.zork_emulator import ZorkEmulator, _zork_log
 from discord_tron_master.classes.zork_memory import ZorkMemory
 from discord_tron_master.models.base import db
 from discord_tron_master.models.zork import (
@@ -819,6 +819,10 @@ class Zork(commands.Cog):
                             campaign.state_json = ZorkEmulator._dump_json(state)
                             campaign.updated = db.func.now()
                             db.session.commit()
+                            _zork_log(
+                                f"ATTACHMENT STORED (in-thread) campaign={campaign.id}",
+                                f"summary_len={len(summary)}",
+                            )
                 resolved_campaign_name = campaign.name
             if setup_message:
                 await ctx.send(
@@ -862,12 +866,14 @@ class Zork(commands.Cog):
             setup_message = await ZorkEmulator.start_campaign_setup(
                 campaign, name or thread_name
             )
-            # Handle .txt attachment
+            # Handle .txt attachment — progress messages go to the thread
             att_text = await ZorkEmulator._extract_attachment_text(ctx.message)
             if isinstance(att_text, str) and att_text.startswith("ERROR:"):
                 await thread.send(att_text.replace("ERROR:", "", 1))
             elif att_text:
-                summary = await ZorkEmulator._summarise_long_text(att_text, ctx.message)
+                summary = await ZorkEmulator._summarise_long_text(
+                    att_text, ctx.message, channel=thread
+                )
                 if summary:
                     campaign = ZorkCampaign.query.get(campaign.id)
                     state = ZorkEmulator.get_campaign_state(campaign)
@@ -877,6 +883,10 @@ class Zork(commands.Cog):
                     campaign.state_json = ZorkEmulator._dump_json(state)
                     campaign.updated = db.func.now()
                     db.session.commit()
+                    _zork_log(
+                        f"ATTACHMENT STORED (new-thread) campaign={campaign.id}",
+                        f"summary_len={len(summary)}",
+                    )
             resolved_campaign_name = campaign.name
 
         await ctx.send(f"Created Zork thread: {thread.mention}")

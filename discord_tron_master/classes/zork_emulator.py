@@ -14,6 +14,7 @@ import discord
 import requests
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
+from discord_tron_master.classes.openai.tokens import glm_token_count
 from discord_tron_master.classes.zork_memory import ZorkMemory
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.models.base import db
@@ -73,8 +74,10 @@ class ZorkEmulator:
     PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
     ATTACHMENT_MAX_BYTES = 500_000
-    ATTACHMENT_CHUNK_CHARS = 8_000
-    ATTACHMENT_SUMMARY_BUDGET = 3_000
+    ATTACHMENT_CHUNK_TOKENS = 2_000       # minimum tokens per chunk
+    ATTACHMENT_MODEL_CTX_TOKENS = 200_000 # GLM-5 context window
+    ATTACHMENT_PROMPT_OVERHEAD_TOKENS = 6_000  # reserve for system + user + IMDB + storyline JSON
+    ATTACHMENT_RESPONSE_RESERVE_TOKENS = 4_000 # max_tokens used by finalize response
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
@@ -1785,23 +1788,41 @@ class ZorkEmulator:
         text = text.strip()
         return text if text else None
 
+    ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
+
     @classmethod
-    async def _summarise_long_text(cls, text: str, ctx_message) -> str:
-        """Chunk, summarise in parallel, condense to budget. Returns summary."""
+    async def _summarise_long_text(cls, text: str, ctx_message, channel=None) -> str:
+        """Chunk, summarise in parallel, condense to budget. Returns summary.
+        *channel* overrides ctx_message.channel for progress messages.
+        All sizing uses the GLM tokenizer for accurate token counts."""
         gpt = GPT()
-        budget = cls.ATTACHMENT_SUMMARY_BUDGET
-        chunk_size = cls.ATTACHMENT_CHUNK_CHARS
+        # Budget = whatever the context window can fit alongside the prompt
+        budget_tokens = (
+            cls.ATTACHMENT_MODEL_CTX_TOKENS
+            - cls.ATTACHMENT_PROMPT_OVERHEAD_TOKENS
+            - cls.ATTACHMENT_RESPONSE_RESERVE_TOKENS
+        )
+        min_chunk_tokens = cls.ATTACHMENT_CHUNK_TOKENS
         max_parallel = cls.ATTACHMENT_MAX_PARALLEL
         guard = cls.ATTACHMENT_GUARD_TOKEN
+        progress_channel = channel or ctx_message.channel
 
-        # Step 1 — chunk on paragraph boundaries
+        # Step 1 — token-aware dynamic chunking
+        total_tokens = glm_token_count(text)
+        # Target chunk size: at least min_chunk_tokens, but never more than MAX_CHUNKS
+        target_chunk_tokens = max(min_chunk_tokens, total_tokens // cls.ATTACHMENT_MAX_CHUNKS)
+        # Convert token target to a char estimate for paragraph-boundary splitting
+        # Use measured ratio from this text for accuracy
+        chars_per_tok = len(text) / max(total_tokens, 1)
+        chunk_char_target = int(target_chunk_tokens * chars_per_tok)
+
         paragraphs = text.split("\n\n")
         chunks: List[str] = []
         current_chunk: List[str] = []
         current_len = 0
         for para in paragraphs:
             para_len = len(para)
-            if current_len + para_len + 2 > chunk_size and current_chunk:
+            if current_len + para_len + 2 > chunk_char_target and current_chunk:
                 chunks.append("\n\n".join(current_chunk))
                 current_chunk = [para]
                 current_len = para_len
@@ -1815,15 +1836,22 @@ class ZorkEmulator:
             return ""
 
         # If single chunk within budget, return as-is
-        if len(chunks) == 1 and len(chunks[0]) <= budget:
+        if len(chunks) == 1 and glm_token_count(chunks[0]) <= budget_tokens:
             return chunks[0]
 
         total = len(chunks)
-        status_msg = await ctx_message.channel.send(
+        _zork_log(
+            "ATTACHMENT SUMMARISE",
+            f"text_len={len(text)} total_tokens={total_tokens} "
+            f"chunk_char_target={chunk_char_target} total_chunks={total}",
+        )
+        status_msg = await progress_channel.send(
             f"Summarising uploaded file... [0/{total}]"
         )
 
         # Step 2 — parallel summarise
+        # Scale max_tokens with chunk size so larger chunks get more summary room
+        summary_max_tokens = min(1500, max(800, target_chunk_tokens // 4))
         summarise_system = (
             "Summarise the following text passage for a text-adventure campaign. "
             "Preserve all character names, plot points, locations, and key events. "
@@ -1834,15 +1862,14 @@ class ZorkEmulator:
             try:
                 result = await gpt.turbo_completion(
                     summarise_system, chunk_text,
-                    max_tokens=800, temperature=0.3,
+                    max_tokens=summary_max_tokens, temperature=0.3,
                 )
                 result = (result or "").strip()
                 if guard not in result:
-                    # retry once
                     logger.warning("Guard token missing, retrying chunk")
                     result = await gpt.turbo_completion(
                         summarise_system, chunk_text,
-                        max_tokens=800, temperature=0.3,
+                        max_tokens=summary_max_tokens, temperature=0.3,
                     )
                     result = (result or "").strip()
                     if guard not in result:
@@ -1879,13 +1906,18 @@ class ZorkEmulator:
                 pass
             return ""
 
-        # Step 3 — check total length
+        # Step 3 — check total token length
         joined = "\n\n".join(summaries)
-        if len(joined) <= budget:
+        joined_tokens = glm_token_count(joined)
+        if joined_tokens <= budget_tokens:
+            _zork_log(
+                "ATTACHMENT SUMMARY DONE",
+                f"tokens={joined_tokens} chars={len(joined)} (within budget)",
+            )
             try:
                 file_kb = len(text) // 1024
                 await status_msg.edit(
-                    content=f"Summary complete. ({len(joined)} chars from {file_kb}KB file)"
+                    content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
                 )
                 await asyncio.sleep(5)
                 await status_msg.delete()
@@ -1893,13 +1925,22 @@ class ZorkEmulator:
                 pass
             return joined
 
-        # Step 4 — condensation pass
+        # Step 4 — condensation pass (token-aware)
         num_summaries = len(summaries)
-        target_per = budget // num_summaries
+        target_tokens_per = budget_tokens // num_summaries
+        # Convert per-summary token target to rough char target for the prompt
+        target_chars_per = int(target_tokens_per * chars_per_tok)
 
-        # Sort indices by length descending (longest first)
-        indexed = sorted(enumerate(summaries), key=lambda x: len(x[1]), reverse=True)
-        to_condense = [(i, s) for i, s in indexed if len(s) > target_per]
+        # Sort indices by token count descending (longest first)
+        summary_tok_counts = [glm_token_count(s) for s in summaries]
+        indexed = sorted(
+            enumerate(summaries),
+            key=lambda x: summary_tok_counts[x[0]],
+            reverse=True,
+        )
+        to_condense = [
+            (i, s) for i, s in indexed if summary_tok_counts[i] > target_tokens_per
+        ]
 
         if to_condense:
             condense_total = len(to_condense)
@@ -1913,14 +1954,15 @@ class ZorkEmulator:
 
             async def _condense(idx: int, summary_text: str) -> Tuple[int, str]:
                 condense_system = (
-                    f"Condense this summary to roughly {target_per} characters "
+                    f"Condense this summary to roughly {target_tokens_per} tokens "
+                    f"(~{target_chars_per} characters) "
                     "while preserving all character names, plot points, and locations. "
                     f"End with: {guard}"
                 )
                 try:
                     result = await gpt.turbo_completion(
                         condense_system, summary_text,
-                        max_tokens=500, temperature=0.2,
+                        max_tokens=target_tokens_per + 50, temperature=0.2,
                     )
                     result = (result or "").strip()
                     if guard not in result:
@@ -1946,14 +1988,25 @@ class ZorkEmulator:
                     pass
 
         joined = "\n\n".join(summaries)
-        if len(joined) > budget:
-            joined = joined[: budget - len("... [truncated]")] + "... [truncated]"
+        joined_tokens = glm_token_count(joined)
+        # Hard-truncate if still over budget (rare after condensation)
+        if joined_tokens > budget_tokens:
+            # Trim by chars using the ratio — slightly conservative
+            max_chars = int(budget_tokens * chars_per_tok * 0.9)
+            if len(joined) > max_chars:
+                joined = joined[: max_chars - len("... [truncated]")] + "... [truncated]"
+                joined_tokens = glm_token_count(joined)
 
         # Step 5 — final edit + cleanup
+        _zork_log(
+            "ATTACHMENT SUMMARY DONE",
+            f"tokens={joined_tokens} chars={len(joined)} chunks={total} "
+            f"condensed={len(to_condense) if to_condense else 0}",
+        )
         try:
             file_kb = len(text) // 1024
             await status_msg.edit(
-                content=f"Summary complete. ({len(joined)} chars from {file_kb}KB file)"
+                content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
             )
             await asyncio.sleep(5)
             await status_msg.delete()
