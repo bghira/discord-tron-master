@@ -361,6 +361,9 @@ class Zork(commands.Cog):
             f"- `{prefix}zork on-rails` show on-rails narrative mode status\n"
             f"- `{prefix}zork on-rails enable|disable` lock/unlock story to the chapter outline\n"
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
+            f"- `{prefix}zork speed [value]` view or set game speed multiplier (0.1–10.0, creator/admin only)\n"
+            f"- `{prefix}zork roster` view the NPC character roster with portraits\n"
+            f"- `{prefix}zork roster <name> portrait` regenerate portrait for a character\n"
             f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
@@ -369,6 +372,9 @@ class Zork(commands.Cog):
             f"- `{prefix}zork map` draw an ASCII map for your location\n"
             f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
             f"- `{prefix}zork disable` disable adventure mode in this channel\n"
+            f"\n**In-game shortcuts** (type directly, no prefix):\n"
+            f"- `calendar` / `cal` / `events` — view game time & upcoming events\n"
+            f"- `roster` / `characters` / `npcs` — view the NPC roster\n"
         )
         await DiscordBot.send_large_message(ctx, message)
 
@@ -1133,6 +1139,134 @@ class Zork(commands.Cog):
                 extra = f" | party: {party_status}" if party_status else ""
                 lines.append(f"- <@{player.user_id}>: {room} ({status}{extra})")
             await DiscordBot.send_large_message(ctx, "Locations:\n" + "\n".join(lines))
+
+    @zork.command(name="speed")
+    async def zork_speed(self, ctx, *, value: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            if value is None:
+                current = ZorkEmulator.get_speed_multiplier(campaign)
+                await ctx.send(
+                    f"Current speed multiplier: `{current}x` for campaign `{campaign.name}`.\n"
+                    f"Use `{self._prefix()}zork speed <value>` to change (0.1–10.0)."
+                )
+                return
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+                await ctx.send(
+                    "Only the campaign creator or an Image Admin can change the speed multiplier."
+                )
+                return
+            try:
+                multiplier = float(value.strip())
+            except ValueError:
+                await ctx.send("Speed multiplier must be a number (0.1–10.0).")
+                return
+            if multiplier < 0.1 or multiplier > 10.0:
+                await ctx.send("Speed multiplier must be between 0.1 and 10.0.")
+                return
+            ZorkEmulator.set_speed_multiplier(campaign, multiplier)
+            await ctx.send(f"Speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`.")
+
+    @zork.command(name="roster")
+    async def zork_roster(self, ctx, *, args: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            characters = ZorkEmulator.get_campaign_characters(campaign)
+
+            # Check for "roster <name> portrait" subcommand.
+            if args and args.strip().lower().endswith(" portrait"):
+                name_query = args.strip()[: -len(" portrait")].strip().lower()
+                if not name_query:
+                    await ctx.send("Usage: `!zork roster <name> portrait`")
+                    return
+                found_slug = None
+                for slug, char in characters.items():
+                    char_name = str(char.get("name") or "").strip().lower()
+                    if slug.lower() == name_query or char_name == name_query:
+                        found_slug = slug
+                        break
+                if found_slug is None:
+                    # Fuzzy: check if query is contained in name or slug.
+                    for slug, char in characters.items():
+                        char_name = str(char.get("name") or "").strip().lower()
+                        if name_query in slug.lower() or name_query in char_name:
+                            found_slug = slug
+                            break
+                if found_slug is None:
+                    await ctx.send(f"Character `{name_query}` not found in roster.")
+                    return
+                char = characters[found_slug]
+                appearance = str(char.get("appearance") or "").strip()
+                if not appearance:
+                    await ctx.send(
+                        f"Character `{char.get('name', found_slug)}` has no appearance description for portrait generation."
+                    )
+                    return
+                ok = await ZorkEmulator._enqueue_character_portrait(
+                    ctx, campaign, found_slug, char.get("name", found_slug), appearance,
+                )
+                if ok:
+                    await ctx.send(
+                        f"Portrait generation queued for `{char.get('name', found_slug)}`."
+                    )
+                else:
+                    await ctx.send("Failed to queue portrait generation (no GPU workers available).")
+                return
+
+            # Display roster.
+            if not characters:
+                await ctx.send("No characters in the roster yet.")
+                return
+            lines = ["**Character Roster:**"]
+            for slug, char in characters.items():
+                name = char.get("name", slug)
+                loc = char.get("location", "unknown")
+                status = char.get("current_status", "")
+                bg = char.get("background", "")
+                origin = bg.split(".")[0].strip() if bg else ""
+                portrait = char.get("image_url", "")
+                deceased = char.get("deceased_reason")
+                entry = f"- **{name}** ({slug})"
+                if deceased:
+                    entry += f" [DECEASED: {deceased}]"
+                else:
+                    entry += f" — {loc}"
+                    if status:
+                        entry += f" | {status}"
+                if origin:
+                    entry += f"\n  *{origin}.*"
+                if portrait:
+                    entry += f"\n  Portrait: {portrait}"
+                lines.append(entry)
+            await DiscordBot.send_large_message(ctx, "\n".join(lines))
 
     @zork.command(name="map")
     async def zork_map(self, ctx):

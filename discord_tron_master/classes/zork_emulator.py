@@ -111,6 +111,9 @@ class ZorkEmulator:
         "current_scene",
         "setup_phase",
         "setup_data",
+        "speed_multiplier",
+        "game_time",
+        "calendar",
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
 
@@ -149,6 +152,7 @@ class ZorkEmulator:
         "The emulator handles removing from the giver and adding to the recipient automatically. "
         "Do NOT use inventory_remove for the given item — give_item handles both sides. "
         "Only use when both players are in the same room per PARTY_SNAPSHOT. Only one item per turn.)\n"
+        "- calendar_update: object (optional; see CALENDAR & GAME TIME SYSTEM below)\n"
         "- character_updates: object (optional; keyed by stable slug IDs like 'marcus-blackwell'. "
         "Use this to create or update NPCs in the world character tracker. "
         "Slug IDs must be lowercase-hyphenated, derived from the character name, and stable across turns. "
@@ -293,6 +297,38 @@ class ZorkEmulator:
         "No other keys alongside tool_call.\n"
         "Returns full expanded chapter with all scene details.\n"
         "Use when you need details about a chapter not fully shown in STORY_CONTEXT.\n"
+    )
+
+    CALENDAR_TOOL_PROMPT = (
+        "\nCALENDAR & GAME TIME SYSTEM:\n"
+        "The campaign tracks in-game time via CURRENT_GAME_TIME shown in the user prompt.\n"
+        "Every turn, you MUST advance game_time in state_update by a plausible amount "
+        "(minutes for quick actions, hours for travel, etc.). "
+        "Scale the advance by SPEED_MULTIPLIER — at 2x, time passes roughly twice as fast per turn.\n"
+        "Update these fields in state_update:\n"
+        '- "game_time": {"day": int, "hour": int (0-23), "minute": int (0-59), '
+        '"period": "morning"|"afternoon"|"evening"|"night", '
+        '"date_label": "Day N, Period"}\n'
+        "Advance hour/minute naturally; when hour >= 24, increment day and wrap hour.\n"
+        "Set period based on hour: 5-11=morning, 12-16=afternoon, 17-20=evening, 21-4=night.\n\n"
+        "You may also return a calendar_update key (object) to manage scheduled events:\n"
+        '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
+        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str} '
+        "and each remove entry is a string matching an event name.\n"
+        "The harness enforces max 10 calendar events and auto-prunes expired ones.\n"
+        "Use calendar events for approaching deadlines, NPC appointments, world events, "
+        "and anything with narrative timing pressure.\n"
+    )
+
+    ROSTER_PROMPT = (
+        "\nCHARACTER ROSTER & PORTRAITS:\n"
+        "The harness maintains a character roster (WORLD_CHARACTERS). "
+        "When you create or update a character via character_updates, the 'appearance' field "
+        "is used by the harness to auto-generate a portrait image. Write 'appearance' as a "
+        "detailed visual description suitable for image generation: physical features, clothing, "
+        "distinguishing marks, pose, and art style cues. Keep it 1-3 sentences, "
+        "70-150 words, vivid and concrete.\n"
+        "Do NOT include image_url in character_updates — the harness manages that field.\n"
     )
 
     MAP_SYSTEM_PROMPT = (
@@ -2787,6 +2823,24 @@ class ZorkEmulator:
         return prompt
 
     @classmethod
+    def _strip_narration_footer(cls, text: str) -> str:
+        """Remove trailing '---' section from narration if it contains XP info.
+
+        Models sometimes echo the debug footer (XP Awarded, State Update, etc.)
+        into the narration field.  Storing it causes the model to repeat it on
+        every subsequent turn because the footer leaks into RECENT_TURNS context.
+        """
+        if not text:
+            return text
+        idx = text.rfind("---")
+        if idx == -1:
+            return text
+        tail = text[idx:]
+        if "xp" in tail.lower():
+            return text[:idx].rstrip()
+        return text
+
+    @classmethod
     def _format_inventory(cls, player_state: Dict[str, object]) -> Optional[str]:
         if not isinstance(player_state, dict):
             return None
@@ -3654,6 +3708,152 @@ class ZorkEmulator:
         return existing
 
     @classmethod
+    def _apply_calendar_update(
+        cls,
+        campaign_state: Dict[str, object],
+        calendar_update: dict,
+    ) -> Dict[str, object]:
+        """Process calendar add/remove ops, enforce max 10 events, prune expired."""
+        if not isinstance(calendar_update, dict):
+            return campaign_state
+        calendar = list(campaign_state.get("calendar") or [])
+        game_time = campaign_state.get("game_time") or {}
+        current_day = game_time.get("day", 1)
+        current_hour = game_time.get("hour", 8)
+
+        # Remove named events.
+        to_remove = calendar_update.get("remove")
+        if isinstance(to_remove, list):
+            remove_set = {str(n).strip().lower() for n in to_remove if n}
+            calendar = [
+                e for e in calendar
+                if str(e.get("name", "")).strip().lower() not in remove_set
+            ]
+
+        # Add new events.
+        to_add = calendar_update.get("add")
+        if isinstance(to_add, list):
+            for entry in to_add:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    continue
+                event = {
+                    "name": name,
+                    "time_remaining": entry.get("time_remaining", 1),
+                    "time_unit": entry.get("time_unit", "days"),
+                    "created_day": current_day,
+                    "created_hour": current_hour,
+                    "description": str(entry.get("description") or "")[:200],
+                }
+                calendar.append(event)
+
+        # Auto-prune expired: events with time_remaining <= 0.
+        calendar = [
+            e for e in calendar
+            if not (
+                isinstance(e.get("time_remaining"), (int, float))
+                and e["time_remaining"] <= 0
+            )
+        ]
+
+        # Enforce max 10 events (keep the newest).
+        if len(calendar) > 10:
+            calendar = calendar[-10:]
+
+        campaign_state["calendar"] = calendar
+        return campaign_state
+
+    @classmethod
+    def _compose_character_portrait_prompt(cls, name: str, appearance: str) -> str:
+        """Build an image-generation prompt from character name + appearance."""
+        prompt_parts = [
+            f"Character portrait of {name}.",
+            appearance.strip() if appearance else "",
+            "single character",
+            "centered composition",
+            "detailed fantasy illustration",
+        ]
+        composed = " ".join([p for p in prompt_parts if p])
+        composed = re.sub(r"\s+", " ", composed).strip()
+        return cls._trim_text(composed, 900)
+
+    @classmethod
+    async def _enqueue_character_portrait(
+        cls,
+        ctx,
+        campaign: ZorkCampaign,
+        character_slug: str,
+        name: str,
+        appearance: str,
+    ) -> bool:
+        """Queue portrait generation for an NPC character."""
+        if not appearance or not appearance.strip():
+            return False
+        if not cls._gpu_worker_available():
+            return False
+        discord_wrapper = DiscordBot.get_instance()
+        if discord_wrapper is None or discord_wrapper.bot is None:
+            return False
+        generator = discord_wrapper.bot.get_cog("Generate")
+        if generator is None:
+            return False
+
+        composed_prompt = cls._compose_character_portrait_prompt(name, appearance)
+        campaign_state = cls.get_campaign_state(campaign)
+        selected_model = campaign_state.get("avatar_image_model")
+        if not isinstance(selected_model, str) or not selected_model.strip():
+            selected_model = cls.DEFAULT_AVATAR_IMAGE_MODEL
+
+        cfg = AppConfig()
+        user_id = getattr(getattr(ctx, "author", None), "id", 0)
+        user_config = cfg.get_user_config(user_id=user_id)
+        user_config["auto_model"] = False
+        user_config["model"] = selected_model
+        user_config["steps"] = 16
+        user_config["guidance_scaling"] = 3.0
+        user_config["guidance_scale"] = 3.0
+        user_config["resolution"] = {"width": 768, "height": 768}
+
+        try:
+            await generator.generate_from_user_config(
+                ctx=ctx,
+                user_config=user_config,
+                user_id=user_id,
+                prompt=composed_prompt,
+                job_metadata={
+                    "zork_scene": True,
+                    "suppress_image_reactions": True,
+                    "suppress_image_details": True,
+                    "zork_store_character_portrait": True,
+                    "zork_campaign_id": campaign.id,
+                    "zork_character_slug": character_slug,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue character portrait for {character_slug}: {e}")
+            return False
+        return True
+
+    @classmethod
+    def record_character_portrait_url(
+        cls, campaign_id: int, character_slug: str, image_url: str
+    ) -> bool:
+        """Store a portrait URL on a character in characters_json."""
+        campaign = ZorkCampaign.query.get(campaign_id)
+        if campaign is None:
+            return False
+        characters = cls.get_campaign_characters(campaign)
+        if character_slug not in characters:
+            return False
+        characters[character_slug]["image_url"] = image_url
+        campaign.characters_json = cls._dump_json(characters)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
     def _build_characters_for_prompt(
         cls,
         characters: Dict[str, dict],
@@ -3681,8 +3881,8 @@ class ZorkEmulator:
             is_deceased = bool(char.get("deceased_reason"))
 
             if not is_deceased and player_location and char_location == player_location:
-                # Full record for nearby characters.
-                entry = dict(char)
+                # Full record for nearby characters (strip image_url — harness-managed).
+                entry = {k: v for k, v in char.items() if k != "image_url"}
                 entry["_slug"] = slug
                 nearby.append(entry)
             elif char_name in recent_lower or slug in recent_lower:
@@ -3777,6 +3977,31 @@ class ZorkEmulator:
         db.session.commit()
         if not enabled:
             cls.cancel_pending_timer(campaign.id)
+        return True
+
+    @classmethod
+    def get_speed_multiplier(cls, campaign: Optional[ZorkCampaign]) -> float:
+        if campaign is None:
+            return 1.0
+        campaign_state = cls.get_campaign_state(campaign)
+        raw = campaign_state.get("speed_multiplier", 1.0)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 1.0
+
+    @classmethod
+    def set_speed_multiplier(
+        cls, campaign: Optional[ZorkCampaign], multiplier: float
+    ) -> bool:
+        if campaign is None:
+            return False
+        multiplier = max(0.1, min(10.0, float(multiplier)))
+        campaign_state = cls.get_campaign_state(campaign)
+        campaign_state["speed_multiplier"] = multiplier
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
         return True
 
     @classmethod
@@ -3918,6 +4143,13 @@ class ZorkEmulator:
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
         state = cls.get_campaign_state(campaign)
         state = cls._scrub_inventory_from_state(state)
+        # Seed game_time if missing.
+        if "game_time" not in state:
+            state["game_time"] = {
+                "day": 1, "hour": 8, "minute": 0,
+                "period": "morning", "date_label": "Day 1, Morning",
+            }
+            campaign.state_json = cls._dump_json(state)
         guardrails_enabled = bool(state.get("guardrails_enabled", False))
         model_state = cls._build_model_state(state)
         model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
@@ -3994,6 +4226,7 @@ class ZorkEmulator:
                         continue
                     clipped_lines.append(line)
                 clipped = "\n".join(clipped_lines).strip()
+                clipped = cls._strip_narration_footer(clipped)
                 if not clipped:
                     continue
                 clipped = cls._trim_text(clipped, cls.MAX_TURN_CHARS)
@@ -4012,6 +4245,9 @@ class ZorkEmulator:
         story_context = cls._build_story_context(state)
         on_rails = bool(state.get("on_rails", False))
 
+        _game_time = state.get("game_time", {})
+        _speed_mult = state.get("speed_multiplier", 1.0)
+        _calendar = state.get("calendar", [])
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
@@ -4020,6 +4256,9 @@ class ZorkEmulator:
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
             f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+            f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
+            f"SPEED_MULTIPLIER: {_speed_mult}\n"
+            f"CALENDAR: {cls._dump_json(_calendar)}\n"
         )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
@@ -4048,6 +4287,8 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
         if story_context:
             system_prompt = f"{system_prompt}{cls.STORY_OUTLINE_TOOL_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.CALENDAR_TOOL_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
         return system_prompt, user_prompt
 
     @staticmethod
@@ -4474,6 +4715,60 @@ class ZorkEmulator:
                         db.session.commit()
                         return narration
 
+                    # --- Intercepted: calendar ---
+                    if action_clean in ("calendar", "cal", "events"):
+                        campaign_state = cls.get_campaign_state(campaign)
+                        game_time = campaign_state.get("game_time", {})
+                        calendar = campaign_state.get("calendar", [])
+                        date_label = game_time.get(
+                            "date_label",
+                            f"Day {game_time.get('day', '?')}, {game_time.get('period', '?').title()}",
+                        )
+                        lines = [f"**Game Time:** {date_label}"]
+                        if calendar:
+                            lines.append("**Upcoming Events:**")
+                            for ev in calendar:
+                                remaining = ev.get("time_remaining", "?")
+                                unit = ev.get("time_unit", "?")
+                                desc = ev.get("description", "")
+                                lines.append(
+                                    f"- **{ev.get('name', 'Unknown')}** — {remaining} {unit} remaining"
+                                    + (f" ({desc})" if desc else "")
+                                )
+                        else:
+                            lines.append("No upcoming events.")
+                        narration = "\n".join(lines)
+                        return narration
+
+                    # --- Intercepted: roster ---
+                    if action_clean in ("roster", "characters", "npcs"):
+                        characters = cls.get_campaign_characters(campaign)
+                        if not characters:
+                            return "No characters in the roster yet."
+                        lines = ["**Character Roster:**"]
+                        for slug, char in characters.items():
+                            name = char.get("name", slug)
+                            loc = char.get("location", "unknown")
+                            status = char.get("current_status", "")
+                            bg = char.get("background", "")
+                            origin = bg.split(".")[0].strip() if bg else ""
+                            portrait = char.get("image_url", "")
+                            deceased = char.get("deceased_reason")
+                            entry = f"- **{name}** ({slug})"
+                            if deceased:
+                                entry += f" [DECEASED: {deceased}]"
+                            else:
+                                entry += f" — {loc}"
+                                if status:
+                                    entry += f" | {status}"
+                            if origin:
+                                entry += f"\n  *{origin}.*"
+                            if portrait:
+                                entry += f"\n  Portrait: {portrait}"
+                            lines.append(entry)
+                        narration = "\n".join(lines)
+                        return narration
+
                     turns = cls.get_recent_turns(campaign.id)
                     party_snapshot = cls._build_party_snapshot_for_prompt(
                         campaign, player, player_state
@@ -4623,7 +4918,10 @@ class ZorkEmulator:
                                     delay_seconds = int(raw_delay)
                                 except (TypeError, ValueError):
                                     delay_seconds = 60
-                                delay_seconds = max(30, min(300, delay_seconds))
+                                _speed = cls.get_speed_multiplier(campaign)
+                                if _speed > 0:
+                                    delay_seconds = int(delay_seconds / _speed)
+                                delay_seconds = max(15, min(300, delay_seconds))
                                 event_description = str(
                                     first_payload.get("event_description")
                                     or "Something happens."
@@ -4747,6 +5045,7 @@ class ZorkEmulator:
                     scene_image_prompt = None
                     character_updates = {}
                     give_item = None
+                    calendar_update = None
                     timer_scheduled_delay = None
                     timer_scheduled_event = None
                     timer_scheduled_interruptible = True
@@ -4767,6 +5066,7 @@ class ZorkEmulator:
                                 payload.get("character_updates", {}) or {}
                             )
                             give_item = payload.get("give_item")
+                            calendar_update = payload.get("calendar_update")
 
                             # Inline timed event fields.
                             inline_timer_delay = payload.get("set_timer_delay")
@@ -4790,7 +5090,10 @@ class ZorkEmulator:
                                         t_delay = int(inline_timer_delay)
                                     except (TypeError, ValueError):
                                         t_delay = 60
-                                    t_delay = max(30, min(300, t_delay))
+                                    _speed = cls.get_speed_multiplier(campaign)
+                                    if _speed > 0:
+                                        t_delay = int(t_delay / _speed)
+                                    t_delay = max(15, min(300, t_delay))
                                     t_event = str(inline_timer_event).strip()[:500]
                                     t_interruptible = bool(
                                         payload.get("set_timer_interruptible", True)
@@ -4864,6 +5167,7 @@ class ZorkEmulator:
                                         character_updates = (
                                             payload.get("character_updates", {}) or {}
                                         )
+                                        calendar_update = payload.get("calendar_update")
                                     except Exception as e2:
                                         logger.warning(
                                             f"Retry also failed to parse JSON: {e2}"
@@ -4934,6 +5238,7 @@ class ZorkEmulator:
                     _on_rails = bool(campaign_state.get("on_rails", False))
                     if character_updates and isinstance(character_updates, dict):
                         existing_chars = cls.get_campaign_characters(campaign)
+                        _pre_slugs = set(existing_chars.keys())
                         existing_chars = cls._apply_character_updates(
                             existing_chars,
                             character_updates,
@@ -4944,6 +5249,24 @@ class ZorkEmulator:
                             f"CHARACTER UPDATES campaign={campaign.id}",
                             json.dumps(character_updates, indent=2),
                         )
+                        # Auto-generate portraits for new characters with appearance.
+                        for _slug in character_updates:
+                            if _slug not in _pre_slugs and _slug in existing_chars:
+                                _char = existing_chars[_slug]
+                                _appearance = str(_char.get("appearance") or "").strip()
+                                if _appearance and not _char.get("image_url"):
+                                    _char_name = _char.get("name", _slug)
+                                    asyncio.ensure_future(
+                                        cls._enqueue_character_portrait(
+                                            ctx, campaign, _slug, _char_name, _appearance,
+                                        )
+                                    )
+
+                    if calendar_update and isinstance(calendar_update, dict):
+                        campaign_state = cls._apply_calendar_update(
+                            campaign_state, calendar_update
+                        )
+                        campaign.state_json = cls._dump_json(campaign_state)
 
                     if summary_update:
                         summary_update = summary_update.strip()
@@ -5073,6 +5396,7 @@ class ZorkEmulator:
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
 
+                    narration = cls._strip_narration_footer(narration)
                     inventory_line = (
                         cls._format_inventory(player_state) or "Inventory: empty"
                     )
@@ -5288,6 +5612,7 @@ class ZorkEmulator:
                 xp_awarded = 0
                 player_state_update = {}
                 character_updates = {}
+                calendar_update = None
 
                 json_text = cls._extract_json(response)
                 if json_text:
@@ -5301,6 +5626,7 @@ class ZorkEmulator:
                             payload.get("player_state_update", {}) or {}
                         )
                         character_updates = payload.get("character_updates", {}) or {}
+                        calendar_update = payload.get("calendar_update")
                     except json.JSONDecodeError as e:
                         logger.warning(
                             f"Failed to parse timed event JSON: {e} — retrying"
@@ -5327,6 +5653,7 @@ class ZorkEmulator:
                                     character_updates = (
                                         payload.get("character_updates", {}) or {}
                                     )
+                                    calendar_update = payload.get("calendar_update")
                                 except Exception as e2:
                                     logger.warning(
                                         f"Timed event retry also failed: {e2}"
@@ -5363,6 +5690,7 @@ class ZorkEmulator:
                 _on_rails = bool(campaign_state.get("on_rails", False))
                 if character_updates and isinstance(character_updates, dict):
                     existing_chars = cls.get_campaign_characters(campaign)
+                    _pre_slugs = set(existing_chars.keys())
                     existing_chars = cls._apply_character_updates(
                         existing_chars,
                         character_updates,
@@ -5373,6 +5701,29 @@ class ZorkEmulator:
                         f"CHARACTER UPDATES (timed event) campaign={campaign.id}",
                         json.dumps(character_updates, indent=2),
                     )
+                    # Auto-generate portraits for new characters with appearance.
+                    _channel_obj = await DiscordBot.get_instance().find_channel(channel_id) if DiscordBot.get_instance() else None
+                    if _channel_obj is not None:
+                        _synth_ctx = cls._build_synthetic_generation_context(
+                            _channel_obj, active_player.user_id
+                        )
+                        for _slug in character_updates:
+                            if _slug not in _pre_slugs and _slug in existing_chars:
+                                _char = existing_chars[_slug]
+                                _appearance = str(_char.get("appearance") or "").strip()
+                                if _appearance and not _char.get("image_url"):
+                                    _char_name = _char.get("name", _slug)
+                                    asyncio.ensure_future(
+                                        cls._enqueue_character_portrait(
+                                            _synth_ctx, campaign, _slug, _char_name, _appearance,
+                                        )
+                                    )
+
+                if calendar_update and isinstance(calendar_update, dict):
+                    campaign_state = cls._apply_calendar_update(
+                        campaign_state, calendar_update
+                    )
+                    campaign.state_json = cls._dump_json(campaign_state)
 
                 if summary_update:
                     summary_update = summary_update.strip()
@@ -5396,6 +5747,7 @@ class ZorkEmulator:
                 if isinstance(xp_awarded, int) and xp_awarded > 0:
                     active_player.xp += xp_awarded
 
+                narration = cls._strip_narration_footer(narration)
                 campaign.last_narration = narration
                 campaign.updated = db.func.now()
                 active_player.updated = db.func.now()

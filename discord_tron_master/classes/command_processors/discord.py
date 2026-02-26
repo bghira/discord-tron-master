@@ -24,6 +24,7 @@ ZORK_SCENE_FLAG_KEYS = {
 ZORK_STORE_FLAG_KEYS = {
     "zork_store_image",
     "zork_store_avatar",
+    "zork_store_character_portrait",
 }
 
 
@@ -229,6 +230,23 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
                 image_url=image_url,
                 avatar_prompt=arguments.get("image_prompt"),
             )
+
+    store_character_portrait = _is_truthy(
+        _find_first_key(arguments, "zork_store_character_portrait")
+    ) or _is_truthy(_find_first_key(data, "zork_store_character_portrait"))
+    if store_character_portrait and campaign_id:
+        character_slug = _find_first_key(arguments, "zork_character_slug")
+        if character_slug is None:
+            character_slug = _find_first_key(data, "zork_character_slug")
+        if isinstance(character_slug, str) and character_slug.strip():
+            app = AppConfig.get_flask()
+            if app is not None:
+                with app.app_context():
+                    ZorkEmulator.record_character_portrait_url(
+                        campaign_id=campaign_id,
+                        character_slug=character_slug.strip(),
+                        image_url=image_url,
+                    )
 
 
 def _is_zork_enabled_thread_channel(channel, data) -> bool:
