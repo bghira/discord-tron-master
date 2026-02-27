@@ -330,7 +330,23 @@ class ZorkEmulator:
         '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
         '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str} '
         "and each remove entry is a string matching an event name.\n"
-        "The harness enforces max 10 calendar events and auto-prunes expired ones.\n"
+        "CALENDAR EVENT LIFECYCLE:\n"
+        "Events should progress through phases based on time_remaining vs game_time:\n"
+        "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
+        "signs/clues reference it). Decrement time_remaining in calendar_update.add (re-add with updated value).\n"
+        "2. IMMINENT — time_remaining is 1 or less. Actively warn the player: NPCs urge action, "
+        "the environment reflects urgency. Narrate pressure to act. The player should feel they need to DO something.\n"
+        "3. OVERDUE — time_remaining reaches 0 or below. Do NOT remove the event. Instead, "
+        "set time_remaining to a negative number and narrate consequences escalating. "
+        "NPCs express disappointment, opportunities narrow, penalties mount. "
+        "The event stays on the calendar as a visible reminder of what the player neglected.\n"
+        "4. RESOLVED — ONLY remove an event when the player has DIRECTLY DEALT WITH IT "
+        "(attended, completed, deliberately abandoned) and the outcome has been narrated. "
+        "Do NOT silently prune events. Do NOT remove events just because they are overdue.\n\n"
+        "CRITICAL — calendar_update.remove rules:\n"
+        "- ONLY remove an event when it has been RESOLVED through player action in the current narration.\n"
+        "- NEVER remove events because time passed or they feel old. Overdue events stay and get worse.\n"
+        "- If you are unsure whether an event should be removed, do NOT remove it.\n"
         "Use calendar events for approaching deadlines, NPC appointments, world events, "
         "and anything with narrative timing pressure.\n"
     )
@@ -3764,14 +3780,17 @@ class ZorkEmulator:
                 }
                 calendar.append(event)
 
-        # Auto-prune expired: events with time_remaining <= 0.
-        calendar = [
-            e for e in calendar
-            if not (
-                isinstance(e.get("time_remaining"), (int, float))
-                and e["time_remaining"] <= 0
-            )
-        ]
+        # Allow re-adds to update existing events (e.g. decrement time_remaining).
+        if isinstance(to_add, list):
+            seen_names = set()
+            deduped = []
+            for e in reversed(calendar):
+                key = str(e.get("name", "")).strip().lower()
+                if key in seen_names:
+                    continue
+                seen_names.add(key)
+                deduped.append(e)
+            calendar = list(reversed(deduped))
 
         # Enforce max 10 events (keep the newest).
         if len(calendar) > 10:
