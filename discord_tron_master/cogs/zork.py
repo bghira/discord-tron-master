@@ -1337,6 +1337,7 @@ class Zork(commands.Cog):
                 channel.enabled = True
                 channel.updated = db.func.now()
                 db.session.commit()
+                ZorkMemory.delete_campaign_embeddings(new_campaign.id)
                 await ctx.send(
                     f"Channel reset to fresh campaign `{new_campaign.name}` (shared campaign left untouched)."
                 )

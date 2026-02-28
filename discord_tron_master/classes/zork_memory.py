@@ -10,7 +10,7 @@ import os
 import sqlite3
 import struct
 import threading
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS turn_embeddings (
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_te_campaign ON turn_embeddings(campaign_id);
+
+CREATE TABLE IF NOT EXISTS manual_memories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL,
+    category    TEXT    NOT NULL,
+    term        TEXT    NOT NULL,
+    content     TEXT    NOT NULL,
+    embedding   BLOB    NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mm_campaign ON manual_memories(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_mm_campaign_category ON manual_memories(campaign_id, category);
+CREATE INDEX IF NOT EXISTS idx_mm_campaign_term ON manual_memories(campaign_id, term);
 """
 
 
@@ -165,22 +178,190 @@ class ZorkMemory:
             return []
 
     # ------------------------------------------------------------------
+    # Manual memories (category keyed)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_key(value: str) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    @classmethod
+    def list_manual_memory_terms(
+        cls,
+        campaign_id: int,
+        wildcard: str = "%",
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        """List stored manual-memory terms/categories using SQLite wildcard matching."""
+        try:
+            conn = cls._get_conn()
+            pattern = str(wildcard or "%").strip()
+            if not pattern:
+                pattern = "%"
+            pattern = pattern.replace("*", "%")
+            if "%" not in pattern and "_" not in pattern:
+                pattern = f"%{pattern}%"
+            rows = conn.execute(
+                """
+                SELECT term, category, COUNT(*) AS n, MAX(created_at) AS last_at
+                FROM manual_memories
+                WHERE campaign_id = ?
+                  AND (term LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')
+                GROUP BY term, category
+                ORDER BY n DESC, last_at DESC
+                LIMIT ?
+                """,
+                (campaign_id, pattern, pattern, max(1, int(limit))),
+            ).fetchall()
+            out: List[Dict[str, object]] = []
+            for term, category, n, last_at in rows:
+                out.append(
+                    {
+                        "term": str(term or ""),
+                        "category": str(category or ""),
+                        "count": int(n or 0),
+                        "last_at": str(last_at or ""),
+                    }
+                )
+            return out
+        except Exception:
+            logger.exception(
+                "Zork memory: list_manual_memory_terms failed for campaign %s",
+                campaign_id,
+            )
+            return []
+
+    @classmethod
+    def store_manual_memory(
+        cls,
+        campaign_id: int,
+        *,
+        category: str,
+        content: str,
+        term: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Store a curated manual memory under a category/term with dedupe checks."""
+        try:
+            category_clean = cls._normalize_key(category)
+            content_clean = " ".join(str(content or "").strip().split())
+            term_clean = cls._normalize_key(term or category_clean)
+
+            if not category_clean:
+                return False, "missing_category"
+            if not content_clean:
+                return False, "missing_content"
+            if len(content_clean) > 1200:
+                content_clean = content_clean[:1200].rstrip()
+
+            conn = cls._get_conn()
+            existing_rows = conn.execute(
+                """
+                SELECT content
+                FROM manual_memories
+                WHERE campaign_id = ? AND category = ?
+                ORDER BY id DESC
+                LIMIT 200
+                """,
+                (campaign_id, category_clean),
+            ).fetchall()
+            content_l = content_clean.lower()
+            for (existing_content,) in existing_rows:
+                existing_l = str(existing_content or "").strip().lower()
+                if not existing_l:
+                    continue
+                if existing_l == content_l:
+                    return False, "duplicate_exact"
+                if content_l in existing_l or existing_l in content_l:
+                    return False, "duplicate_overlap"
+
+            blob = _embed(content_clean)
+            conn.execute(
+                """
+                INSERT INTO manual_memories
+                (campaign_id, category, term, content, embedding)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (campaign_id, category_clean, term_clean, content_clean, blob),
+            )
+            conn.commit()
+            return True, "stored"
+        except Exception:
+            logger.exception(
+                "Zork memory: store_manual_memory failed for campaign %s",
+                campaign_id,
+            )
+            return False, "error"
+
+    @classmethod
+    def search_manual_memories(
+        cls,
+        query: str,
+        campaign_id: int,
+        *,
+        category: Optional[str] = None,
+        top_k: int = 5,
+    ) -> List[Tuple[str, str, float]]:
+        """Vector-search curated manual memories, optionally scoped by category."""
+        import numpy as np
+
+        try:
+            query_vec = _bytes_to_vector(_embed(query))
+            conn = cls._get_conn()
+            if category and str(category).strip():
+                category_key = cls._normalize_key(str(category))
+                rows = conn.execute(
+                    """
+                    SELECT category, content, embedding
+                    FROM manual_memories
+                    WHERE campaign_id = ? AND category = ?
+                    """,
+                    (campaign_id, category_key),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT category, content, embedding
+                    FROM manual_memories
+                    WHERE campaign_id = ?
+                    """,
+                    (campaign_id,),
+                ).fetchall()
+
+            scored: List[Tuple[str, str, float]] = []
+            for mem_category, content, blob in rows:
+                vec = _bytes_to_vector(blob)
+                score = float(np.dot(query_vec, vec))
+                scored.append((str(mem_category or ""), str(content or ""), score))
+            scored.sort(key=lambda t: t[2], reverse=True)
+            return scored[: max(1, int(top_k))]
+        except Exception:
+            logger.exception(
+                "Zork memory: search_manual_memories failed for campaign %s",
+                campaign_id,
+            )
+            return []
+
+    # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------
 
     @classmethod
     def delete_campaign_embeddings(cls, campaign_id: int) -> int:
-        """Remove all embeddings for *campaign_id*. Returns rows deleted."""
+        """Remove all campaign memories (turn embeddings + manual memories)."""
         try:
             conn = cls._get_conn()
-            cursor = conn.execute(
+            cursor_turns = conn.execute(
                 "DELETE FROM turn_embeddings WHERE campaign_id = ?",
                 (campaign_id,),
             )
+            cursor_manual = conn.execute(
+                "DELETE FROM manual_memories WHERE campaign_id = ?",
+                (campaign_id,),
+            )
             conn.commit()
-            deleted = cursor.rowcount
+            deleted = int(cursor_turns.rowcount or 0) + int(cursor_manual.rowcount or 0)
             logger.info(
-                "Zork memory: deleted %d embeddings for campaign %s",
+                "Zork memory: deleted %d total memories for campaign %s",
                 deleted,
                 campaign_id,
             )

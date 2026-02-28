@@ -146,7 +146,7 @@ class ZorkEmulator:
         "Examples of CORRECT structure:\n"
         "  {\"marcus\": {\"mood\": \"angry\", \"location\": \"courtyard\"}, \"west_gate\": {\"status\": \"barred\"}}\n"
         "Examples of WRONG structure (never do this):\n"
-        "  {\"marcus_mood\": \"angry\", \"marcus_location\": \"courtyard\", \"west_gate_status\": \"barred\"})\n"
+        "  {\"marcus_mood\": \"angry\", \"marcus_location\": \"courtyard\", \"west_gate_status\": \"barred\"}\n"
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
@@ -239,8 +239,18 @@ class ZorkEmulator:
     MEMORY_TOOL_PROMPT = (
         "\nYou have a memory_search tool. To use it, return ONLY:\n"
         '{"tool_call": "memory_search", "queries": ["query1", "query2", ...]}\n'
-        "No other keys alongside tool_call. You may provide one or more queries.\n"
+        "No other keys alongside tool_call except optional 'category'. You may provide one or more queries.\n"
+        "Optional category scope example:\n"
+        '{"tool_call": "memory_search", "category": "char:marcus-blackwell", "queries": ["penthouse", "deal"]}\n'
         "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
+        "\nYou also have a memory_terms tool for wildcard term/category listing. Use it BEFORE storing memories:\n"
+        '{"tool_call": "memory_terms", "wildcard": "marcus*"}\n'
+        "This returns existing category/term buckets so you can avoid duplicates.\n"
+        "\nYou also have a memory_store tool for curated long-term memories:\n"
+        '{"tool_call": "memory_store", "category": "char:marcus-blackwell", "term": "marcus", "memory": "Marcus admitted he forged the ledger."}\n'
+        "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
+        "A category can contain multiple memories.\n"
+        "When category is provided in memory_search, curated memories in that category are vector searched.\n"
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
@@ -4514,7 +4524,7 @@ class ZorkEmulator:
 
     @staticmethod
     def _is_tool_call(payload: dict) -> bool:
-        """Return True when *payload* is a memory_search tool invocation."""
+        """Return True when *payload* is a tool invocation without narration."""
         return (
             isinstance(payload, dict)
             and "tool_call" in payload
@@ -5075,9 +5085,15 @@ class ZorkEmulator:
                                 for q in raw_queries
                                 if str(q).strip()
                             ]
+                            category_scope = " ".join(
+                                str(first_payload.get("category") or "").strip().lower().split()
+                            )
                             recall_sections = []
                             if queries:
-                                _zork_log("MEMORY SEARCH", f"queries={queries}")
+                                _zork_log(
+                                    "MEMORY SEARCH",
+                                    f"queries={queries}\ncategory={category_scope or '(none)'}",
+                                )
                                 seen_turn_ids = set()
                                 for query in queries:
                                     logger.info(
@@ -5110,10 +5126,31 @@ class ZorkEmulator:
                                         recall_lines.append(
                                             f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
                                         )
-                                    if recall_lines:
+                                    manual_lines = []
+                                    if category_scope:
+                                        manual_hits = ZorkMemory.search_manual_memories(
+                                            query,
+                                            campaign.id,
+                                            category=category_scope,
+                                            top_k=5,
+                                        )
+                                        for mem_category, mem_content, mem_score in manual_hits:
+                                            if mem_score < 0.35:
+                                                continue
+                                            manual_lines.append(
+                                                f"- [manual {mem_category}, relevance {mem_score:.2f}]: {mem_content[:300]}"
+                                            )
+                                    if recall_lines or manual_lines:
+                                        lines = []
+                                        if recall_lines:
+                                            lines.append("Narrator turn matches:")
+                                            lines.extend(recall_lines)
+                                        if manual_lines:
+                                            lines.append("Manual memory matches:")
+                                            lines.extend(manual_lines)
                                         recall_sections.append(
                                             f"Results for '{query}':\n"
-                                            + "\n".join(recall_lines)
+                                            + "\n".join(lines)
                                         )
                             if recall_sections:
                                 tool_result_block = (
@@ -5121,7 +5158,13 @@ class ZorkEmulator:
                                     + "\n".join(recall_sections)
                                 )
                             elif queries:
-                                tool_result_block = "MEMORY_RECALL: No relevant memories found."
+                                if category_scope:
+                                    tool_result_block = (
+                                        "MEMORY_RECALL: No relevant memories found "
+                                        f"(including manual category '{category_scope}')."
+                                    )
+                                else:
+                                    tool_result_block = "MEMORY_RECALL: No relevant memories found."
                             else:
                                 tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
                             _zork_log("MEMORY RECALL BLOCK", tool_result_block)
@@ -5139,6 +5182,125 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("AUGMENTED API RESPONSE", response)
+
+                        elif tool_name == "memory_terms":
+                            wildcard = str(
+                                first_payload.get("wildcard")
+                                or first_payload.get("query")
+                                or first_payload.get("term")
+                                or "%"
+                            ).strip()[:80]
+                            terms = ZorkMemory.list_manual_memory_terms(
+                                campaign.id,
+                                wildcard=wildcard or "%",
+                                limit=20,
+                            )
+                            if terms:
+                                lines = []
+                                for row in terms:
+                                    lines.append(
+                                        f"- term='{row.get('term')}' category='{row.get('category')}' "
+                                        f"count={row.get('count')} last_at={row.get('last_at')}"
+                                    )
+                                tool_result_block = (
+                                    f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}):\n"
+                                    + "\n".join(lines)
+                                )
+                            else:
+                                tool_result_block = (
+                                    f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}): none"
+                                )
+                            _zork_log("MEMORY TERMS BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("MEMORY TERMS AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "memory_store":
+                            category = " ".join(
+                                str(first_payload.get("category") or "").strip().lower().split()
+                            )[:120]
+                            term = " ".join(
+                                str(first_payload.get("term") or "").strip().lower().split()
+                            )[:80]
+                            memory_text = str(
+                                first_payload.get("memory")
+                                or first_payload.get("content")
+                                or ""
+                            ).strip()[:1200]
+                            wildcard = str(
+                                first_payload.get("wildcard")
+                                or term
+                                or category
+                                or "%"
+                            ).strip()[:80]
+                            pre_terms = ZorkMemory.list_manual_memory_terms(
+                                campaign.id,
+                                wildcard=wildcard or "%",
+                                limit=20,
+                            )
+                            stored_ok = False
+                            store_reason = "missing_fields"
+                            if category and memory_text:
+                                stored_ok, store_reason = ZorkMemory.store_manual_memory(
+                                    campaign.id,
+                                    category=category,
+                                    term=term or category,
+                                    content=memory_text,
+                                )
+                            post_terms = ZorkMemory.list_manual_memory_terms(
+                                campaign.id,
+                                wildcard=wildcard or "%",
+                                limit=20,
+                            )
+                            term_lines = []
+                            for row in pre_terms[:15]:
+                                term_lines.append(
+                                    f"- term='{row.get('term')}' category='{row.get('category')}' count={row.get('count')}"
+                                )
+                            if not term_lines:
+                                term_lines.append("- none")
+                            status_text = (
+                                "stored"
+                                if stored_ok
+                                else f"skipped ({store_reason})"
+                            )
+                            tool_result_block = (
+                                "MEMORY_STORE_RESULT:\n"
+                                f"- requested_category: {category or '(missing)'}\n"
+                                f"- requested_term: {term or '(defaulted)'}\n"
+                                f"- pre_store_wildcard: {wildcard or '%'}\n"
+                                "- existing_terms_before:\n"
+                                + "\n".join(term_lines)
+                                + "\n"
+                                f"- store_status: {status_text}\n"
+                                f"- existing_terms_after_count: {len(post_terms)}"
+                            )
+                            _zork_log("MEMORY STORE BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
 
                         elif (
                             tool_name == "set_timer"
