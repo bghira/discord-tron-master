@@ -150,7 +150,7 @@ class ZorkEmulator:
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
-        "- scene_image_prompt: string (optional; include only when scene/location changes and a fresh image should be rendered)\n"
+        "- scene_image_prompt: string (optional; include whenever the visible scene changes in a meaningful way: entering a room, newly visible characters/objects, reveals, or strong visual shifts)\n"
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
         "- set_timer_interruptible: boolean (optional; default true)\n"
@@ -193,10 +193,12 @@ class ZorkEmulator:
         "Do not list, enumerate, or summarise what the player is carrying anywhere in the narration text — not at the end, not inline, not as a parenthetical.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
         "- scene_image_prompt should describe the visible scene, not inventory lists.\n"
+        "- Include scene_image_prompt whenever narration introduces new visual information (what is seen, newly present entities/props, environmental or lighting changes), not only hard location changes.\n"
+        "- If the player explicitly looks/examines/scans and there is anything visual to depict, include scene_image_prompt.\n"
         "- When you output scene_image_prompt, it MUST be specific: include the room/location name and named characters from PARTY_SNAPSHOT (never generic 'group of adventurers').\n"
         "- Use PARTY_SNAPSHOT persona/attributes to describe each visible character's look/pose/style cues.\n"
         "- Include at least one concrete prop or action beat tied to the acting player.\n"
-        "- Keep scene_image_prompt as a single dense paragraph, 70-180 words.\n"
+        "- Keep scene_image_prompt as a single dense paragraph with as much detail as needed; do NOT self-truncate it.\n"
         "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name:\n"
         "  * If CAMPAIGN references a known movie/book/show, use the MAIN CHARACTER/PROTAGONIST's canonical name.\n"
         "  * Otherwise, create an appropriate name for this setting.\n"
@@ -2541,7 +2543,7 @@ class ZorkEmulator:
             room_images[room_key] = {
                 "url": image_url.strip(),
                 "updated": datetime.datetime.utcnow().isoformat() + "Z",
-                "prompt": cls._trim_text(scene_prompt or "", 600),
+                "prompt": (scene_prompt or "").strip(),
             }
             campaign_state[cls.ROOM_IMAGE_STATE_KEY] = room_images
             campaign.state_json = cls._dump_json(campaign_state)
@@ -2691,7 +2693,7 @@ class ZorkEmulator:
         if directives:
             prompt = f"{' '.join(directives)} {prompt}"
         prompt = re.sub(r"\s+", " ", prompt).strip()
-        return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
+        return prompt
 
     @classmethod
     def _compose_empty_room_scene_prompt(
@@ -2713,7 +2715,7 @@ class ZorkEmulator:
             "Focus on architecture, props, lighting, and atmosphere only."
         )
         prompt = re.sub(r"\s+", " ", prompt).strip()
-        return cls._trim_text(prompt, cls.MAX_SCENE_PROMPT_CHARS)
+        return prompt
 
     @classmethod
     def _same_scene(
@@ -2894,16 +2896,6 @@ class ZorkEmulator:
         if pending_prefixes:
             prompt = f"{' '.join(pending_prefixes)} {prompt}".strip()
         prompt = re.sub(r"\s+", " ", prompt).strip()
-        if len(prompt) > cls.MAX_SCENE_PROMPT_CHARS:
-            prompt = prompt[: cls.MAX_SCENE_PROMPT_CHARS].strip()
-            missing_after_trim = cls._missing_scene_names(prompt, party_snapshot)
-            if missing_after_trim:
-                cast_prefix = f"Characters: {', '.join(missing_after_trim)}. "
-                remaining = cls.MAX_SCENE_PROMPT_CHARS - len(cast_prefix)
-                if remaining > 24:
-                    prompt = (cast_prefix + prompt[:remaining]).strip()
-                else:
-                    prompt = cast_prefix[: cls.MAX_SCENE_PROMPT_CHARS].strip()
         return prompt
 
     @classmethod
@@ -3516,9 +3508,7 @@ class ZorkEmulator:
                     "suppress_image_details": True,
                     "zork_store_image": should_store_room_image,
                     "zork_seed_room_image": should_store_room_image,
-                    "zork_scene_prompt": cls._trim_text(
-                        scene_image_prompt, cls.MAX_SCENE_PROMPT_CHARS
-                    ),
+                    "zork_scene_prompt": scene_image_prompt,
                     "zork_campaign_id": campaign_id,
                     "zork_room_key": room_key,
                     "zork_user_id": ctx.author.id,
