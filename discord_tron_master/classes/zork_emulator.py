@@ -330,14 +330,18 @@ class ZorkEmulator:
         '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
         '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str} '
         "and each remove entry is a string matching an event name.\n"
+        "HARNESS BEHAVIOR:\n"
+        "- The harness converts add entries into absolute due dates and stores fire_day (the game day an event fires).\n"
+        "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
+        "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events.\n"
         "CALENDAR EVENT LIFECYCLE:\n"
-        "Events should progress through phases based on time_remaining vs game_time:\n"
+        "Events should progress through phases based on fire_day vs CURRENT_GAME_TIME.day:\n"
         "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
-        "signs/clues reference it). Decrement time_remaining in calendar_update.add (re-add with updated value).\n"
-        "2. IMMINENT — time_remaining is 1 or less. Actively warn the player: NPCs urge action, "
+        "signs/clues reference it).\n"
+        "2. IMMINENT — event is today or tomorrow. Actively warn the player: NPCs urge action, "
         "the environment reflects urgency. Narrate pressure to act. The player should feel they need to DO something.\n"
-        "3. OVERDUE — time_remaining reaches 0 or below. Do NOT remove the event. Instead, "
-        "set time_remaining to a negative number and narrate consequences escalating. "
+        "3. OVERDUE — current day is past fire_day. Do NOT remove the event. "
+        "Narrate consequences escalating. "
         "NPCs express disappointment, opportunities narrow, penalties mount. "
         "The event stays on the calendar as a visible reminder of what the player neglected.\n"
         "4. RESOLVED — ONLY remove an event when the player has DIRECTLY DEALT WITH IT "
@@ -3787,19 +3791,151 @@ class ZorkEmulator:
                 existing[slug] = dict(fields)
         return existing
 
+    @staticmethod
+    def _calendar_resolve_fire_day(
+        current_day: int,
+        current_hour: int,
+        time_remaining: object,
+        time_unit: object,
+    ) -> int:
+        try:
+            day = int(current_day)
+        except (TypeError, ValueError):
+            day = 1
+        try:
+            hour = int(current_hour)
+        except (TypeError, ValueError):
+            hour = 8
+        day = max(1, day)
+        hour = min(23, max(0, hour))
+        try:
+            remaining = int(time_remaining)
+        except (TypeError, ValueError):
+            remaining = 1
+        unit = str(time_unit or "days").strip().lower()
+        if unit.startswith("hour"):
+            fire_day = day + ((hour + remaining) // 24)
+        else:
+            fire_day = day + remaining
+        return max(1, int(fire_day))
+
+    @classmethod
+    def _calendar_normalize_event(
+        cls,
+        event: object,
+        *,
+        current_day: int,
+        current_hour: int,
+    ) -> Optional[Dict[str, object]]:
+        if not isinstance(event, dict):
+            return None
+        name = str(event.get("name") or "").strip()
+        if not name:
+            return None
+        fire_day_raw = event.get("fire_day")
+        if isinstance(fire_day_raw, (int, float)) and not isinstance(fire_day_raw, bool):
+            fire_day = max(1, int(fire_day_raw))
+        else:
+            fire_day = cls._calendar_resolve_fire_day(
+                current_day=current_day,
+                current_hour=current_hour,
+                time_remaining=event.get("time_remaining", 1),
+                time_unit=event.get("time_unit", "days"),
+            )
+        normalized: Dict[str, object] = {
+            "name": name,
+            "fire_day": fire_day,
+            "description": str(event.get("description") or "")[:200],
+        }
+        for key in ("created_day", "created_hour"):
+            raw = event.get(key)
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                normalized[key] = int(raw)
+        return normalized
+
+    @classmethod
+    def _calendar_for_prompt(
+        cls,
+        campaign_state: Dict[str, object],
+    ) -> List[Dict[str, object]]:
+        game_time = campaign_state.get("game_time") if isinstance(campaign_state, dict) else {}
+        if not isinstance(game_time, dict):
+            game_time = {}
+        current_day = cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1
+        current_hour = cls._coerce_non_negative_int(game_time.get("hour", 8), default=8)
+        current_hour = min(23, max(0, current_hour))
+        calendar = campaign_state.get("calendar") if isinstance(campaign_state, dict) else []
+        if not isinstance(calendar, list):
+            calendar = []
+        entries: List[Dict[str, object]] = []
+        for raw in calendar:
+            normalized = cls._calendar_normalize_event(
+                raw,
+                current_day=current_day,
+                current_hour=current_hour,
+            )
+            if normalized is None:
+                continue
+            fire_day = int(normalized.get("fire_day", current_day))
+            days_remaining = fire_day - current_day
+            if days_remaining < 0:
+                status = "overdue"
+            elif days_remaining == 0:
+                status = "today"
+            elif days_remaining == 1:
+                status = "imminent"
+            else:
+                status = "upcoming"
+            view = dict(normalized)
+            view["days_remaining"] = days_remaining
+            view["status"] = status
+            entries.append(view)
+        entries.sort(key=lambda item: (int(item.get("fire_day", current_day)), str(item.get("name", "")).lower()))
+        return entries
+
+    @staticmethod
+    def _calendar_reminder_text(calendar_entries: List[Dict[str, object]]) -> str:
+        if not calendar_entries:
+            return "None"
+        alerts = []
+        for event in calendar_entries:
+            days = int(event.get("days_remaining", 0))
+            name = str(event.get("name", "Unknown"))
+            fire_day = int(event.get("fire_day", 1))
+            if days > 1:
+                continue
+            if days < 0:
+                alerts.append(f"- OVERDUE: {name} (was Day {fire_day}; {abs(days)} day(s) overdue)")
+            elif days == 0:
+                alerts.append(f"- TODAY: {name} (fires on Day {fire_day})")
+            else:
+                alerts.append(f"- TOMORROW: {name} (fires on Day {fire_day})")
+        return "\n".join(alerts) if alerts else "None"
+
     @classmethod
     def _apply_calendar_update(
         cls,
         campaign_state: Dict[str, object],
         calendar_update: dict,
     ) -> Dict[str, object]:
-        """Process calendar add/remove ops, enforce max 10 events, prune expired."""
+        """Process calendar add/remove ops and persist absolute fire_day entries."""
         if not isinstance(calendar_update, dict):
             return campaign_state
-        calendar = list(campaign_state.get("calendar") or [])
+        calendar_raw = list(campaign_state.get("calendar") or [])
         game_time = campaign_state.get("game_time") or {}
         current_day = game_time.get("day", 1)
         current_hour = game_time.get("hour", 8)
+        day_int = int(current_day) if isinstance(current_day, (int, float)) else 1
+        hour_int = int(current_hour) if isinstance(current_hour, (int, float)) else 8
+        calendar = []
+        for event in calendar_raw:
+            normalized = cls._calendar_normalize_event(
+                event,
+                current_day=day_int,
+                current_hour=hour_int,
+            )
+            if normalized is not None:
+                calendar.append(normalized)
 
         # Remove named events.
         to_remove = calendar_update.get("remove")
@@ -3819,17 +3955,26 @@ class ZorkEmulator:
                 name = str(entry.get("name") or "").strip()
                 if not name:
                     continue
+                fire_day = entry.get("fire_day")
+                if isinstance(fire_day, (int, float)) and not isinstance(fire_day, bool):
+                    resolved_fire_day = max(1, int(fire_day))
+                else:
+                    resolved_fire_day = cls._calendar_resolve_fire_day(
+                        current_day=day_int,
+                        current_hour=hour_int,
+                        time_remaining=entry.get("time_remaining", 1),
+                        time_unit=entry.get("time_unit", "days"),
+                    )
                 event = {
                     "name": name,
-                    "time_remaining": entry.get("time_remaining", 1),
-                    "time_unit": entry.get("time_unit", "days"),
+                    "fire_day": resolved_fire_day,
                     "created_day": current_day,
                     "created_hour": current_hour,
                     "description": str(entry.get("description") or "")[:200],
                 }
                 calendar.append(event)
 
-        # Allow re-adds to update existing events (e.g. decrement time_remaining).
+        # Allow re-adds to update existing events.
         if isinstance(to_add, list):
             seen_names = set()
             deduped = []
@@ -4330,7 +4475,8 @@ class ZorkEmulator:
 
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
-        _calendar = state.get("calendar", [])
+        _calendar = cls._calendar_for_prompt(state)
+        _calendar_reminders = cls._calendar_reminder_text(_calendar)
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
@@ -4342,6 +4488,7 @@ class ZorkEmulator:
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
+            f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
         )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
@@ -4802,7 +4949,7 @@ class ZorkEmulator:
                     if action_clean in ("calendar", "cal", "events"):
                         campaign_state = cls.get_campaign_state(campaign)
                         game_time = campaign_state.get("game_time", {})
-                        calendar = campaign_state.get("calendar", [])
+                        calendar = cls._calendar_for_prompt(campaign_state)
                         date_label = game_time.get(
                             "date_label",
                             f"Day {game_time.get('day', '?')}, {game_time.get('period', '?').title()}",
@@ -4811,11 +4958,19 @@ class ZorkEmulator:
                         if calendar:
                             lines.append("**Upcoming Events:**")
                             for ev in calendar:
-                                remaining = ev.get("time_remaining", "?")
-                                unit = ev.get("time_unit", "?")
+                                days_remaining = int(ev.get("days_remaining", 0))
+                                fire_day = int(ev.get("fire_day", 1))
                                 desc = ev.get("description", "")
+                                if days_remaining < 0:
+                                    eta = f"overdue by {abs(days_remaining)} day(s)"
+                                elif days_remaining == 0:
+                                    eta = "fires today"
+                                elif days_remaining == 1:
+                                    eta = "fires tomorrow"
+                                else:
+                                    eta = f"fires in {days_remaining} days"
                                 lines.append(
-                                    f"- **{ev.get('name', 'Unknown')}** — {remaining} {unit} remaining"
+                                    f"- **{ev.get('name', 'Unknown')}** — Day {fire_day} ({eta})"
                                     + (f" ({desc})" if desc else "")
                                 )
                         else:
