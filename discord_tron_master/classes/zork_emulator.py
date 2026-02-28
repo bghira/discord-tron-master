@@ -2355,12 +2355,22 @@ class ZorkEmulator:
         if not isinstance(chapters, list) or not chapters:
             return None
 
-        current_ch = campaign_state.get("current_chapter", 0)
-        current_sc = campaign_state.get("current_scene", 0)
-        if not isinstance(current_ch, int):
-            current_ch = 0
-        if not isinstance(current_sc, int):
-            current_sc = 0
+        current_ch = cls._coerce_non_negative_int(
+            campaign_state.get("current_chapter", 0), default=0
+        )
+        current_sc = cls._coerce_non_negative_int(
+            campaign_state.get("current_scene", 0), default=0
+        )
+        current_ch = min(current_ch, max(len(chapters) - 1, 0))
+
+        def _preview(value: object, max_chars: int = 320) -> str:
+            text = str(value or "").strip()
+            if len(text) <= max_chars:
+                return text
+            clipped = text[:max_chars].rsplit(" ", 1)[0].strip()
+            if not clipped:
+                clipped = text[:max_chars].strip()
+            return f"{clipped}..."
 
         lines: List[str] = []
 
@@ -2392,15 +2402,31 @@ class ZorkEmulator:
                         lines.append(f"    Key characters: {', '.join(key_chars)}")
             lines.append("")
 
-        # Next chapter (preview)
-        if current_ch + 1 < len(chapters):
-            nxt = chapters[current_ch + 1]
-            lines.append(f"NEXT CHAPTER: {nxt.get('title', 'Untitled')}")
-            summary = nxt.get("summary", "")
-            # One-line preview
-            if summary:
-                lines.append(f"  Preview: {summary[:200]}")
+        # Next 3 chapters (preview)
+        for offset in range(1, 4):
+            idx = current_ch + offset
+            if idx >= len(chapters):
+                break
+            nxt = chapters[idx]
+            label = "NEXT CHAPTER" if offset == 1 else f"UPCOMING CHAPTER {offset}"
+            lines.append(f"{label}: {nxt.get('title', 'Untitled')}")
+            preview = _preview(nxt.get("summary", ""))
+            if preview:
+                lines.append(f"  Preview: {preview}")
+            nxt_scenes = nxt.get("scenes")
+            if isinstance(nxt_scenes, list):
+                titles = []
+                for scene in nxt_scenes[:3]:
+                    if not isinstance(scene, dict):
+                        continue
+                    title = str(scene.get("title", "Untitled")).strip() or "Untitled"
+                    titles.append(title)
+                if titles:
+                    lines.append(f"  Early scenes: {', '.join(titles)}")
+            lines.append("")
 
+        while lines and not lines[-1]:
+            lines.pop()
         return "\n".join(lines) if lines else None
 
     @classmethod
@@ -5685,17 +5711,42 @@ class ZorkEmulator:
                     # Chapter/scene advancement from state_update
                     story_outline = campaign_state.get("story_outline")
                     if isinstance(story_outline, dict):
-                        new_ch = state_update.get("current_chapter")
-                        new_sc = state_update.get("current_scene")
-                        old_ch = campaign_state.get("current_chapter", 0)
-                        if isinstance(new_ch, int) and new_ch != old_ch:
-                            chapters = story_outline.get("chapters", [])
-                            if isinstance(chapters, list) and 0 <= old_ch < len(
-                                chapters
-                            ):
+                        chapters = story_outline.get("chapters", [])
+                        old_ch = cls._coerce_non_negative_int(
+                            campaign_state.get("current_chapter", 0), default=0
+                        )
+                        if isinstance(chapters, list) and chapters:
+                            old_ch = min(old_ch, len(chapters) - 1)
+
+                        new_ch_raw = state_update.get("current_chapter")
+                        new_sc_raw = state_update.get("current_scene")
+
+                        new_ch = None
+                        if new_ch_raw is not None:
+                            new_ch = cls._coerce_non_negative_int(new_ch_raw, default=old_ch)
+                            if isinstance(chapters, list) and chapters:
+                                new_ch = min(new_ch, len(chapters) - 1)
+
+                        scene_ch_idx = new_ch if new_ch is not None else old_ch
+                        new_sc = None
+                        if new_sc_raw is not None:
+                            new_sc = cls._coerce_non_negative_int(new_sc_raw, default=0)
+                            if isinstance(chapters, list) and 0 <= scene_ch_idx < len(chapters):
+                                scene_list = chapters[scene_ch_idx].get("scenes", [])
+                                if isinstance(scene_list, list) and scene_list:
+                                    new_sc = min(new_sc, len(scene_list) - 1)
+                                else:
+                                    new_sc = 0
+
+                        if new_ch is not None and new_ch != old_ch:
+                            if isinstance(chapters, list) and 0 <= old_ch < len(chapters):
                                 chapters[old_ch]["completed"] = True
                             campaign_state["current_chapter"] = new_ch
-                        if isinstance(new_sc, int):
+                            if new_sc is None:
+                                # New chapter defaults to first scene unless model provided one.
+                                campaign_state["current_scene"] = 0
+
+                        if new_sc is not None:
                             campaign_state["current_scene"] = new_sc
                         # Remove from state_update so they don't pollute model state
                         state_update.pop("current_chapter", None)
