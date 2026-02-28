@@ -1261,12 +1261,54 @@ class ZorkEmulator:
             db.session.commit()
             return "Setup cleared. You can now play normally."
 
+    @staticmethod
+    def _is_explicit_setup_no(content: str) -> Tuple[bool, str]:
+        raw = (content or "").strip()
+        lowered = raw.lower()
+        if lowered in ("no", "n", "nope", "nah"):
+            return True, ""
+        if lowered.startswith(("no,", "no.", "no:", "no;", "no!", "no-", "nope ", "nah ")):
+            guidance = re.sub(r"^\s*(?:no|nope|nah|n)\b[\s,.:;!\-]*", "", raw, flags=re.IGNORECASE).strip()
+            return True, guidance
+        if lowered.startswith("no "):
+            tail = lowered[3:].lstrip()
+            if re.match(r"^(?:i|we|this|that|it|rather|prefer|want|novel|original|custom|homebrew)\b", tail):
+                guidance = re.sub(r"^\s*(?:no|nope|nah|n)\b[\s,.:;!\-]*", "", raw, flags=re.IGNORECASE).strip()
+                return True, guidance
+        return False, ""
+
+    @staticmethod
+    def _looks_like_novel_intent(content: str) -> bool:
+        lowered = (content or "").strip().lower()
+        if not lowered:
+            return False
+        markers = (
+            "my own",
+            "original",
+            "custom",
+            "homebrew",
+            "from scratch",
+            "made up",
+        )
+        if any(marker in lowered for marker in markers):
+            return True
+        return bool(
+            re.search(
+                r"\b(i(?:'d| would)? rather|i want|let'?s|make|do)\b.*\b(novel|original|custom|homebrew)\b",
+                lowered,
+            )
+        )
+
     @classmethod
     async def _setup_handle_classify_confirm(
         cls, ctx, content, campaign, state, setup_data
     ) -> str:
         """Parse confirmation, then generate storyline variants."""
-        answer = content.strip().lower()
+        raw_answer = (content or "").strip()
+        answer = raw_answer.lower()
+        user_guidance = None
+        explicit_no, no_guidance = cls._is_explicit_setup_no(raw_answer)
+        novel_intent = cls._looks_like_novel_intent(raw_answer)
 
         if answer in ("yes", "y", "correct", "yep", "yeah"):
             # Confirmed — filter IMDB results to just the best match
@@ -1286,12 +1328,19 @@ class ZorkEmulator:
             # Enrich with synopsis
             if setup_data.get("imdb_results"):
                 cls._imdb_enrich_results(setup_data["imdb_results"], max_enrich=1)
-        elif answer in ("no", "n", "nope"):
+        elif explicit_no or answer in ("no", "n", "nope") or novel_intent:
             # User says it's NOT a known work — flip to novel
             setup_data["is_known_work"] = False
             setup_data["work_type"] = None
-            setup_data["work_description"] = ""
             setup_data["imdb_results"] = []
+            if explicit_no and no_guidance:
+                user_guidance = no_guidance
+                setup_data["work_description"] = no_guidance
+            elif novel_intent:
+                user_guidance = raw_answer
+                setup_data["work_description"] = raw_answer
+            else:
+                setup_data["work_description"] = ""
         else:
             # User is providing a correction — IMDB search + re-classify
             imdb_results = cls._imdb_search(content)
@@ -1342,7 +1391,7 @@ class ZorkEmulator:
             setup_data["raw_name"] = suggested
 
             # If LLM still missed it but IMDB found results, promote top hit.
-            if not setup_data["is_known_work"] and imdb_results:
+            if not setup_data["is_known_work"] and imdb_results and not novel_intent:
                 top = imdb_results[0]
                 setup_data["is_known_work"] = True
                 setup_data["raw_name"] = top["title"]
@@ -1402,7 +1451,7 @@ class ZorkEmulator:
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(
-            campaign, setup_data
+            campaign, setup_data, user_guidance=user_guidance
         )
         state["setup_phase"] = "storyline_pick"
         state["setup_data"] = setup_data
