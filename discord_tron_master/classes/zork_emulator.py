@@ -5046,7 +5046,7 @@ class ZorkEmulator:
                     first_payload = None
                     if json_text_tc:
                         try:
-                            first_payload = json.loads(json_text_tc)
+                            first_payload = cls._parse_json_lenient(json_text_tc)
                         except Exception:
                             first_payload = None
 
@@ -5246,7 +5246,7 @@ class ZorkEmulator:
                             first_payload = None
                             break
                         try:
-                            first_payload = json.loads(json_text_tc)
+                            first_payload = cls._parse_json_lenient(json_text_tc)
                         except Exception:
                             first_payload = None
                             break
@@ -5271,7 +5271,36 @@ class ZorkEmulator:
                         json_text_tc = cls._extract_json(response)
                         if json_text_tc:
                             try:
-                                first_payload = json.loads(json_text_tc)
+                                first_payload = cls._parse_json_lenient(json_text_tc)
+                            except Exception:
+                                first_payload = None
+
+                    # Last-resort guard: if we're still holding a bare tool_call payload,
+                    # force a final non-tool narration/state response so JSON tool payloads
+                    # never leak to players as fallback narration.
+                    if first_payload and cls._is_tool_call(first_payload):
+                        unresolved_tool = str(first_payload.get("tool_call") or "unknown")
+                        tool_augmented_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
+                            "Do NOT call any tools now. Return final narration/state JSON directly.\n"
+                        )
+                        response = await gpt.turbo_completion(
+                            system_prompt,
+                            tool_augmented_prompt,
+                            temperature=0.8,
+                            max_tokens=2048,
+                        )
+                        if not response:
+                            response = "A hollow silence answers. Try again."
+                        else:
+                            response = cls._clean_response(response)
+                        _zork_log("UNRESOLVED TOOL FINAL RESPONSE", response)
+                        json_text_tc = cls._extract_json(response)
+                        first_payload = None
+                        if json_text_tc:
+                            try:
+                                first_payload = cls._parse_json_lenient(json_text_tc)
                             except Exception:
                                 first_payload = None
 
