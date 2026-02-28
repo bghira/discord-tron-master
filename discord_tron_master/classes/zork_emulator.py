@@ -240,6 +240,7 @@ class ZorkEmulator:
         "\nYou have a memory_search tool. To use it, return ONLY:\n"
         '{"tool_call": "memory_search", "queries": ["query1", "query2", ...]}\n'
         "No other keys alongside tool_call. You may provide one or more queries.\n"
+        "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
@@ -5040,203 +5041,250 @@ class ZorkEmulator:
                         response = cls._clean_response(response)
                     _zork_log("INITIAL API RESPONSE", response)
 
-                    # --- Tool-call detection (memory_search / set_timer) ---
+                    # --- Tool-call detection (memory_search / set_timer / story_outline) ---
                     json_text_tc = cls._extract_json(response)
+                    first_payload = None
                     if json_text_tc:
                         try:
                             first_payload = json.loads(json_text_tc)
                         except Exception:
                             first_payload = None
-                        if first_payload and cls._is_tool_call(first_payload):
-                            tool_name = str(
-                                first_payload.get("tool_call") or ""
-                            ).strip()
 
-                            if tool_name == "memory_search":
-                                # Support both "queries": [...] and legacy "query": "..."
-                                raw_queries = first_payload.get("queries") or []
-                                if not raw_queries:
-                                    legacy = str(
-                                        first_payload.get("query") or ""
-                                    ).strip()
-                                    if legacy:
-                                        raw_queries = [legacy]
-                                queries = [
-                                    str(q).strip()
-                                    for q in raw_queries
-                                    if str(q).strip()
-                                ]
-                                if queries:
-                                    _zork_log("MEMORY SEARCH", f"queries={queries}")
-                                    recall_sections = []
-                                    seen_turn_ids = set()
-                                    for query in queries:
-                                        logger.info(
-                                            "Zork memory search requested: campaign=%s query=%r",
-                                            campaign.id,
-                                            query,
-                                        )
-                                        results = ZorkMemory.search(
-                                            query, campaign.id, top_k=5
-                                        )
-                                        if results:
-                                            top_score = max(s for _, _, _, s in results)
-                                            _zork_log(
-                                                f"MEMORY SCORES query={query!r}",
-                                                "\n".join(
-                                                    f"  turn={tid} score={s:.3f} {c[:80]}"
-                                                    for tid, _, c, s in results
-                                                ),
-                                            )
-                                        else:
-                                            top_score = 0.0
-                                        # Keep only results above relevance threshold.
-                                        relevant = [
-                                            (turn_id, kind, content, score)
-                                            for turn_id, kind, content, score in results
-                                            if score >= 0.35
-                                            and turn_id not in seen_turn_ids
-                                        ]
-                                        # Sort chronologically so the model sees events in order.
-                                        relevant.sort(key=lambda t: t[0])
-                                        recall_lines = []
-                                        for turn_id, kind, content, score in relevant:
-                                            seen_turn_ids.add(turn_id)
-                                            recall_lines.append(
-                                                f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
-                                            )
-                                        if recall_lines:
-                                            recall_sections.append(
-                                                f"Results for '{query}':\n"
-                                                + "\n".join(recall_lines)
-                                            )
-                                    if recall_sections:
-                                        recall_block = (
-                                            "MEMORY_RECALL (results from memory_search):\n"
-                                            + "\n".join(recall_sections)
-                                        )
-                                    else:
-                                        recall_block = (
-                                            "MEMORY_RECALL: No relevant memories found."
-                                        )
-                                    _zork_log("MEMORY RECALL BLOCK", recall_block)
-                                    augmented_prompt = (
-                                        f"{user_prompt}\n{recall_block}\n"
+                    # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
+                    # The model can refine queries when the first search has no useful hits.
+                    tool_augmented_prompt = user_prompt
+                    tool_chain_steps = 0
+                    max_tool_chain_steps = 4
+                    while (
+                        first_payload
+                        and cls._is_tool_call(first_payload)
+                        and tool_chain_steps < max_tool_chain_steps
+                    ):
+                        tool_chain_steps += 1
+                        tool_name = str(first_payload.get("tool_call") or "").strip()
+
+                        if tool_name == "memory_search":
+                            # Support both "queries": [...] and legacy "query": "..."
+                            raw_queries = first_payload.get("queries") or []
+                            if not raw_queries:
+                                legacy = str(first_payload.get("query") or "").strip()
+                                if legacy:
+                                    raw_queries = [legacy]
+                            queries = [
+                                str(q).strip()
+                                for q in raw_queries
+                                if str(q).strip()
+                            ]
+                            recall_sections = []
+                            if queries:
+                                _zork_log("MEMORY SEARCH", f"queries={queries}")
+                                seen_turn_ids = set()
+                                for query in queries:
+                                    logger.info(
+                                        "Zork memory search requested: campaign=%s query=%r",
+                                        campaign.id,
+                                        query,
                                     )
-                                    response = await gpt.turbo_completion(
-                                        system_prompt,
-                                        augmented_prompt,
-                                        temperature=0.8,
-                                        max_tokens=2048,
+                                    results = ZorkMemory.search(
+                                        query, campaign.id, top_k=5
                                     )
-                                    if not response:
-                                        response = (
-                                            "A hollow silence answers. Try again."
+                                    if results:
+                                        _zork_log(
+                                            f"MEMORY SCORES query={query!r}",
+                                            "\n".join(
+                                                f"  turn={tid} score={s:.3f} {c[:80]}"
+                                                for tid, _, c, s in results
+                                            ),
                                         )
-                                    else:
-                                        response = cls._clean_response(response)
-                                    _zork_log("AUGMENTED API RESPONSE", response)
+                                    # Keep only results above relevance threshold.
+                                    relevant = [
+                                        (turn_id, kind, content, score)
+                                        for turn_id, kind, content, score in results
+                                        if score >= 0.35 and turn_id not in seen_turn_ids
+                                    ]
+                                    # Sort chronologically so the model sees events in order.
+                                    relevant.sort(key=lambda t: t[0])
+                                    recall_lines = []
+                                    for turn_id, kind, content, score in relevant:
+                                        seen_turn_ids.add(turn_id)
+                                        recall_lines.append(
+                                            f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
+                                        )
+                                    if recall_lines:
+                                        recall_sections.append(
+                                            f"Results for '{query}':\n"
+                                            + "\n".join(recall_lines)
+                                        )
+                            if recall_sections:
+                                tool_result_block = (
+                                    "MEMORY_RECALL (results from memory_search):\n"
+                                    + "\n".join(recall_sections)
+                                )
+                            elif queries:
+                                tool_result_block = "MEMORY_RECALL: No relevant memories found."
+                            else:
+                                tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
+                            _zork_log("MEMORY RECALL BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("AUGMENTED API RESPONSE", response)
 
-                            elif (
-                                tool_name == "set_timer"
-                                and cls.is_timed_events_enabled(campaign)
-                            ):
-                                raw_delay = first_payload.get("delay_seconds", 60)
-                                try:
-                                    delay_seconds = int(raw_delay)
-                                except (TypeError, ValueError):
-                                    delay_seconds = 60
-                                _speed = cls.get_speed_multiplier(campaign)
-                                if _speed > 0:
-                                    delay_seconds = int(delay_seconds / _speed)
-                                delay_seconds = max(15, min(300, delay_seconds))
-                                event_description = str(
-                                    first_payload.get("event_description")
-                                    or "Something happens."
-                                ).strip()[:500]
-
-                                cls.cancel_pending_timer(campaign.id)
-                                channel_id = ctx.channel.id
-                                cls._schedule_timer(
-                                    campaign.id,
-                                    channel_id,
-                                    delay_seconds,
-                                    event_description,
-                                )
-                                timer_scheduled_delay = delay_seconds
-                                timer_scheduled_event = event_description
-                                logger.info(
-                                    "Zork timer set: campaign=%s delay=%ds event=%r",
-                                    campaign.id,
-                                    delay_seconds,
-                                    event_description,
-                                )
-                                timer_block = (
-                                    f"TIMER_SET (system confirmation): A timed event has been scheduled.\n"
-                                    f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
-                                    f"Now narrate the current scene. Hint at urgency narratively but do NOT include "
-                                    f"countdowns, timestamps, emoji clocks, or explicit seconds — the system adds its own countdown."
-                                )
-                                _zork_log(
-                                    "TIMER TOOL CALL",
-                                    f"delay={delay_seconds}s event={event_description!r}",
-                                )
-                                augmented_prompt = f"{user_prompt}\n{timer_block}\n"
-                                response = await gpt.turbo_completion(
-                                    system_prompt,
-                                    augmented_prompt,
-                                    temperature=0.8,
-                                    max_tokens=2048,
-                                )
-                                if not response:
-                                    response = "A hollow silence answers. Try again."
-                                else:
-                                    response = cls._clean_response(response)
-
-                            elif tool_name == "story_outline":
-                                chapter_slug = str(
-                                    first_payload.get("chapter") or ""
-                                ).strip()
-                                _zork_log(
-                                    "STORY OUTLINE TOOL CALL",
-                                    f"chapter={chapter_slug!r}",
-                                )
-                                outline_result = ""
-                                campaign_state_so = cls.get_campaign_state(campaign)
-                                so = campaign_state_so.get("story_outline")
-                                if isinstance(so, dict):
-                                    for ch in so.get("chapters", []):
-                                        if ch.get("slug") == chapter_slug:
-                                            outline_result = json.dumps(ch, indent=2)
-                                            break
-                                if not outline_result:
-                                    outline_result = (
-                                        f"No chapter found with slug '{chapter_slug}'."
-                                    )
-                                outline_block = f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
-                                augmented_prompt = f"{user_prompt}\n{outline_block}\n"
-                                response = await gpt.turbo_completion(
-                                    system_prompt,
-                                    augmented_prompt,
-                                    temperature=0.8,
-                                    max_tokens=2048,
-                                )
-                                if not response:
-                                    response = "A hollow silence answers. Try again."
-                                else:
-                                    response = cls._clean_response(response)
-                                _zork_log("STORY OUTLINE AUGMENTED RESPONSE", response)
-
-                        # Fallback: LLM returned set_timer alongside narration.
-                        # _is_tool_call rejects that, but we still honour the timer.
                         elif (
-                            first_payload
-                            and isinstance(first_payload, dict)
-                            and str(first_payload.get("tool_call") or "").strip()
-                            == "set_timer"
-                            and "narration" in first_payload
+                            tool_name == "set_timer"
                             and cls.is_timed_events_enabled(campaign)
                         ):
+                            raw_delay = first_payload.get("delay_seconds", 60)
+                            try:
+                                delay_seconds = int(raw_delay)
+                            except (TypeError, ValueError):
+                                delay_seconds = 60
+                            _speed = cls.get_speed_multiplier(campaign)
+                            if _speed > 0:
+                                delay_seconds = int(delay_seconds / _speed)
+                            delay_seconds = max(15, min(300, delay_seconds))
+                            event_description = str(
+                                first_payload.get("event_description")
+                                or "Something happens."
+                            ).strip()[:500]
+
+                            cls.cancel_pending_timer(campaign.id)
+                            channel_id = ctx.channel.id
+                            cls._schedule_timer(
+                                campaign.id,
+                                channel_id,
+                                delay_seconds,
+                                event_description,
+                            )
+                            timer_scheduled_delay = delay_seconds
+                            timer_scheduled_event = event_description
+                            logger.info(
+                                "Zork timer set: campaign=%s delay=%ds event=%r",
+                                campaign.id,
+                                delay_seconds,
+                                event_description,
+                            )
+                            tool_result_block = (
+                                "TIMER_SET (system confirmation): A timed event has been scheduled.\n"
+                                f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
+                                "Now narrate the current scene. Hint at urgency narratively but do NOT include "
+                                "countdowns, timestamps, emoji clocks, or explicit seconds — the system adds its own countdown."
+                            )
+                            _zork_log(
+                                "TIMER TOOL CALL",
+                                f"delay={delay_seconds}s event={event_description!r}",
+                            )
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+
+                        elif tool_name == "story_outline":
+                            chapter_slug = str(first_payload.get("chapter") or "").strip()
+                            _zork_log(
+                                "STORY OUTLINE TOOL CALL",
+                                f"chapter={chapter_slug!r}",
+                            )
+                            outline_result = ""
+                            campaign_state_so = cls.get_campaign_state(campaign)
+                            so = campaign_state_so.get("story_outline")
+                            if isinstance(so, dict):
+                                for ch in so.get("chapters", []):
+                                    if ch.get("slug") == chapter_slug:
+                                        outline_result = json.dumps(ch, indent=2)
+                                        break
+                            if not outline_result:
+                                outline_result = (
+                                    f"No chapter found with slug '{chapter_slug}'."
+                                )
+                            tool_result_block = (
+                                f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
+                            )
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("STORY OUTLINE AUGMENTED RESPONSE", response)
+
+                        else:
+                            _zork_log(
+                                "UNKNOWN TOOL CALL",
+                                f"tool={tool_name!r} payload={json.dumps(first_payload, ensure_ascii=True)}",
+                            )
+                            break
+
+                        json_text_tc = cls._extract_json(response)
+                        if not json_text_tc:
+                            first_payload = None
+                            break
+                        try:
+                            first_payload = json.loads(json_text_tc)
+                        except Exception:
+                            first_payload = None
+                            break
+
+                    # Hard-stop infinite tool loops.
+                    if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
+                        tool_augmented_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "TOOL_CHAIN_LIMIT_REACHED: Stop calling tools now. Return final narration/state JSON directly.\n"
+                        )
+                        response = await gpt.turbo_completion(
+                            system_prompt,
+                            tool_augmented_prompt,
+                            temperature=0.8,
+                            max_tokens=2048,
+                        )
+                        if not response:
+                            response = "A hollow silence answers. Try again."
+                        else:
+                            response = cls._clean_response(response)
+                        _zork_log("TOOL CHAIN LIMIT FINAL RESPONSE", response)
+                        json_text_tc = cls._extract_json(response)
+                        if json_text_tc:
+                            try:
+                                first_payload = json.loads(json_text_tc)
+                            except Exception:
+                                first_payload = None
+
+                    # Fallback: LLM returned set_timer alongside narration.
+                    # _is_tool_call rejects that, but we still honour the timer.
+                    if (
+                        first_payload
+                        and isinstance(first_payload, dict)
+                        and str(first_payload.get("tool_call") or "").strip()
+                        == "set_timer"
+                        and "narration" in first_payload
+                        and cls.is_timed_events_enabled(campaign)
+                    ):
                             raw_delay = first_payload.get("delay_seconds", 60)
                             try:
                                 delay_seconds = int(raw_delay)
