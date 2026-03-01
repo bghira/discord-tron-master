@@ -3960,12 +3960,18 @@ class ZorkEmulator:
             return slug
         if canonical and canonical in existing:
             return canonical
+        partial_matches: List[str] = []
         for existing_slug, existing_fields in existing.items():
             existing_canonical = re.sub(
                 r"[^a-z0-9]+", "-", str(existing_slug).lower()
             ).strip("-")
             if canonical and canonical == existing_canonical:
                 return existing_slug
+            if canonical and (
+                existing_canonical.startswith(canonical)
+                or canonical in existing_canonical
+            ):
+                partial_matches.append(existing_slug)
             if isinstance(existing_fields, dict):
                 name_canonical = re.sub(
                     r"[^a-z0-9]+", "-",
@@ -3973,6 +3979,15 @@ class ZorkEmulator:
                 ).strip("-")
                 if canonical and canonical == name_canonical:
                     return existing_slug
+                if canonical and (
+                    name_canonical.startswith(canonical)
+                    or canonical in name_canonical
+                ):
+                    partial_matches.append(existing_slug)
+        if canonical:
+            unique_matches = list(dict.fromkeys(partial_matches))
+            if len(unique_matches) == 1:
+                return unique_matches[0]
         return None
 
     @classmethod
