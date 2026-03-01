@@ -173,6 +173,7 @@ class ZorkEmulator:
         "current_status, allegiance, relationship. On subsequent turns only mutable fields are accepted: "
         "location, current_status, allegiance, relationship, deceased_reason, and any other dynamic key. "
         "Immutable fields (name, personality, background, appearance) are locked at creation and silently ignored on updates. "
+        "To remove a character from the roster, set that character slug to null in character_updates. "
         "Set deceased_reason to a string when a character dies. "
         "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.)\n\n"
         "Rules:\n"
@@ -3891,7 +3892,7 @@ class ZorkEmulator:
     def _apply_character_updates(
         cls,
         existing: Dict[str, dict],
-        updates: Dict[str, dict],
+        updates: Dict[str, object],
         on_rails: bool = False,
     ) -> Dict[str, dict]:
         """Merge character updates into existing characters dict.
@@ -3903,10 +3904,13 @@ class ZorkEmulator:
         if not isinstance(updates, dict):
             return existing
         for slug, fields in updates.items():
-            if not isinstance(fields, dict):
-                continue
             slug = str(slug).strip()
             if not slug:
+                continue
+            if fields is None:
+                existing.pop(slug, None)
+                continue
+            if not isinstance(fields, dict):
                 continue
             if slug in existing:
                 # Existing character — only accept mutable fields.
