@@ -155,6 +155,7 @@ class ZorkEmulator:
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
         "- set_timer_interruptible: boolean (optional; default true)\n"
         "- set_timer_interrupt_action: string or null (optional; context for interruption handling)\n"
+        '- set_timer_interrupt_scope: "local"|"global" (optional; default "global")\n'
         "- give_item: object (REQUIRED when the acting player gives/hands/passes an item to another player character. "
         "Keys: 'item' (string, exact item name from acting player's inventory), "
         "'to_discord_mention' (string, discord_mention of the recipient from PARTY_SNAPSHOT, e.g. '<@123456>'). "
@@ -284,23 +285,29 @@ class ZorkEmulator:
         '- "set_timer_interrupt_action": string or null (what should happen when the player interrupts '
         "the timer by acting; null means just cancel silently; a description means the system will "
         "feed it back to you as context on the next turn so you can narrate the interruption)\n"
+        '- "set_timer_interrupt_scope": "local"|"global" (default "global"; local means only the acting player can interrupt, global means any player in the campaign can interrupt)\n'
         "These go ALONGSIDE narration/state_update/etc in the same JSON object. Example:\n"
         '{"narration": "The ceiling groans ominously. Dust rains down...", '
         '"state_update": {"ceiling_status": "cracking"}, "summary_update": "Ceiling is unstable.", "xp_awarded": 0, '
         '"player_state_update": {"room_summary": "A crumbling chamber with a failing ceiling."}, '
         '"set_timer_delay": 120, "set_timer_event": "The ceiling collapses, burying the room in rubble.", '
         '"set_timer_interruptible": true, '
-        '"set_timer_interrupt_action": "The player escapes just as cracks widen overhead."}\n'
+        '"set_timer_interrupt_action": "The player escapes just as cracks widen overhead.", '
+        '"set_timer_interrupt_scope": "local"}\n'
         "The system shows a live countdown in Discord. "
         "If the player acts before it expires, the timer is cancelled (if interruptible). "
         "If the player does NOT act in time, the system auto-fires the event.\n"
         "PURPOSE: Timed events should FORCE THE PLAYER TO MAKE A DECISION or DRAG THEM WHERE THEY NEED TO BE.\n"
         "- Use timers to push the story forward when the player is stalling, idle, or refusing to engage.\n"
+        "- Use ACTIVE_PLAYER_LOCATION and PARTY_SNAPSHOT to decide scope and narrative impact.\n"
         "- NPCs should grab, escort, or coerce the player. Environments should shift and force movement.\n"
         "- The event should advance the plot: move the player to the next location, "
         "force an encounter, have an NPC intervene, or change the scene decisively.\n"
         "- Do NOT use timers for trivial flavor. They should always have real consequences that change game state.\n"
-        "- Set interruptible=false for events the player cannot avoid (e.g. an earthquake, a mandatory roll call).\n"
+        "- Set interruptible=false for events the player cannot avoid (e.g. structural collapse already in motion, a trap already sprung, mandatory roll call).\n"
+        "- Use interrupt_scope=local for hazards anchored to the active player's immediate room/situation.\n"
+        "- Use interrupt_scope=global for campaign-wide clocks where any player can intervene.\n"
+        "- Prefer non-interruptible timers for true forced beats; do not default everything to interruptible.\n"
         "Rules:\n"
         "- Use ~60s for urgent, ~120s for moderate, ~180-300s for slow-building tension.\n"
         "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
@@ -344,9 +351,9 @@ class ZorkEmulator:
         '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str} '
         "and each remove entry is a string matching an event name.\n"
         "HARNESS BEHAVIOR:\n"
-        "- The harness converts add entries into absolute due dates and stores fire_day (the game day an event fires).\n"
+        "- The harness converts add entries into absolute due dates and stores fire_day + fire_hour (the exact in-game deadline).\n"
         "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
-        "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events.\n"
+        "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events, including hour-level countdowns near deadline.\n"
         "CALENDAR EVENT LIFECYCLE:\n"
         "Events should progress through phases based on fire_day vs CURRENT_GAME_TIME.day:\n"
         "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
@@ -770,6 +777,22 @@ class ZorkEmulator:
         except (TypeError, ValueError):
             return default
         return parsed if parsed >= 0 else default
+
+    @staticmethod
+    def _normalize_timer_interrupt_scope(value: object) -> str:
+        if isinstance(value, str) and value.strip().lower() == "local":
+            return "local"
+        return "global"
+
+    @classmethod
+    def _timer_can_be_interrupted_by(
+        cls, pending: Dict[str, object], acting_user_id: object
+    ) -> bool:
+        scope = cls._normalize_timer_interrupt_scope(pending.get("interrupt_scope"))
+        if scope != "local":
+            return True
+        timer_user_id = str(pending.get("interrupt_user_id") or "").strip()
+        return bool(timer_user_id) and timer_user_id == str(acting_user_id or "").strip()
 
     @classmethod
     def _default_player_stats(cls) -> Dict[str, object]:
@@ -3819,12 +3842,12 @@ class ZorkEmulator:
         return existing
 
     @staticmethod
-    def _calendar_resolve_fire_day(
+    def _calendar_resolve_fire_point(
         current_day: int,
         current_hour: int,
         time_remaining: object,
         time_unit: object,
-    ) -> int:
+    ) -> Tuple[int, int]:
         try:
             day = int(current_day)
         except (TypeError, ValueError):
@@ -3840,11 +3863,30 @@ class ZorkEmulator:
         except (TypeError, ValueError):
             remaining = 1
         unit = str(time_unit or "days").strip().lower()
+        base_hours = (day - 1) * 24 + hour
         if unit.startswith("hour"):
-            fire_day = day + ((hour + remaining) // 24)
+            fire_abs_hours = base_hours + remaining
         else:
-            fire_day = day + remaining
-        return max(1, int(fire_day))
+            fire_abs_hours = base_hours + (remaining * 24)
+        fire_abs_hours = max(0, int(fire_abs_hours))
+        fire_day = (fire_abs_hours // 24) + 1
+        fire_hour = fire_abs_hours % 24
+        return max(1, int(fire_day)), min(23, max(0, int(fire_hour)))
+
+    @staticmethod
+    def _calendar_resolve_fire_day(
+        current_day: int,
+        current_hour: int,
+        time_remaining: object,
+        time_unit: object,
+    ) -> int:
+        fire_day, _ = ZorkEmulator._calendar_resolve_fire_point(
+            current_day=current_day,
+            current_hour=current_hour,
+            time_remaining=time_remaining,
+            time_unit=time_unit,
+        )
+        return fire_day
 
     @classmethod
     def _calendar_normalize_event(
@@ -3860,10 +3902,23 @@ class ZorkEmulator:
         if not name:
             return None
         fire_day_raw = event.get("fire_day")
-        if isinstance(fire_day_raw, (int, float)) and not isinstance(fire_day_raw, bool):
+        fire_hour_raw = event.get("fire_hour")
+        if (
+            isinstance(fire_day_raw, (int, float))
+            and not isinstance(fire_day_raw, bool)
+            and isinstance(fire_hour_raw, (int, float))
+            and not isinstance(fire_hour_raw, bool)
+        ):
             fire_day = max(1, int(fire_day_raw))
+            fire_hour = min(23, max(0, int(fire_hour_raw)))
+        elif isinstance(fire_day_raw, (int, float)) and not isinstance(
+            fire_day_raw, bool
+        ):
+            fire_day = max(1, int(fire_day_raw))
+            # Backward compatibility for legacy day-only events.
+            fire_hour = 23
         else:
-            fire_day = cls._calendar_resolve_fire_day(
+            fire_day, fire_hour = cls._calendar_resolve_fire_point(
                 current_day=current_day,
                 current_hour=current_hour,
                 time_remaining=event.get("time_remaining", 1),
@@ -3872,6 +3927,7 @@ class ZorkEmulator:
         normalized: Dict[str, object] = {
             "name": name,
             "fire_day": fire_day,
+            "fire_hour": fire_hour,
             "description": str(event.get("description") or "")[:200],
         }
         for key in ("created_day", "created_hour"):
@@ -3904,20 +3960,32 @@ class ZorkEmulator:
             if normalized is None:
                 continue
             fire_day = int(normalized.get("fire_day", current_day))
+            fire_hour = cls._coerce_non_negative_int(
+                normalized.get("fire_hour", 23), default=23
+            )
+            fire_hour = min(23, max(0, fire_hour))
+            hours_remaining = ((fire_day - current_day) * 24) + (fire_hour - current_hour)
             days_remaining = fire_day - current_day
-            if days_remaining < 0:
+            if hours_remaining < 0:
                 status = "overdue"
             elif days_remaining == 0:
                 status = "today"
-            elif days_remaining == 1:
+            elif hours_remaining <= 24:
                 status = "imminent"
             else:
                 status = "upcoming"
             view = dict(normalized)
             view["days_remaining"] = days_remaining
+            view["hours_remaining"] = hours_remaining
             view["status"] = status
             entries.append(view)
-        entries.sort(key=lambda item: (int(item.get("fire_day", current_day)), str(item.get("name", "")).lower()))
+        entries.sort(
+            key=lambda item: (
+                int(item.get("fire_day", current_day)),
+                int(item.get("fire_hour", 23)),
+                str(item.get("name", "")).lower(),
+            )
+        )
         return entries
 
     @staticmethod
@@ -3926,17 +3994,24 @@ class ZorkEmulator:
             return "None"
         alerts = []
         for event in calendar_entries:
-            days = int(event.get("days_remaining", 0))
+            hours = int(event.get("hours_remaining", 0))
             name = str(event.get("name", "Unknown"))
             fire_day = int(event.get("fire_day", 1))
-            if days > 1:
+            fire_hour = max(0, min(23, int(event.get("fire_hour", 23))))
+            if hours > 48:
                 continue
-            if days < 0:
-                alerts.append(f"- OVERDUE: {name} (was Day {fire_day}; {abs(days)} day(s) overdue)")
-            elif days == 0:
-                alerts.append(f"- TODAY: {name} (fires on Day {fire_day})")
+            if hours < 0:
+                alerts.append(
+                    f"- OVERDUE: {name} (was Day {fire_day}, {fire_hour:02d}:00; {abs(hours)} hour(s) overdue)"
+                )
+            elif hours == 0:
+                alerts.append(
+                    f"- NOW: {name} (fires at Day {fire_day}, {fire_hour:02d}:00)"
+                )
             else:
-                alerts.append(f"- TOMORROW: {name} (fires on Day {fire_day})")
+                alerts.append(
+                    f"- SOON: {name} (fires in {hours} hour(s) at Day {fire_day}, {fire_hour:02d}:00)"
+                )
         return "\n".join(alerts) if alerts else "None"
 
     @classmethod
@@ -3983,10 +4058,22 @@ class ZorkEmulator:
                 if not name:
                     continue
                 fire_day = entry.get("fire_day")
-                if isinstance(fire_day, (int, float)) and not isinstance(fire_day, bool):
+                fire_hour = entry.get("fire_hour")
+                if (
+                    isinstance(fire_day, (int, float))
+                    and not isinstance(fire_day, bool)
+                    and isinstance(fire_hour, (int, float))
+                    and not isinstance(fire_hour, bool)
+                ):
                     resolved_fire_day = max(1, int(fire_day))
+                    resolved_fire_hour = min(23, max(0, int(fire_hour)))
+                elif isinstance(fire_day, (int, float)) and not isinstance(
+                    fire_day, bool
+                ):
+                    resolved_fire_day = max(1, int(fire_day))
+                    resolved_fire_hour = 23
                 else:
-                    resolved_fire_day = cls._calendar_resolve_fire_day(
+                    resolved_fire_day, resolved_fire_hour = cls._calendar_resolve_fire_point(
                         current_day=day_int,
                         current_hour=hour_int,
                         time_remaining=entry.get("time_remaining", 1),
@@ -3995,6 +4082,7 @@ class ZorkEmulator:
                 event = {
                     "name": name,
                     "fire_day": resolved_fire_day,
+                    "fire_hour": resolved_fire_hour,
                     "created_day": current_day,
                     "created_hour": current_hour,
                     "description": str(entry.get("description") or "")[:200],
@@ -4504,6 +4592,11 @@ class ZorkEmulator:
         _speed_mult = state.get("speed_multiplier", 1.0)
         _calendar = cls._calendar_for_prompt(state)
         _calendar_reminders = cls._calendar_reminder_text(_calendar)
+        _active_location_context = {
+            "room_title": player_state.get("room_title"),
+            "location": player_state.get("location"),
+            "room_summary": player_state.get("room_summary"),
+        }
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
@@ -4514,6 +4607,7 @@ class ZorkEmulator:
             f"WORLD_STATE: {cls._dump_json(model_state)}\n"
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
+            f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
         )
@@ -4733,43 +4827,47 @@ class ZorkEmulator:
 
                     timer_interrupt_context = None
                     pending = cls._pending_timers.get(campaign_id)
-                    if pending is not None:
-                        if pending.get("interruptible", True):
-                            cancelled_timer = cls.cancel_pending_timer(campaign_id)
-                            if cancelled_timer:
-                                cls.increment_player_stat(
-                                    player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
+                    can_interrupt = (
+                        pending is not None
+                        and pending.get("interruptible", True)
+                        and cls._timer_can_be_interrupted_by(pending, ctx.author.id)
+                    )
+                    if can_interrupt:
+                        cancelled_timer = cls.cancel_pending_timer(campaign_id)
+                        if cancelled_timer:
+                            cls.increment_player_stat(
+                                player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
+                            )
+                            player.updated = db.func.now()
+                            db.session.commit()
+                            interrupt_action = cancelled_timer.get(
+                                "interrupt_action"
+                            )
+                            if interrupt_action:
+                                timer_interrupt_context = interrupt_action
+                            # Persist the interruption as a turn so it appears in RECENT_TURNS.
+                            event_desc = cancelled_timer.get(
+                                "event", "an impending event"
+                            )
+                            interrupt_note = (
+                                f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
+                                f'Averted event: "{event_desc}"'
+                            )
+                            if interrupt_action:
+                                interrupt_note += (
+                                    f' Interruption context: "{interrupt_action}"'
                                 )
-                                player.updated = db.func.now()
-                                db.session.commit()
-                                interrupt_action = cancelled_timer.get(
-                                    "interrupt_action"
+                            db.session.add(
+                                ZorkTurn(
+                                    campaign_id=campaign.id,
+                                    user_id=ctx.author.id,
+                                    kind="narrator",
+                                    content=interrupt_note,
+                                    channel_id=ctx.channel.id,
                                 )
-                                if interrupt_action:
-                                    timer_interrupt_context = interrupt_action
-                                # Persist the interruption as a turn so it appears in RECENT_TURNS.
-                                event_desc = cancelled_timer.get(
-                                    "event", "an impending event"
-                                )
-                                interrupt_note = (
-                                    f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
-                                    f'Averted event: "{event_desc}"'
-                                )
-                                if interrupt_action:
-                                    interrupt_note += (
-                                        f' Interruption context: "{interrupt_action}"'
-                                    )
-                                db.session.add(
-                                    ZorkTurn(
-                                        campaign_id=campaign.id,
-                                        user_id=ctx.author.id,
-                                        kind="narrator",
-                                        content=interrupt_note,
-                                        channel_id=ctx.channel.id,
-                                    )
-                                )
-                                db.session.commit()
-                        # Non-interruptible timers are left running.
+                            )
+                            db.session.commit()
+                    # Non-interruptible timers or local timers from another player are left running.
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
@@ -4986,18 +5084,28 @@ class ZorkEmulator:
                             lines.append("**Upcoming Events:**")
                             for ev in calendar:
                                 days_remaining = int(ev.get("days_remaining", 0))
+                                hours_remaining = int(
+                                    ev.get("hours_remaining", days_remaining * 24)
+                                )
                                 fire_day = int(ev.get("fire_day", 1))
+                                fire_hour = max(
+                                    0, min(23, int(ev.get("fire_hour", 23)))
+                                )
                                 desc = ev.get("description", "")
-                                if days_remaining < 0:
-                                    eta = f"overdue by {abs(days_remaining)} day(s)"
-                                elif days_remaining == 0:
-                                    eta = "fires today"
-                                elif days_remaining == 1:
-                                    eta = "fires tomorrow"
+                                if hours_remaining < 0:
+                                    eta = f"overdue by {abs(hours_remaining)} hour(s)"
+                                elif hours_remaining == 0:
+                                    eta = "fires now"
+                                elif hours_remaining < 48:
+                                    eta = f"fires in {hours_remaining} hour(s)"
                                 else:
-                                    eta = f"fires in {days_remaining} days"
+                                    eta_days = (hours_remaining + 23) // 24
+                                    eta = f"fires in {eta_days} day(s)"
                                 lines.append(
-                                    f"- **{ev.get('name', 'Unknown')}** — Day {fire_day} ({eta})"
+                                    (
+                                        f"- **{ev.get('name', 'Unknown')}** — "
+                                        f"Day {fire_day}, {fire_hour:02d}:00 ({eta})"
+                                    )
                                     + (f" ({desc})" if desc else "")
                                 )
                         else:
@@ -5345,6 +5453,25 @@ class ZorkEmulator:
                                 first_payload.get("event_description")
                                 or "Something happens."
                             ).strip()[:500]
+                            interruptible = bool(
+                                first_payload.get(
+                                    "interruptible",
+                                    first_payload.get("set_timer_interruptible", True),
+                                )
+                            )
+                            interrupt_action = first_payload.get(
+                                "interrupt_action",
+                                first_payload.get("set_timer_interrupt_action"),
+                            )
+                            if isinstance(interrupt_action, str):
+                                interrupt_action = interrupt_action.strip()[:500] or None
+                            else:
+                                interrupt_action = None
+                            interrupt_scope = cls._normalize_timer_interrupt_scope(
+                                first_payload.get("interrupt_scope")
+                                or first_payload.get("set_timer_interrupt_scope")
+                                or "global"
+                            )
 
                             cls.cancel_pending_timer(campaign.id)
                             channel_id = ctx.channel.id
@@ -5353,14 +5480,22 @@ class ZorkEmulator:
                                 channel_id,
                                 delay_seconds,
                                 event_description,
+                                interruptible=interruptible,
+                                interrupt_action=interrupt_action,
+                                interrupt_scope=interrupt_scope,
+                                interrupt_user_id=ctx.author.id,
                             )
                             timer_scheduled_delay = delay_seconds
                             timer_scheduled_event = event_description
+                            timer_scheduled_interruptible = interruptible
+                            timer_scheduled_interrupt_scope = interrupt_scope
                             logger.info(
-                                "Zork timer set: campaign=%s delay=%ds event=%r",
+                                "Zork timer set: campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
                                 campaign.id,
                                 delay_seconds,
                                 event_description,
+                                interruptible,
+                                interrupt_scope,
                             )
                             tool_result_block = (
                                 "TIMER_SET (system confirmation): A timed event has been scheduled.\n"
@@ -5370,7 +5505,10 @@ class ZorkEmulator:
                             )
                             _zork_log(
                                 "TIMER TOOL CALL",
-                                f"delay={delay_seconds}s event={event_description!r}",
+                                (
+                                    f"delay={delay_seconds}s event={event_description!r} "
+                                    f"interruptible={interruptible} scope={interrupt_scope}"
+                                ),
                             )
                             tool_augmented_prompt = (
                                 f"{tool_augmented_prompt}\n{tool_result_block}\n"
@@ -5512,6 +5650,25 @@ class ZorkEmulator:
                                 first_payload.get("event_description")
                                 or "Something happens."
                             ).strip()[:500]
+                            interruptible = bool(
+                                first_payload.get(
+                                    "interruptible",
+                                    first_payload.get("set_timer_interruptible", True),
+                                )
+                            )
+                            interrupt_action = first_payload.get(
+                                "interrupt_action",
+                                first_payload.get("set_timer_interrupt_action"),
+                            )
+                            if isinstance(interrupt_action, str):
+                                interrupt_action = interrupt_action.strip()[:500] or None
+                            else:
+                                interrupt_action = None
+                            interrupt_scope = cls._normalize_timer_interrupt_scope(
+                                first_payload.get("interrupt_scope")
+                                or first_payload.get("set_timer_interrupt_scope")
+                                or "global"
+                            )
 
                             cls.cancel_pending_timer(campaign.id)
                             channel_id = ctx.channel.id
@@ -5520,14 +5677,22 @@ class ZorkEmulator:
                                 channel_id,
                                 delay_seconds,
                                 event_description,
+                                interruptible=interruptible,
+                                interrupt_action=interrupt_action,
+                                interrupt_scope=interrupt_scope,
+                                interrupt_user_id=ctx.author.id,
                             )
                             timer_scheduled_delay = delay_seconds
                             timer_scheduled_event = event_description
+                            timer_scheduled_interruptible = interruptible
+                            timer_scheduled_interrupt_scope = interrupt_scope
                             logger.info(
-                                "Zork timer set (with narration): campaign=%s delay=%ds event=%r",
+                                "Zork timer set (with narration): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
                                 campaign.id,
                                 delay_seconds,
                                 event_description,
+                                interruptible,
+                                interrupt_scope,
                             )
 
                     narration = response.strip()
@@ -5542,6 +5707,7 @@ class ZorkEmulator:
                     timer_scheduled_delay = None
                     timer_scheduled_event = None
                     timer_scheduled_interruptible = True
+                    timer_scheduled_interrupt_scope = "global"
 
                     json_text = cls._extract_json(response)
                     if json_text:
@@ -5600,6 +5766,9 @@ class ZorkEmulator:
                                         )
                                     else:
                                         t_interrupt_action = None
+                                    t_interrupt_scope = cls._normalize_timer_interrupt_scope(
+                                        payload.get("set_timer_interrupt_scope", "global")
+                                    )
                                     cls._schedule_timer(
                                         campaign.id,
                                         ctx.channel.id,
@@ -5607,21 +5776,26 @@ class ZorkEmulator:
                                         t_event,
                                         interruptible=t_interruptible,
                                         interrupt_action=t_interrupt_action,
+                                        interrupt_scope=t_interrupt_scope,
+                                        interrupt_user_id=ctx.author.id,
                                     )
                                     timer_scheduled_delay = t_delay
                                     timer_scheduled_event = t_event
                                     timer_scheduled_interruptible = t_interruptible
+                                    timer_scheduled_interrupt_scope = t_interrupt_scope
                                     _zork_log(
                                         f"TIMER SET campaign={campaign.id}",
                                         f"delay={t_delay}s event={t_event!r} "
-                                        f"interruptible={t_interruptible}",
+                                        f"interruptible={t_interruptible} "
+                                        f"scope={t_interrupt_scope}",
                                     )
                                     logger.info(
-                                        "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s",
+                                        "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
                                         campaign.id,
                                         t_delay,
                                         t_event,
                                         t_interruptible,
+                                        t_interrupt_scope,
                                     )
                         except json.JSONDecodeError as e:
                             logger.warning(
@@ -5927,7 +6101,10 @@ class ZorkEmulator:
                         expiry_ts = int(time.time()) + timer_scheduled_delay
                         event_hint = timer_scheduled_event or "Something happens"
                         if timer_scheduled_interruptible:
-                            interrupt_hint = "act to prevent!"
+                            if timer_scheduled_interrupt_scope == "local":
+                                interrupt_hint = "acting player can prevent"
+                            else:
+                                interrupt_hint = "act to prevent!"
                         else:
                             interrupt_hint = "unavoidable"
                         narration = (
@@ -6010,6 +6187,8 @@ class ZorkEmulator:
         event_description: str,
         interruptible: bool = True,
         interrupt_action: Optional[str] = None,
+        interrupt_scope: str = "global",
+        interrupt_user_id: Optional[int] = None,
     ):
         task = asyncio.create_task(
             cls._timer_task(campaign_id, channel_id, delay_seconds, event_description)
@@ -6022,6 +6201,8 @@ class ZorkEmulator:
             "delay": delay_seconds,
             "interruptible": interruptible,
             "interrupt_action": interrupt_action,
+            "interrupt_scope": cls._normalize_timer_interrupt_scope(interrupt_scope),
+            "interrupt_user_id": str(interrupt_user_id) if interrupt_user_id is not None else None,
         }
 
     @classmethod
