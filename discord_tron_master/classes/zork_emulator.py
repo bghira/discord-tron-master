@@ -4734,7 +4734,7 @@ class ZorkEmulator:
                 # Skip OOC messages — those are meta-messages to the GM.
                 if _OOC_RE.match(content):
                     continue
-                clipped = cls._trim_text(content, cls.MAX_TURN_CHARS)
+                clipped = content
                 clipped = cls._strip_inventory_mentions(clipped)
                 name = _player_names.get(turn.user_id)
                 mention = f"<@{turn.user_id}>" if turn.user_id else ""
@@ -4764,7 +4764,6 @@ class ZorkEmulator:
                 clipped = cls._strip_narration_footer(clipped)
                 if not clipped:
                     continue
-                clipped = cls._trim_text(clipped, cls.MAX_TURN_CHARS)
                 recent_lines.append(f"{turn_prefix} NARRATOR: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
         rails_context = cls._build_rails_context(player_state, party_snapshot)
@@ -5550,7 +5549,7 @@ class ZorkEmulator:
                                     "MEMORY_TURN_RESULT:\n"
                                     f"- turn_id: {target_turn.id}\n"
                                     f"- kind: {target_turn.kind}\n"
-                                    f"- actor_id: {target_turn.actor_id}\n"
+                                    f"- user_id: {target_turn.user_id}\n"
                                     "- full_text:\n"
                                     f"{full_text}"
                                 )
