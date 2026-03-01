@@ -173,7 +173,8 @@ class ZorkEmulator:
         "current_status, allegiance, relationship. On subsequent turns only mutable fields are accepted: "
         "location, current_status, allegiance, relationship, deceased_reason, and any other dynamic key. "
         "Immutable fields (name, personality, background, appearance) are locked at creation and silently ignored on updates. "
-        "To remove a character from the roster, set that character slug to null in character_updates. "
+        "To remove a character from the roster, set that character slug to null in character_updates "
+        "or set it to {'remove': true}. "
         "Set deceased_reason to a string when a character dies. "
         "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.)\n\n"
         "Rules:\n"
@@ -3903,20 +3904,61 @@ class ZorkEmulator:
         """
         if not isinstance(updates, dict):
             return existing
-        for slug, fields in updates.items():
-            slug = str(slug).strip()
+        for raw_slug, fields in updates.items():
+            slug = str(raw_slug).strip()
             if not slug:
                 continue
-            if fields is None:
-                existing.pop(slug, None)
+
+            # Resolve loose slug/name variants back to an existing slug.
+            canonical = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+            target_slug = None
+            if slug in existing:
+                target_slug = slug
+            elif canonical and canonical in existing:
+                target_slug = canonical
+            else:
+                for existing_slug, existing_fields in existing.items():
+                    existing_canonical = re.sub(
+                        r"[^a-z0-9]+", "-", str(existing_slug).lower()
+                    ).strip("-")
+                    if canonical and canonical == existing_canonical:
+                        target_slug = existing_slug
+                        break
+                    if isinstance(existing_fields, dict):
+                        name_canonical = re.sub(
+                            r"[^a-z0-9]+", "-",
+                            str(existing_fields.get("name") or "").lower(),
+                        ).strip("-")
+                        if canonical and canonical == name_canonical:
+                            target_slug = existing_slug
+                            break
+
+            delete_requested = (
+                fields is None
+                or (
+                    isinstance(fields, str)
+                    and fields.strip().lower() in {"delete", "remove", "null"}
+                )
+                or (
+                    isinstance(fields, dict)
+                    and bool(
+                        fields.get("remove")
+                        or fields.get("delete")
+                        or fields.get("_delete")
+                        or fields.get("deleted")
+                    )
+                )
+            )
+            if delete_requested:
+                existing.pop(target_slug or slug, None)
                 continue
             if not isinstance(fields, dict):
                 continue
-            if slug in existing:
+            if target_slug in existing:
                 # Existing character — only accept mutable fields.
                 for key, value in fields.items():
                     if key not in cls.IMMUTABLE_CHARACTER_FIELDS:
-                        existing[slug][key] = value
+                        existing[target_slug][key] = value
             else:
                 if on_rails:
                     logger.info("On-rails: rejected new character slug %r", slug)
