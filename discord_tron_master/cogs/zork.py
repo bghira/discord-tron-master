@@ -1242,31 +1242,9 @@ class Zork(commands.Cog):
                 return
 
             # Display roster.
-            if not characters:
-                await ctx.send("No characters in the roster yet.")
-                return
-            lines = ["**Character Roster:**"]
-            for slug, char in characters.items():
-                name = char.get("name", slug)
-                loc = char.get("location", "unknown")
-                status = char.get("current_status", "")
-                bg = char.get("background", "")
-                origin = bg.split(".")[0].strip() if bg else ""
-                portrait = char.get("image_url", "")
-                deceased = char.get("deceased_reason")
-                entry = f"- **{name}** ({slug})"
-                if deceased:
-                    entry += f" [DECEASED: {deceased}]"
-                else:
-                    entry += f" — {loc}"
-                    if status:
-                        entry += f" | {status}"
-                if origin:
-                    entry += f"\n  *{origin}.*"
-                if portrait:
-                    entry += f"\n  Portrait: {portrait}"
-                lines.append(entry)
-            await DiscordBot.send_large_message(ctx, "\n".join(lines))
+            await DiscordBot.send_large_message(
+                ctx, ZorkEmulator.format_roster(characters)
+            )
 
     @zork.command(name="map")
     async def zork_map(self, ctx):

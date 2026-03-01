@@ -4363,6 +4363,31 @@ class ZorkEmulator:
         return True
 
     @classmethod
+    def format_roster(cls, characters: Dict[str, dict]) -> str:
+        """Format the character roster for display. Shared by intercepted and cog paths."""
+        if not characters:
+            return "No characters in the roster yet."
+        lines = ["**Character Roster:**"]
+        for slug, char in characters.items():
+            name = char.get("name", slug)
+            loc = char.get("location", "unknown")
+            status = char.get("current_status", "")
+            bg = char.get("background", "")
+            origin = bg.split(".")[0].strip() if bg else ""
+            deceased = char.get("deceased_reason")
+            entry = f"- **{name}** ({slug})"
+            if deceased:
+                entry += f" [DECEASED: {deceased}]"
+            else:
+                entry += f" — {loc}"
+                if status:
+                    entry += f" | {status}"
+            if origin:
+                entry += f"\n  *{origin}.*"
+            lines.append(entry)
+        return "\n".join(lines)
+
+    @classmethod
     def _build_characters_for_prompt(
         cls,
         characters: Dict[str, dict],
@@ -5298,28 +5323,7 @@ class ZorkEmulator:
                     # --- Intercepted: roster ---
                     if action_clean in ("roster", "characters", "npcs"):
                         characters = cls.get_campaign_characters(campaign)
-                        if not characters:
-                            return "No characters in the roster yet."
-                        lines = ["**Character Roster:**"]
-                        for slug, char in characters.items():
-                            name = char.get("name", slug)
-                            loc = char.get("location", "unknown")
-                            status = char.get("current_status", "")
-                            bg = char.get("background", "")
-                            origin = bg.split(".")[0].strip() if bg else ""
-                            deceased = char.get("deceased_reason")
-                            entry = f"- **{name}** ({slug})"
-                            if deceased:
-                                entry += f" [DECEASED: {deceased}]"
-                            else:
-                                entry += f" — {loc}"
-                                if status:
-                                    entry += f" | {status}"
-                            if origin:
-                                entry += f"\n  *{origin}.*"
-                            lines.append(entry)
-                        narration = "\n".join(lines)
-                        return narration
+                        return cls.format_roster(characters)
 
                     turns = cls.get_recent_turns(campaign.id)
                     party_snapshot = cls._build_party_snapshot_for_prompt(
