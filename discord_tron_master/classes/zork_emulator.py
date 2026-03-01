@@ -3910,28 +3910,7 @@ class ZorkEmulator:
                 continue
 
             # Resolve loose slug/name variants back to an existing slug.
-            canonical = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
-            target_slug = None
-            if slug in existing:
-                target_slug = slug
-            elif canonical and canonical in existing:
-                target_slug = canonical
-            else:
-                for existing_slug, existing_fields in existing.items():
-                    existing_canonical = re.sub(
-                        r"[^a-z0-9]+", "-", str(existing_slug).lower()
-                    ).strip("-")
-                    if canonical and canonical == existing_canonical:
-                        target_slug = existing_slug
-                        break
-                    if isinstance(existing_fields, dict):
-                        name_canonical = re.sub(
-                            r"[^a-z0-9]+", "-",
-                            str(existing_fields.get("name") or "").lower(),
-                        ).strip("-")
-                        if canonical and canonical == name_canonical:
-                            target_slug = existing_slug
-                            break
+            target_slug = cls._resolve_existing_character_slug(existing, slug)
 
             delete_requested = (
                 fields is None
@@ -3966,6 +3945,52 @@ class ZorkEmulator:
                 # New character — store everything.
                 existing[slug] = dict(fields)
         return existing
+
+    @classmethod
+    def _resolve_existing_character_slug(
+        cls,
+        existing: Dict[str, dict],
+        raw_slug: object,
+    ) -> Optional[str]:
+        slug = str(raw_slug or "").strip()
+        if not slug:
+            return None
+        canonical = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+        if slug in existing:
+            return slug
+        if canonical and canonical in existing:
+            return canonical
+        for existing_slug, existing_fields in existing.items():
+            existing_canonical = re.sub(
+                r"[^a-z0-9]+", "-", str(existing_slug).lower()
+            ).strip("-")
+            if canonical and canonical == existing_canonical:
+                return existing_slug
+            if isinstance(existing_fields, dict):
+                name_canonical = re.sub(
+                    r"[^a-z0-9]+", "-",
+                    str(existing_fields.get("name") or "").lower(),
+                ).strip("-")
+                if canonical and canonical == name_canonical:
+                    return existing_slug
+        return None
+
+    @classmethod
+    def _character_updates_from_state_nulls(
+        cls,
+        state_update: object,
+        existing_chars: Dict[str, dict],
+    ) -> Dict[str, object]:
+        out: Dict[str, object] = {}
+        if not isinstance(state_update, dict) or not isinstance(existing_chars, dict):
+            return out
+        for key, value in state_update.items():
+            if value is not None:
+                continue
+            resolved = cls._resolve_existing_character_slug(existing_chars, key)
+            if resolved:
+                out[resolved] = None
+        return out
 
     @staticmethod
     def _calendar_resolve_fire_point(
@@ -6073,6 +6098,16 @@ class ZorkEmulator:
                         state_update, player_state_update
                     )
                     state_update = cls._scrub_inventory_from_state(state_update)
+                    existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
+                    state_null_character_updates = cls._character_updates_from_state_nulls(
+                        state_update,
+                        existing_chars_for_state_nulls,
+                    )
+                    if state_null_character_updates:
+                        merged_character_updates = dict(state_null_character_updates)
+                        if isinstance(character_updates, dict):
+                            merged_character_updates.update(character_updates)
+                        character_updates = merged_character_updates
 
                     campaign_state = cls.get_campaign_state(campaign)
                     pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
@@ -6594,6 +6629,16 @@ class ZorkEmulator:
                     state_update, player_state_update
                 )
                 state_update = cls._scrub_inventory_from_state(state_update)
+                existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
+                state_null_character_updates = cls._character_updates_from_state_nulls(
+                    state_update,
+                    existing_chars_for_state_nulls,
+                )
+                if state_null_character_updates:
+                    merged_character_updates = dict(state_null_character_updates)
+                    if isinstance(character_updates, dict):
+                        merged_character_updates.update(character_updates)
+                    character_updates = merged_character_updates
 
                 campaign_state = cls.get_campaign_state(campaign)
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
