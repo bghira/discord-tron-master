@@ -5221,7 +5221,6 @@ class ZorkEmulator:
                             status = char.get("current_status", "")
                             bg = char.get("background", "")
                             origin = bg.split(".")[0].strip() if bg else ""
-                            portrait = char.get("image_url", "")
                             deceased = char.get("deceased_reason")
                             entry = f"- **{name}** ({slug})"
                             if deceased:
@@ -5232,8 +5231,6 @@ class ZorkEmulator:
                                     entry += f" | {status}"
                             if origin:
                                 entry += f"\n  *{origin}.*"
-                            if portrait:
-                                entry += f"\n  Portrait: {portrait}"
                             lines.append(entry)
                         narration = "\n".join(lines)
                         return narration
