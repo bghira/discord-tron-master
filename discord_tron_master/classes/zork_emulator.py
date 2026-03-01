@@ -5017,59 +5017,69 @@ class ZorkEmulator:
                     if cls.is_in_setup_mode(campaign):
                         return "Campaign setup is still in progress. Please complete setup first."
 
-                    timer_interrupt_context = None
-                    pending = cls._pending_timers.get(campaign_id)
-                    can_interrupt = (
-                        pending is not None
-                        and pending.get("interruptible", True)
-                        and cls._timer_can_be_interrupted_by(pending, ctx.author.id)
-                    )
-                    if can_interrupt:
-                        cancelled_timer = cls.cancel_pending_timer(campaign_id)
-                        if cancelled_timer:
-                            cls.increment_player_stat(
-                                player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
-                            )
-                            player.updated = db.func.now()
-                            db.session.commit()
-                            interrupt_action = cancelled_timer.get(
-                                "interrupt_action"
-                            )
-                            if interrupt_action:
-                                timer_interrupt_context = interrupt_action
-                            # Persist the interruption as a turn so it appears in RECENT_TURNS.
-                            event_desc = cancelled_timer.get(
-                                "event", "an impending event"
-                            )
-                            interrupt_note = (
-                                f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
-                                f'Averted event: "{event_desc}"'
-                            )
-                            if interrupt_action:
-                                interrupt_note += (
-                                    f' Interruption context: "{interrupt_action}"'
-                                )
-                            timer_interrupt_turn = ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="narrator",
-                                content=interrupt_note,
-                                channel_id=ctx.channel.id,
-                            )
-                            db.session.add(timer_interrupt_turn)
-                            db.session.flush()
-                            interrupt_state = cls.get_campaign_state(campaign)
-                            cls._record_turn_game_time(
-                                interrupt_state,
-                                timer_interrupt_turn.id,
-                                cls._extract_game_time_snapshot(interrupt_state),
-                            )
-                            campaign.state_json = cls._dump_json(interrupt_state)
-                            db.session.commit()
-                    # Non-interruptible timers or local timers from another player are left running.
-
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
+
+                    # Intercepted commands that don't count as player actions
+                    # should not interrupt timers.
+                    _INTERCEPTED_COMMANDS = {
+                        "look", "l", "inventory", "inv", "i",
+                        "calendar", "cal", "events",
+                        "roster", "characters", "npcs",
+                    }
+                    _is_intercepted = action_clean in _INTERCEPTED_COMMANDS
+
+                    timer_interrupt_context = None
+                    if not _is_intercepted:
+                        pending = cls._pending_timers.get(campaign_id)
+                        can_interrupt = (
+                            pending is not None
+                            and pending.get("interruptible", True)
+                            and cls._timer_can_be_interrupted_by(pending, ctx.author.id)
+                        )
+                        if can_interrupt:
+                            cancelled_timer = cls.cancel_pending_timer(campaign_id)
+                            if cancelled_timer:
+                                cls.increment_player_stat(
+                                    player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
+                                )
+                                player.updated = db.func.now()
+                                db.session.commit()
+                                interrupt_action = cancelled_timer.get(
+                                    "interrupt_action"
+                                )
+                                if interrupt_action:
+                                    timer_interrupt_context = interrupt_action
+                                # Persist the interruption as a turn so it appears in RECENT_TURNS.
+                                event_desc = cancelled_timer.get(
+                                    "event", "an impending event"
+                                )
+                                interrupt_note = (
+                                    f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
+                                    f'Averted event: "{event_desc}"'
+                                )
+                                if interrupt_action:
+                                    interrupt_note += (
+                                        f' Interruption context: "{interrupt_action}"'
+                                    )
+                                timer_interrupt_turn = ZorkTurn(
+                                    campaign_id=campaign.id,
+                                    user_id=ctx.author.id,
+                                    kind="narrator",
+                                    content=interrupt_note,
+                                    channel_id=ctx.channel.id,
+                                )
+                                db.session.add(timer_interrupt_turn)
+                                db.session.flush()
+                                interrupt_state = cls.get_campaign_state(campaign)
+                                cls._record_turn_game_time(
+                                    interrupt_state,
+                                    timer_interrupt_turn.id,
+                                    cls._extract_game_time_snapshot(interrupt_state),
+                                )
+                                campaign.state_json = cls._dump_json(interrupt_state)
+                                db.session.commit()
+                        # Non-interruptible timers or local timers from another player are left running.
                     is_thread_channel = isinstance(ctx.channel, discord.Thread)
 
                     has_character_name = bool(
