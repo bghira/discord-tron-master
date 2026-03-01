@@ -100,6 +100,8 @@ class ZorkEmulator:
         "location",
         "room_id",
     }
+    TURN_TIME_INDEX_KEY = "_turn_time_index"
+    MAX_TURN_TIME_ENTRIES = 256
     MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {
         "last_narration",
         "room_scene_images",
@@ -114,6 +116,7 @@ class ZorkEmulator:
         "speed_multiplier",
         "game_time",
         "calendar",
+        TURN_TIME_INDEX_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
 
@@ -176,6 +179,7 @@ class ZorkEmulator:
         "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
+        "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
         "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
@@ -247,6 +251,9 @@ class ZorkEmulator:
         "\nYou also have a memory_terms tool for wildcard term/category listing. Use it BEFORE storing memories:\n"
         '{"tool_call": "memory_terms", "wildcard": "marcus*"}\n'
         "This returns existing category/term buckets so you can avoid duplicates.\n"
+        "\nYou also have a memory_turn tool for full turn text retrieval by turn number:\n"
+        '{"tool_call": "memory_turn", "turn_id": 1234}\n'
+        "Use this immediately after memory_search when a hit is relevant and you need exact wording/details.\n"
         "\nYou also have a memory_store tool for curated long-term memories:\n"
         '{"tool_call": "memory_store", "category": "char:marcus-blackwell", "term": "marcus", "memory": "Marcus admitted he forged the ledger."}\n'
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
@@ -777,6 +784,79 @@ class ZorkEmulator:
         except (TypeError, ValueError):
             return default
         return parsed if parsed >= 0 else default
+
+    @classmethod
+    def _extract_game_time_snapshot(
+        cls, campaign_state: Dict[str, object]
+    ) -> Dict[str, int]:
+        game_time = campaign_state.get("game_time") if isinstance(campaign_state, dict) else {}
+        if not isinstance(game_time, dict):
+            game_time = {}
+        day = cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1
+        hour = cls._coerce_non_negative_int(game_time.get("hour", 8), default=8)
+        minute = cls._coerce_non_negative_int(game_time.get("minute", 0), default=0)
+        return {
+            "day": max(1, day),
+            "hour": min(23, max(0, hour)),
+            "minute": min(59, max(0, minute)),
+        }
+
+    @classmethod
+    def _record_turn_game_time(
+        cls,
+        campaign_state: Dict[str, object],
+        turn_id: Optional[int],
+        game_time: Optional[Dict[str, int]],
+    ) -> None:
+        if not isinstance(campaign_state, dict) or turn_id is None:
+            return
+        if not isinstance(game_time, dict):
+            return
+        turn_key = str(int(turn_id))
+        index = campaign_state.get(cls.TURN_TIME_INDEX_KEY)
+        if not isinstance(index, dict):
+            index = {}
+            campaign_state[cls.TURN_TIME_INDEX_KEY] = index
+        index[turn_key] = {
+            "day": cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1,
+            "hour": min(
+                23, max(0, cls._coerce_non_negative_int(game_time.get("hour", 0), default=0))
+            ),
+            "minute": min(
+                59, max(0, cls._coerce_non_negative_int(game_time.get("minute", 0), default=0))
+            ),
+        }
+        if len(index) > cls.MAX_TURN_TIME_ENTRIES:
+            keyed = []
+            for key in index.keys():
+                try:
+                    keyed.append((int(key), key))
+                except (TypeError, ValueError):
+                    continue
+            keyed.sort()
+            to_drop = len(index) - cls.MAX_TURN_TIME_ENTRIES
+            for _, key in keyed[:to_drop]:
+                index.pop(key, None)
+
+    @classmethod
+    def _turn_context_prefix(
+        cls,
+        turn: ZorkTurn,
+        campaign_state: Dict[str, object],
+    ) -> str:
+        turn_number = int(getattr(turn, "id", 0) or 0)
+        index = campaign_state.get(cls.TURN_TIME_INDEX_KEY) if isinstance(campaign_state, dict) else {}
+        if not isinstance(index, dict):
+            index = {}
+        entry = index.get(str(turn_number))
+        if isinstance(entry, dict):
+            day = cls._coerce_non_negative_int(entry.get("day", 1), default=1) or 1
+            hour = cls._coerce_non_negative_int(entry.get("hour", 0), default=0)
+            minute = cls._coerce_non_negative_int(entry.get("minute", 0), default=0)
+            hour = min(23, max(0, hour))
+            minute = min(59, max(0, minute))
+            return f"[TURN #{turn_number} | Day {day} {hour:02d}:{minute:02d}]"
+        return f"[TURN #{turn_number}]"
 
     @staticmethod
     def _normalize_timer_interrupt_scope(value: object) -> str:
@@ -4538,6 +4618,7 @@ class ZorkEmulator:
             content = (turn.content or "").strip()
             if not content:
                 continue
+            turn_prefix = cls._turn_context_prefix(turn, state)
             if turn.kind == "player":
                 # Skip OOC messages — those are meta-messages to the GM.
                 if _OOC_RE.match(content):
@@ -4554,7 +4635,7 @@ class ZorkEmulator:
                     label = f"PLAYER {mention}"
                 else:
                     label = "PLAYER"
-                recent_lines.append(f"{label}: {clipped}")
+                recent_lines.append(f"{turn_prefix} {label}: {clipped}")
             elif turn.kind == "narrator":
                 # Skip error/fallback narrations.
                 if content.lower() in _ERROR_PHRASES:
@@ -4573,7 +4654,7 @@ class ZorkEmulator:
                 if not clipped:
                     continue
                 clipped = cls._trim_text(clipped, cls.MAX_TURN_CHARS)
-                recent_lines.append(f"NARRATOR: {clipped}")
+                recent_lines.append(f"{turn_prefix} NARRATOR: {clipped}")
         recent_text = "\n".join(recent_lines) if recent_lines else "None"
         rails_context = cls._build_rails_context(player_state, party_snapshot)
 
@@ -4857,15 +4938,22 @@ class ZorkEmulator:
                                 interrupt_note += (
                                     f' Interruption context: "{interrupt_action}"'
                                 )
-                            db.session.add(
-                                ZorkTurn(
-                                    campaign_id=campaign.id,
-                                    user_id=ctx.author.id,
-                                    kind="narrator",
-                                    content=interrupt_note,
-                                    channel_id=ctx.channel.id,
-                                )
+                            timer_interrupt_turn = ZorkTurn(
+                                campaign_id=campaign.id,
+                                user_id=ctx.author.id,
+                                kind="narrator",
+                                content=interrupt_note,
+                                channel_id=ctx.channel.id,
                             )
+                            db.session.add(timer_interrupt_turn)
+                            db.session.flush()
+                            interrupt_state = cls.get_campaign_state(campaign)
+                            cls._record_turn_game_time(
+                                interrupt_state,
+                                timer_interrupt_turn.id,
+                                cls._extract_game_time_snapshot(interrupt_state),
+                            )
+                            campaign.state_json = cls._dump_json(interrupt_state)
                             db.session.commit()
                     # Non-interruptible timers or local timers from another player are left running.
 
@@ -5020,24 +5108,28 @@ class ZorkEmulator:
                         if inventory_line:
                             narration = f"{narration}\n\n{inventory_line}"
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        db.session.add(
-                            ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="player",
-                                content=action,
-                                channel_id=ctx.channel.id,
-                            )
+                        quick_state = cls.get_campaign_state(campaign)
+                        quick_time = cls._extract_game_time_snapshot(quick_state)
+                        look_player_turn = ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="player",
+                            content=action,
+                            channel_id=ctx.channel.id,
                         )
-                        db.session.add(
-                            ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="narrator",
-                                content=narration,
-                                channel_id=ctx.channel.id,
-                            )
+                        look_narrator_turn = ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="narrator",
+                            content=narration,
+                            channel_id=ctx.channel.id,
                         )
+                        db.session.add(look_player_turn)
+                        db.session.add(look_narrator_turn)
+                        db.session.flush()
+                        cls._record_turn_game_time(quick_state, look_player_turn.id, quick_time)
+                        cls._record_turn_game_time(quick_state, look_narrator_turn.id, quick_time)
+                        campaign.state_json = cls._dump_json(quick_state)
                         campaign.last_narration = narration
                         campaign.updated = db.func.now()
                         db.session.commit()
@@ -5047,24 +5139,28 @@ class ZorkEmulator:
                             cls._format_inventory(player_state) or "Inventory: empty"
                         )
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        db.session.add(
-                            ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="player",
-                                content=action,
-                                channel_id=ctx.channel.id,
-                            )
+                        quick_state = cls.get_campaign_state(campaign)
+                        quick_time = cls._extract_game_time_snapshot(quick_state)
+                        inv_player_turn = ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="player",
+                            content=action,
+                            channel_id=ctx.channel.id,
                         )
-                        db.session.add(
-                            ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="narrator",
-                                content=narration,
-                                channel_id=ctx.channel.id,
-                            )
+                        inv_narrator_turn = ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="narrator",
+                            content=narration,
+                            channel_id=ctx.channel.id,
                         )
+                        db.session.add(inv_player_turn)
+                        db.session.add(inv_narrator_turn)
+                        db.session.flush()
+                        cls._record_turn_game_time(quick_state, inv_player_turn.id, quick_time)
+                        cls._record_turn_game_time(quick_state, inv_narrator_turn.id, quick_time)
+                        campaign.state_json = cls._dump_json(quick_state)
                         campaign.last_narration = narration
                         campaign.updated = db.func.now()
                         db.session.commit()
@@ -5301,6 +5397,16 @@ class ZorkEmulator:
                                     tool_result_block = "MEMORY_RECALL: No relevant memories found."
                             else:
                                 tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
+                            tool_result_block = (
+                                f"{tool_result_block}\n"
+                                "MEMORY_RECALL_NEXT_ACTIONS:\n"
+                                "- To retrieve FULL text for a specific hit turn number:\n"
+                                '  {"tool_call": "memory_turn", "turn_id": 1234}\n'
+                                "- To discover curated memory categories/terms before narrowing search:\n"
+                                '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
+                                "- To search inside one curated category after term discovery:\n"
+                                '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
+                            )
                             _zork_log("MEMORY RECALL BLOCK", tool_result_block)
                             tool_augmented_prompt = (
                                 f"{tool_augmented_prompt}\n{tool_result_block}\n"
@@ -5316,6 +5422,56 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("AUGMENTED API RESPONSE", response)
+
+                        elif tool_name == "memory_turn":
+                            turn_id_raw = (
+                                first_payload.get("turn_id")
+                                or first_payload.get("id")
+                                or first_payload.get("turn")
+                            )
+                            try:
+                                turn_id = int(turn_id_raw)
+                            except (TypeError, ValueError):
+                                turn_id = 0
+                            if turn_id > 0:
+                                target_turn = ZorkTurn.query.filter_by(
+                                    campaign_id=campaign.id,
+                                    id=turn_id,
+                                ).first()
+                            else:
+                                target_turn = None
+                            if target_turn is None:
+                                tool_result_block = (
+                                    "MEMORY_TURN_RESULT: turn not found in this campaign.\n"
+                                    "Try another hit turn_id from MEMORY_RECALL, or run memory_search again."
+                                )
+                            else:
+                                full_text = (target_turn.content or "").strip()
+                                if not full_text:
+                                    full_text = "(empty turn content)"
+                                tool_result_block = (
+                                    "MEMORY_TURN_RESULT:\n"
+                                    f"- turn_id: {target_turn.id}\n"
+                                    f"- kind: {target_turn.kind}\n"
+                                    f"- actor_id: {target_turn.actor_id}\n"
+                                    "- full_text:\n"
+                                    f"{full_text}"
+                                )
+                            _zork_log("MEMORY TURN BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("MEMORY TURN AUGMENTED RESPONSE", response)
 
                         elif tool_name == "memory_terms":
                             wildcard = str(
@@ -5876,6 +6032,7 @@ class ZorkEmulator:
                     state_update = cls._scrub_inventory_from_state(state_update)
 
                     campaign_state = cls.get_campaign_state(campaign)
+                    pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     campaign_state = cls._apply_state_update(
                         campaign_state, state_update
                     )
@@ -6115,19 +6272,20 @@ class ZorkEmulator:
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
+                    post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
 
                     # Don't store OOC meta-messages in turn history.
                     _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
+                    player_turn = None
                     if not _is_ooc:
-                        db.session.add(
-                            ZorkTurn(
-                                campaign_id=campaign.id,
-                                user_id=ctx.author.id,
-                                kind="player",
-                                content=action,
-                                channel_id=ctx.channel.id,
-                            )
+                        player_turn = ZorkTurn(
+                            campaign_id=campaign.id,
+                            user_id=ctx.author.id,
+                            kind="player",
+                            content=action,
+                            channel_id=ctx.channel.id,
                         )
+                        db.session.add(player_turn)
                     narrator_turn = ZorkTurn(
                         campaign_id=campaign.id,
                         user_id=ctx.author.id,
@@ -6136,6 +6294,19 @@ class ZorkEmulator:
                         channel_id=ctx.channel.id,
                     )
                     db.session.add(narrator_turn)
+                    db.session.flush()
+                    if player_turn is not None:
+                        cls._record_turn_game_time(
+                            campaign_state,
+                            player_turn.id,
+                            pre_turn_game_time,
+                        )
+                    cls._record_turn_game_time(
+                        campaign_state,
+                        narrator_turn.id,
+                        post_turn_game_time,
+                    )
+                    campaign.state_json = cls._dump_json(campaign_state)
                     db.session.commit()
 
                     cls._create_snapshot(narrator_turn, campaign)
@@ -6459,6 +6630,13 @@ class ZorkEmulator:
                     channel_id=channel_id,
                 )
                 db.session.add(narrator_turn)
+                db.session.flush()
+                cls._record_turn_game_time(
+                    campaign_state,
+                    narrator_turn.id,
+                    cls._extract_game_time_snapshot(campaign_state),
+                )
+                campaign.state_json = cls._dump_json(campaign_state)
                 db.session.commit()
 
                 cls._create_snapshot(narrator_turn, campaign)
