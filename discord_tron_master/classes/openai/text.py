@@ -196,7 +196,7 @@ class GPT:
             )
 
             return client.chat.completions.create(
-                model="glm-5",
+                model="glm-4.6",
                 messages=message_log,
                 max_completion_tokens=self.max_tokens,
                 # stop=[],
