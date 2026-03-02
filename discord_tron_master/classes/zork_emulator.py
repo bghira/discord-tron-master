@@ -402,6 +402,11 @@ class ZorkEmulator:
         "Use simple ASCII only: - | + . # / \\ and letters.\n"
         "Include other player markers (A, B, C, ...) and add a Legend at the bottom.\n"
         "In the Legend, use PLAYER_NAME for @ and character_name from OTHER_PLAYERS for each marker.\n"
+        "Treat PLAYER_LOCATION_KEY, OTHER_PLAYERS[*].location_key, and WORLD_CHARACTER_LOCATIONS[*].location_key "
+        "as authoritative location IDs.\n"
+        "Only place entities in the same room/box when location_key is exactly equal.\n"
+        "Do NOT nest one distinct location_key area inside another.\n"
+        "If multiple location keys are active, draw separate rooms/areas connected by neutral separators only.\n"
     )
     PRESET_ALIASES = {
         "alice": "alice",
@@ -3525,6 +3530,45 @@ class ZorkEmulator:
         return target_state
 
     @classmethod
+    def _sync_main_party_room_state(
+        cls,
+        campaign_id: int,
+        source_user_id: int,
+        source_state: Dict[str, object],
+    ) -> None:
+        if not isinstance(source_state, dict):
+            return
+        party_status = str(source_state.get("party_status") or "").strip().lower()
+        if party_status != "main_party":
+            return
+        has_room_context = any(
+            source_state.get(key)
+            for key in ("room_id", "location", "room_title", "room_summary", "room_description")
+        )
+        if not has_room_context:
+            return
+
+        targets = (
+            ZorkPlayer.query.filter(
+                ZorkPlayer.campaign_id == campaign_id,
+                ZorkPlayer.user_id != source_user_id,
+            )
+            .all()
+        )
+        for target in targets:
+            target_state = cls.get_player_state(target)
+            if str(target_state.get("party_status") or "").strip().lower() != "main_party":
+                continue
+            for key in cls.ROOM_STATE_KEYS:
+                src_val = source_state.get(key)
+                if src_val is None:
+                    target_state.pop(key, None)
+                else:
+                    target_state[key] = src_val
+            target.state_json = cls._dump_json(target_state)
+            target.updated = db.func.now()
+
+    @classmethod
     def _sanitize_campaign_name_text(cls, text: str) -> str:
         if not text:
             return ""
@@ -4941,6 +4985,31 @@ class ZorkEmulator:
         return "\n".join(lines).strip()
 
     @classmethod
+    def _map_location_components(
+        cls,
+        location_value: object,
+        room_title_value: object,
+        room_summary_value: object,
+    ) -> Dict[str, str]:
+        location = str(location_value or "").strip()
+        room_title = str(room_title_value or "").strip()
+        room_summary = str(room_summary_value or "").strip()
+        summary_first = room_summary.splitlines()[0].strip() if room_summary else ""
+        if "." in summary_first:
+            summary_first = summary_first.split(".", 1)[0].strip()
+        display = room_title or location or summary_first
+        display = re.sub(r"\s+", " ", display).strip()[:120]
+        key_source = location or room_title or display
+        key = re.sub(r"[^a-z0-9]+", "-", key_source.lower()).strip("-")[:80]
+        hint = re.sub(r"\s+", " ", room_summary).strip()[:180]
+        has_data = bool(location or room_title or room_summary)
+        return {
+            "key": key or ("unknown-location" if has_data else ""),
+            "display": display or ("Unknown" if has_data else ""),
+            "hint": hint,
+        }
+
+    @classmethod
     def _assign_player_markers(
         cls, players: List["ZorkPlayer"], exclude_user_id: int
     ) -> List[dict]:
@@ -6245,6 +6314,11 @@ class ZorkEmulator:
                         player_state, player_state_update
                     )
                     player.state_json = cls._dump_json(player_state)
+                    cls._sync_main_party_room_state(
+                        campaign.id,
+                        player.user_id,
+                        player_state,
+                    )
 
                     # --- give_item: cross-player item transfer ---
                     # Heuristic fallback: if model forgot give_item but removed
@@ -6729,6 +6803,11 @@ class ZorkEmulator:
                     player_state, player_state_update
                 )
                 active_player.state_json = cls._dump_json(player_state)
+                cls._sync_main_party_room_state(
+                    campaign.id,
+                    active_player.user_id,
+                    player_state,
+                )
 
                 if isinstance(xp_awarded, int) and xp_awarded > 0:
                     active_player.xp += xp_awarded
@@ -6815,9 +6894,11 @@ class ZorkEmulator:
             player_state = cls.get_player_state(player)
             room_summary = player_state.get("room_summary")
             room_title = player_state.get("room_title")
+            location = player_state.get("location")
             exits = player_state.get("exits")
+            player_loc = cls._map_location_components(location, room_title, room_summary)
 
-            if not room_summary and not room_title:
+            if not player_loc["display"]:
                 return "No map data yet. Try `look` first."
 
             other_players = (
@@ -6830,12 +6911,12 @@ class ZorkEmulator:
             for entry in marker_data:
                 other = entry["player"]
                 other_state = cls.get_player_state(other)
-                other_room = (
-                    other_state.get("room_summary")
-                    or other_state.get("room_title")
-                    or other_state.get("location")
+                other_loc = cls._map_location_components(
+                    other_state.get("location"),
+                    other_state.get("room_title"),
+                    other_state.get("room_summary"),
                 )
-                if not other_room:
+                if not other_loc["display"]:
                     continue
                 other_name = (
                     other_state.get("character_name")
@@ -6846,7 +6927,10 @@ class ZorkEmulator:
                         "marker": entry["marker"],
                         "user_id": other.user_id,
                         "character_name": other_name,
-                        "room": other_room,
+                        "room": other_loc["display"],
+                        "location_key": other_loc["key"],
+                        "location_display": other_loc["display"],
+                        "location_hint": other_loc["hint"],
                         "party_status": other_state.get("party_status"),
                     }
                 )
@@ -6878,9 +6962,19 @@ class ZorkEmulator:
                     if info.get("deceased_reason"):
                         continue
                     char_name = info.get("name", slug)
-                    char_loc = info.get("location", "unknown")
-                    char_entries.append(f"{char_name} ({char_loc})")
-            chars_text = ", ".join(char_entries) if char_entries else "none"
+                    char_loc = cls._map_location_components(
+                        info.get("location"),
+                        "",
+                        "",
+                    )
+                    char_entries.append(
+                        {
+                            "name": str(char_name),
+                            "location_key": char_loc["key"] or "unknown-location",
+                            "location_display": char_loc["display"] or "Unknown",
+                        }
+                    )
+            chars_text = cls._dump_json(char_entries) if char_entries else "[]"
 
             # Story progress
             story_progress = ""
@@ -6909,18 +7003,24 @@ class ZorkEmulator:
             map_prompt = (
                 f"CAMPAIGN: {campaign.name}\n"
                 f"PLAYER_NAME: {player_name}\n"
+                f"PLAYER_LOCATION_KEY: {player_loc['key']}\n"
+                f"PLAYER_LOCATION_DISPLAY: {player_loc['display']}\n"
                 f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
                 f"WORLD_SUMMARY: {cls._trim_text(campaign.summary or '', 1200)}\n"
                 f"WORLD_STATE: {cls._dump_json(model_state)}\n"
                 f"LANDMARKS: {landmarks_text}\n"
-                f"WORLD_CHARACTERS: {chars_text}\n"
+                f"WORLD_CHARACTER_LOCATIONS: {chars_text}\n"
             )
             if story_progress:
                 map_prompt += f"STORY_PROGRESS: {story_progress}\n"
             map_prompt += (
                 f"OTHER_PLAYERS: {cls._dump_json(other_entries)}\n"
+                "MAP_SPATIAL_RULES:\n"
+                "- location_key is authoritative for grouping entities.\n"
+                "- Same location_key means same room/area.\n"
+                "- Different location_key means separate rooms/areas; never nest them.\n"
                 "Draw a compact map with @ marking the player's location.\n"
             )
             gpt = GPT()
