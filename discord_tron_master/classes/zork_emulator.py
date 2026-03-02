@@ -231,7 +231,13 @@ class ZorkEmulator:
         "  In ALL other cases, treat other player characters as scenery — they exist but do nothing until THEY act.\n"
         "  This turn's narration concerns ONLY the acting player identified by PLAYER_ACTION.\n"
         "- When mentioning a player character in narration, use their Discord mention from PARTY_SNAPSHOT followed by their name in parentheses, e.g. '<@123456> (Bruce Wayne)'. This pings the player in Discord so they know they were referenced.\n"
-        "- NEVER skip or fast-forward time when a player sleeps, rests, or waits. Narrate only the moment of settling in (closing eyes, finding a spot to rest). Do NOT write 'hours pass', 'you wake at dawn', or advance to morning/next day. Other players share this world and time must not jump for one player's action. End the turn in the present moment.\n"
+        "- Respect explicit player intent for routine actions (sleep, rest, wait). If nothing established in WORLD_STATE/RECENT_TURNS blocks it, the action succeeds.\n"
+        "- For sleep/rest/wait, do NOT invent refusal or conflict (insomnia, sudden danger, interruptions) unless it is already established by prior events, active timers, or immediate scene facts.\n"
+        "- If time cannot safely jump because the campaign timeline is shared, still honor intent by ending with the player sleeping/resting in the present moment.\n"
+        "- Only advance to later times (e.g. morning) when the player explicitly requests it AND the jump is consistent with established world timing.\n"
+        "- Causality first: do not introduce new pursuers, attacks, disasters, media attention, or environmental threats without concrete setup in prior turns/state.\n"
+        "- Escalations must follow a believable chain of evidence and opportunity (how they found the player, why now, and through what channel).\n"
+        "- No omniscient coincidence pressure: avoid out-of-nowhere helicopters, enemy arrivals, or wildlife hazards unless foreshadowed or logically triggered.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -313,6 +319,8 @@ class ZorkEmulator:
         "- The event should advance the plot: move the player to the next location, "
         "force an encounter, have an NPC intervene, or change the scene decisively.\n"
         "- Do NOT use timers for trivial flavor. They should always have real consequences that change game state.\n"
+        "- Timer events must be grounded in established scene facts (known NPCs, known hazards, known locations).\n"
+        "- Do NOT spawn unrelated antagonists, wildlife attacks, or media response solely to create urgency.\n"
         "- Set interruptible=false for events the player cannot avoid (e.g. structural collapse already in motion, a trap already sprung, mandatory roll call).\n"
         "- Use interrupt_scope=local for hazards anchored to the active player's immediate room/situation.\n"
         "- Use interrupt_scope=global for campaign-wide clocks where any player can intervene.\n"
@@ -322,7 +330,7 @@ class ZorkEmulator:
         "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
         "or the world should move without the player.\n"
         "- Your narration should hint at urgency narratively (e.g. 'the footsteps grow louder') but NEVER include countdowns, timestamps, emoji clocks, or explicit seconds. The system adds its own countdown display automatically.\n"
-        "- Use at least once every few turns when dramatic pacing allows. Do not use on consecutive turns.\n"
+        "- No quota: only set a timer when the current scene has a believable, already-grounded clock.\n"
     )
 
     ON_RAILS_SYSTEM_PROMPT = (
