@@ -3422,6 +3422,34 @@ class ZorkEmulator:
         return cls._strip_inventory_from_narration(text)
 
     @classmethod
+    def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        player_state_update = payload.get("player_state_update")
+        if isinstance(player_state_update, dict):
+            room_summary = str(player_state_update.get("room_summary") or "").strip()
+            if room_summary:
+                return room_summary[:300]
+            room_title = str(player_state_update.get("room_title") or "").strip()
+            if room_title:
+                return f"{room_title}."
+        summary_update = str(payload.get("summary_update") or "").strip()
+        if summary_update:
+            return summary_update.splitlines()[0][:300]
+        character_updates = payload.get("character_updates")
+        if isinstance(character_updates, dict) and character_updates:
+            return "Character roster updated."
+        calendar_update = payload.get("calendar_update")
+        if isinstance(calendar_update, dict) and calendar_update:
+            return "Calendar updated."
+        state_update = payload.get("state_update")
+        if isinstance(state_update, dict) and state_update:
+            return "Noted."
+        if isinstance(player_state_update, dict) and player_state_update:
+            return "Noted."
+        return ""
+
+    @classmethod
     def _scrub_inventory_from_state(cls, value):
         if isinstance(value, dict):
             cleaned = {}
@@ -6467,7 +6495,15 @@ class ZorkEmulator:
                     if json_text:
                         try:
                             payload = cls._parse_json_lenient(json_text)
-                            narration = payload.get("narration", narration).strip()
+                            narration_candidate = str(
+                                payload.get("narration") or ""
+                            ).strip()
+                            if not narration_candidate:
+                                narration_candidate = cls._fallback_narration_from_payload(
+                                    payload
+                                )
+                            if narration_candidate:
+                                narration = narration_candidate
                             state_update = payload.get("state_update", {}) or {}
                             summary_update = payload.get("summary_update")
                             xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -6571,9 +6607,17 @@ class ZorkEmulator:
                                 if json_text:
                                     try:
                                         payload = cls._parse_json_lenient(json_text)
-                                        narration = payload.get(
-                                            "narration", narration
+                                        narration_candidate = str(
+                                            payload.get("narration") or ""
                                         ).strip()
+                                        if not narration_candidate:
+                                            narration_candidate = (
+                                                cls._fallback_narration_from_payload(
+                                                    payload
+                                                )
+                                            )
+                                        if narration_candidate:
+                                            narration = narration_candidate
                                         state_update = (
                                             payload.get("state_update", {}) or {}
                                         )
@@ -6603,12 +6647,25 @@ class ZorkEmulator:
                         try:
                             salvage = json.loads(cls._extract_json(narration) or "{}")
                             if isinstance(salvage, dict) and salvage:
-                                narration = (
-                                    str(salvage.get("narration", "")).strip()
-                                    or "The world shifts, but nothing clear emerges."
-                                )
+                                narration = str(salvage.get("narration", "")).strip()
+                                if not narration:
+                                    narration = cls._fallback_narration_from_payload(
+                                        salvage
+                                    )
+                                if not narration:
+                                    narration = "The world shifts, but nothing clear emerges."
                         except (json.JSONDecodeError, Exception):
                             narration = "The world shifts, but nothing clear emerges."
+                    if not str(narration or "").strip():
+                        narration = cls._fallback_narration_from_payload(
+                            {
+                                "summary_update": summary_update,
+                                "state_update": state_update,
+                                "player_state_update": player_state_update,
+                                "character_updates": character_updates,
+                                "calendar_update": calendar_update,
+                            }
+                        ) or "The world shifts, but nothing clear emerges."
 
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
@@ -7101,7 +7158,13 @@ class ZorkEmulator:
                 if json_text:
                     try:
                         payload = cls._parse_json_lenient(json_text)
-                        narration = payload.get("narration", narration).strip()
+                        narration_candidate = str(payload.get("narration") or "").strip()
+                        if not narration_candidate:
+                            narration_candidate = cls._fallback_narration_from_payload(
+                                payload
+                            )
+                        if narration_candidate:
+                            narration = narration_candidate
                         state_update = payload.get("state_update", {}) or {}
                         summary_update = payload.get("summary_update")
                         xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -7124,9 +7187,17 @@ class ZorkEmulator:
                             if json_text:
                                 try:
                                     payload = cls._parse_json_lenient(json_text)
-                                    narration = payload.get(
-                                        "narration", narration
+                                    narration_candidate = str(
+                                        payload.get("narration") or ""
                                     ).strip()
+                                    if not narration_candidate:
+                                        narration_candidate = (
+                                            cls._fallback_narration_from_payload(
+                                                payload
+                                            )
+                                        )
+                                    if narration_candidate:
+                                        narration = narration_candidate
                                     state_update = payload.get("state_update", {}) or {}
                                     summary_update = payload.get("summary_update")
                                     xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -7150,12 +7221,25 @@ class ZorkEmulator:
                     try:
                         salvage = json.loads(cls._extract_json(narration) or "{}")
                         if isinstance(salvage, dict) and salvage:
-                            narration = (
-                                str(salvage.get("narration", "")).strip()
-                                or "The world shifts, but nothing clear emerges."
-                            )
+                            narration = str(salvage.get("narration", "")).strip()
+                            if not narration:
+                                narration = cls._fallback_narration_from_payload(
+                                    salvage
+                                )
+                            if not narration:
+                                narration = "The world shifts, but nothing clear emerges."
                     except (json.JSONDecodeError, Exception):
                         narration = "The world shifts, but nothing clear emerges."
+                if not str(narration or "").strip():
+                    narration = cls._fallback_narration_from_payload(
+                        {
+                            "summary_update": summary_update,
+                            "state_update": state_update,
+                            "player_state_update": player_state_update,
+                            "character_updates": character_updates,
+                            "calendar_update": calendar_update,
+                        }
+                    ) or "The world shifts, but nothing clear emerges."
 
                 narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                 narration = cls._strip_inventory_from_narration(narration)
