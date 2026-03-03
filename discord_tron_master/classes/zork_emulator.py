@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import datetime
+import fnmatch
 import json
 import logging
 import os
@@ -102,6 +103,10 @@ class ZorkEmulator:
     }
     TURN_TIME_INDEX_KEY = "_turn_time_index"
     MAX_TURN_TIME_ENTRIES = 256
+    SMS_STATE_KEY = "_sms_threads"
+    SMS_MAX_THREADS = 24
+    SMS_MAX_MESSAGES_PER_THREAD = 40
+    SMS_MAX_PREVIEW_CHARS = 120
     MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {
         "last_narration",
         "room_scene_images",
@@ -116,6 +121,7 @@ class ZorkEmulator:
         "speed_multiplier",
         "game_time",
         "calendar",
+        SMS_STATE_KEY,
         TURN_TIME_INDEX_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
@@ -283,6 +289,15 @@ class ZorkEmulator:
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
         "A category can contain multiple memories.\n"
         "When category is provided in memory_search, curated memories in that category are vector searched.\n"
+        "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
+        "- List SMS threads:\n"
+        '{"tool_call": "sms_list", "wildcard": "*"}\n'
+        "- Read one thread:\n"
+        '{"tool_call": "sms_read", "thread": "saul", "limit": 20}\n'
+        "- Write/send an SMS entry:\n"
+        '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
+        "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
+        "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
@@ -4266,6 +4281,160 @@ class ZorkEmulator:
         return "\n".join(alerts) if alerts else "None"
 
     @classmethod
+    def _sms_normalize_thread_key(cls, value: object) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:80]
+
+    @classmethod
+    def _sms_threads_from_state(cls, campaign_state: Dict[str, object]) -> Dict[str, dict]:
+        raw = campaign_state.get(cls.SMS_STATE_KEY) if isinstance(campaign_state, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        threads: Dict[str, dict] = {}
+        for raw_key, raw_value in raw.items():
+            key = cls._sms_normalize_thread_key(raw_key)
+            if not key or not isinstance(raw_value, dict):
+                continue
+            label = str(raw_value.get("label") or raw_key).strip()[:80] or key
+            raw_messages = raw_value.get("messages")
+            if not isinstance(raw_messages, list):
+                raw_messages = []
+            messages = []
+            for msg in raw_messages[-cls.SMS_MAX_MESSAGES_PER_THREAD :]:
+                if not isinstance(msg, dict):
+                    continue
+                text = str(msg.get("message") or "").strip()
+                if not text:
+                    continue
+                messages.append(
+                    {
+                        "from": str(msg.get("from") or "Unknown")[:80],
+                        "to": str(msg.get("to") or "")[:80],
+                        "message": text[:500],
+                        "day": cls._coerce_non_negative_int(msg.get("day", 1), default=1) or 1,
+                        "hour": min(
+                            23,
+                            max(0, cls._coerce_non_negative_int(msg.get("hour", 0), default=0)),
+                        ),
+                        "minute": min(
+                            59,
+                            max(0, cls._coerce_non_negative_int(msg.get("minute", 0), default=0)),
+                        ),
+                        "turn_id": cls._coerce_non_negative_int(msg.get("turn_id", 0), default=0),
+                    }
+                )
+            threads[key] = {"label": label, "messages": messages}
+        return threads
+
+    @classmethod
+    def _sms_list_threads(
+        cls,
+        campaign_state: Dict[str, object],
+        wildcard: str = "*",
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        threads = cls._sms_threads_from_state(campaign_state)
+        pattern = str(wildcard or "*").strip().lower() or "*"
+        out: List[Dict[str, object]] = []
+        for key in reversed(list(threads.keys())):
+            row = threads.get(key) or {}
+            label = str(row.get("label") or key)
+            if pattern != "*":
+                if not fnmatch.fnmatch(key, pattern) and not fnmatch.fnmatch(
+                    label.lower(), pattern
+                ):
+                    continue
+            messages = row.get("messages")
+            if not isinstance(messages, list):
+                messages = []
+            last = messages[-1] if messages else {}
+            preview = str(last.get("message") or "").strip()
+            if len(preview) > cls.SMS_MAX_PREVIEW_CHARS:
+                preview = preview[: cls.SMS_MAX_PREVIEW_CHARS - 1].rstrip() + "…"
+            out.append(
+                {
+                    "thread": key,
+                    "label": label,
+                    "count": len(messages),
+                    "last_from": str(last.get("from") or ""),
+                    "last_preview": preview,
+                    "day": cls._coerce_non_negative_int(last.get("day", 0), default=0),
+                    "hour": cls._coerce_non_negative_int(last.get("hour", 0), default=0),
+                    "minute": cls._coerce_non_negative_int(last.get("minute", 0), default=0),
+                }
+            )
+            if len(out) >= max(1, int(limit or 20)):
+                break
+        return out
+
+    @classmethod
+    def _sms_read_thread(
+        cls,
+        campaign_state: Dict[str, object],
+        thread: str,
+        limit: int = 20,
+    ) -> Tuple[Optional[str], Optional[str], List[Dict[str, object]]]:
+        threads = cls._sms_threads_from_state(campaign_state)
+        if not threads:
+            return None, None, []
+        query_key = cls._sms_normalize_thread_key(thread)
+        selected_key = query_key if query_key in threads else None
+        if selected_key is None and query_key:
+            for key in threads.keys():
+                if query_key in key:
+                    selected_key = key
+                    break
+        if selected_key is None:
+            return None, None, []
+        row = threads.get(selected_key) or {}
+        messages = row.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        capped = messages[-max(1, min(40, int(limit or 20))) :]
+        return selected_key, str(row.get("label") or selected_key), list(capped)
+
+    @classmethod
+    def _sms_write(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        thread: str,
+        sender: str,
+        recipient: str,
+        message: str,
+        game_time: Dict[str, int],
+        turn_id: int = 0,
+    ) -> Tuple[str, str, Dict[str, object]]:
+        threads = cls._sms_threads_from_state(campaign_state)
+        thread_key = cls._sms_normalize_thread_key(thread or recipient or sender or "unknown")
+        if not thread_key:
+            thread_key = "unknown"
+        existing = threads.pop(thread_key, {"label": thread or recipient or sender or thread_key, "messages": []})
+        label = str(existing.get("label") or thread or recipient or sender or thread_key).strip()[:80] or thread_key
+        messages = existing.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        entry = {
+            "from": str(sender or "Unknown")[:80],
+            "to": str(recipient or "")[:80],
+            "message": str(message or "").strip()[:500],
+            "day": cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1,
+            "hour": min(23, max(0, cls._coerce_non_negative_int(game_time.get("hour", 0), default=0))),
+            "minute": min(59, max(0, cls._coerce_non_negative_int(game_time.get("minute", 0), default=0))),
+            "turn_id": max(0, int(turn_id or 0)),
+        }
+        messages.append(entry)
+        messages = messages[-cls.SMS_MAX_MESSAGES_PER_THREAD :]
+        threads[thread_key] = {"label": label, "messages": messages}
+        while len(threads) > cls.SMS_MAX_THREADS:
+            oldest_key = next(iter(threads))
+            threads.pop(oldest_key, None)
+        campaign_state[cls.SMS_STATE_KEY] = threads
+        return thread_key, label, entry
+
+    @classmethod
     def _apply_calendar_update(
         cls,
         campaign_state: Dict[str, object],
@@ -5488,7 +5657,7 @@ class ZorkEmulator:
                         response = cls._clean_response(response)
                     _zork_log("INITIAL API RESPONSE", response)
 
-                    # --- Tool-call detection (memory_search / set_timer / story_outline) ---
+                    # --- Tool-call detection (memory_*, sms_*, set_timer, story_outline) ---
                     json_text_tc = cls._extract_json(response)
                     first_payload = None
                     if json_text_tc:
@@ -5613,6 +5782,9 @@ class ZorkEmulator:
                                 '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
                                 "- To search inside one curated category after term discovery:\n"
                                 '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
+                                "- To inspect off-scene SMS communications:\n"
+                                '  {"tool_call": "sms_list", "wildcard": "*"}\n'
+                                '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
                             )
                             _zork_log("MEMORY RECALL BLOCK", tool_result_block)
                             tool_augmented_prompt = (
@@ -5798,6 +5970,168 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "sms_list":
+                            wildcard = str(
+                                first_payload.get("wildcard")
+                                or first_payload.get("query")
+                                or "*"
+                            ).strip()[:80] or "*"
+                            campaign_state_sms = cls.get_campaign_state(campaign)
+                            threads = cls._sms_list_threads(
+                                campaign_state_sms, wildcard=wildcard, limit=20
+                            )
+                            if threads:
+                                lines = []
+                                for row in threads:
+                                    lines.append(
+                                        f"- thread='{row.get('thread')}' label='{row.get('label')}' "
+                                        f"count={row.get('count')} last_from='{row.get('last_from')}' "
+                                        f"last='Day {int(row.get('day', 0))} {int(row.get('hour', 0)):02d}:{int(row.get('minute', 0)):02d}' "
+                                        f"preview=\"{row.get('last_preview')}\""
+                                    )
+                                tool_result_block = (
+                                    f"SMS_LIST_RESULT (wildcard={wildcard!r}):\n"
+                                    + "\n".join(lines)
+                                )
+                            else:
+                                tool_result_block = (
+                                    f"SMS_LIST_RESULT (wildcard={wildcard!r}): none"
+                                )
+                            _zork_log("SMS LIST BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("SMS LIST AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "sms_read":
+                            thread = str(
+                                first_payload.get("thread")
+                                or first_payload.get("contact")
+                                or first_payload.get("conversation")
+                                or ""
+                            ).strip()[:80]
+                            raw_limit = first_payload.get("limit", 20)
+                            try:
+                                read_limit = int(raw_limit)
+                            except (TypeError, ValueError):
+                                read_limit = 20
+                            read_limit = max(1, min(40, read_limit))
+                            campaign_state_sms = cls.get_campaign_state(campaign)
+                            thread_key, thread_label, messages = cls._sms_read_thread(
+                                campaign_state_sms, thread=thread, limit=read_limit
+                            )
+                            if thread_key is None:
+                                tool_result_block = (
+                                    f"SMS_READ_RESULT: thread not found for query '{thread or '(empty)'}'."
+                                )
+                            elif not messages:
+                                tool_result_block = (
+                                    f"SMS_READ_RESULT: thread '{thread_label}' has no messages."
+                                )
+                            else:
+                                lines = []
+                                for msg in messages:
+                                    lines.append(
+                                        f"- [Day {int(msg.get('day', 0))} {int(msg.get('hour', 0)):02d}:{int(msg.get('minute', 0)):02d}] "
+                                        f"{msg.get('from')} -> {msg.get('to')}: {msg.get('message')}"
+                                    )
+                                tool_result_block = (
+                                    f"SMS_READ_RESULT (thread='{thread_key}', label='{thread_label}'):\n"
+                                    + "\n".join(lines)
+                                )
+                            _zork_log("SMS READ BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("SMS READ AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "sms_write":
+                            thread = str(
+                                first_payload.get("thread")
+                                or first_payload.get("contact")
+                                or first_payload.get("conversation")
+                                or ""
+                            ).strip()[:80]
+                            sender = str(
+                                first_payload.get("from")
+                                or first_payload.get("sender")
+                                or player_state.get("character_name")
+                                or f"Player {ctx.author.id}"
+                            ).strip()[:80]
+                            recipient = str(
+                                first_payload.get("to")
+                                or first_payload.get("recipient")
+                                or thread
+                            ).strip()[:80]
+                            message_text = str(
+                                first_payload.get("message")
+                                or first_payload.get("content")
+                                or first_payload.get("text")
+                                or ""
+                            ).strip()
+                            if not message_text:
+                                tool_result_block = (
+                                    "SMS_WRITE_RESULT: skipped (missing message text)."
+                                )
+                            else:
+                                campaign_state_sms = cls.get_campaign_state(campaign)
+                                game_time_sms = cls._extract_game_time_snapshot(
+                                    campaign_state_sms
+                                )
+                                thread_key, thread_label, entry = cls._sms_write(
+                                    campaign_state_sms,
+                                    thread=thread or recipient or sender,
+                                    sender=sender,
+                                    recipient=recipient,
+                                    message=message_text,
+                                    game_time=game_time_sms,
+                                    turn_id=0,
+                                )
+                                campaign.state_json = cls._dump_json(campaign_state_sms)
+                                campaign.updated = db.func.now()
+                                db.session.commit()
+                                tool_result_block = (
+                                    "SMS_WRITE_RESULT: stored.\n"
+                                    f"- thread='{thread_key}' label='{thread_label}'\n"
+                                    f"- at Day {int(entry.get('day', 0))} {int(entry.get('hour', 0)):02d}:{int(entry.get('minute', 0)):02d}\n"
+                                    f"- {entry.get('from')} -> {entry.get('to')}: {entry.get('message')}"
+                                )
+                            _zork_log("SMS WRITE BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("SMS WRITE AUGMENTED RESPONSE", response)
 
                         elif (
                             tool_name == "set_timer"
