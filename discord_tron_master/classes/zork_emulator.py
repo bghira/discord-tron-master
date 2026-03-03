@@ -5264,10 +5264,21 @@ class ZorkEmulator:
         """Strip text outside the JSON object so duplicate narration and fencing are removed."""
         if not response:
             return response
-        json_text = cls._extract_json(response)
+        cleaned = response.strip()
+        json_text = cls._extract_json(cleaned)
         if json_text:
             return json_text
-        return response.strip()
+        # Repair common truncated-object case from the model:
+        # starts with '{' but omitted the final closing brace.
+        if cleaned.startswith("{") and not cleaned.endswith("}"):
+            repaired = f"{cleaned}}}"
+            try:
+                parsed = cls._parse_json_lenient(repaired)
+                if isinstance(parsed, dict) and parsed:
+                    return repaired
+            except Exception:
+                pass
+        return cleaned
 
     @classmethod
     def _extract_ascii_map(cls, text: str) -> str:
