@@ -382,6 +382,7 @@ class ZorkEmulator:
         "- The harness converts add entries into absolute due dates and stores fire_day + fire_hour (the exact in-game deadline).\n"
         "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
         "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events, including hour-level countdowns near deadline.\n"
+        "- CALENDAR_REMINDERS are sparse urgency signals. Do NOT echo them every turn; only surface them in narration when relevant to the current action/scene, when the player asks, or when the event is immediate.\n"
         "CALENDAR EVENT LIFECYCLE:\n"
         "Events should progress through phases based on fire_day vs CURRENT_GAME_TIME.day:\n"
         "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
@@ -4221,13 +4222,28 @@ class ZorkEmulator:
     def _calendar_reminder_text(calendar_entries: List[Dict[str, object]]) -> str:
         if not calendar_entries:
             return "None"
+
+        def _should_surface(hours: int) -> bool:
+            # Keep reminders sparse to avoid repetitive narration every turn.
+            if hours == 0:
+                return True
+            if hours < 0:
+                overdue = abs(hours)
+                if overdue <= 3:
+                    return True
+                if overdue in {6, 12, 24}:
+                    return True
+                return overdue % 24 == 0 and overdue <= (24 * 7)
+            # Future reminders only at milestone deadlines.
+            return hours in {24, 12, 6, 3, 2, 1}
+
         alerts = []
         for event in calendar_entries:
             hours = int(event.get("hours_remaining", 0))
             name = str(event.get("name", "Unknown"))
             fire_day = int(event.get("fire_day", 1))
             fire_hour = max(0, min(23, int(event.get("fire_hour", 23))))
-            if hours > 48:
+            if not _should_surface(hours):
                 continue
             if hours < 0:
                 alerts.append(
@@ -4241,6 +4257,7 @@ class ZorkEmulator:
                 alerts.append(
                     f"- SOON: {name} (fires in {hours} hour(s) at Day {fire_day}, {fire_hour:02d}:00)"
                 )
+        alerts = alerts[:2]
         return "\n".join(alerts) if alerts else "None"
 
     @classmethod
