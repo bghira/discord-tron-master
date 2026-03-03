@@ -131,7 +131,10 @@ class ZorkEmulator:
         "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use classic Zork style. Minimal words. "
         "Advance one concrete beat only. No recap of unchanged facts. No literary prose, "
         "no novelistic inner monologue, no comic-book melodrama. Keep NPC output actionable "
-        "(intent, decision, question, or action), not repetitive reaction text.]"
+        "(intent, decision, question, or action), not repetitive reaction text. "
+        "As game master, you may know when the player is lying; only let an NPC reveal or react to that "
+        "if that NPC plausibly knows in this scene (direct evidence, prior established knowledge, or in-scene disclosure). "
+        "Do not leak off-screen NPC communications into current NPC dialogue unless continuity clearly supports it.]"
     )
 
     SYSTEM_PROMPT = (
