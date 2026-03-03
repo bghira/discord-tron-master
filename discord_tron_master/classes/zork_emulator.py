@@ -127,6 +127,12 @@ class ZorkEmulator:
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
+    RESPONSE_STYLE_NOTE = (
+        "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: write the next consequential beat only. "
+        "No recap of unchanged facts. Avoid filler/reactive loops (e.g. repeated 'oh my god', "
+        "'you stare/she stares'). Give present NPCs agency via concrete intent, decision, "
+        "question, or action. Use concise, specific prose with a fresh cadence from the last turn.]"
+    )
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
@@ -4874,6 +4880,7 @@ class ZorkEmulator:
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
+            f"{cls.RESPONSE_STYLE_NOTE}\n"
             f"{_action_label}: {action}\n"
         )
         system_prompt = cls.SYSTEM_PROMPT
