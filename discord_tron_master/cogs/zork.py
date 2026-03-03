@@ -1119,7 +1119,7 @@ class Zork(commands.Cog):
             if not players:
                 await ctx.send("No players have joined this campaign yet.")
                 return
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
             cutoff = now - datetime.timedelta(hours=1)
             lines = []
             for player in players:
@@ -1294,7 +1294,7 @@ class Zork(commands.Cog):
 
             if shared_refs > 0:
                 # Avoid wiping state for other channels still bound to this campaign.
-                reset_name = f"{campaign.name}-reset-{ctx.channel.id}-{int(datetime.datetime.utcnow().timestamp())}"
+                reset_name = f"{campaign.name}-reset-{ctx.channel.id}-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}"
                 new_campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, reset_name, ctx.author.id
                 )

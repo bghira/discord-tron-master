@@ -810,7 +810,7 @@ class ZorkEmulator:
 
     @staticmethod
     def _now() -> datetime.datetime:
-        return datetime.datetime.utcnow()
+        return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
     @staticmethod
     def _format_utc_timestamp(value: datetime.datetime) -> str:
@@ -2781,7 +2781,7 @@ class ZorkEmulator:
                 return False
             room_images[room_key] = {
                 "url": image_url.strip(),
-                "updated": datetime.datetime.utcnow().isoformat() + "Z",
+                "updated": cls._format_utc_timestamp(datetime.datetime.now(datetime.timezone.utc)),
                 "prompt": (scene_prompt or "").strip(),
             }
             campaign_state[cls.ROOM_IMAGE_STATE_KEY] = room_images
@@ -2814,7 +2814,7 @@ class ZorkEmulator:
                 avatar_prompt.strip(), 500
             )
         player_state["pending_avatar_generated_at"] = (
-            datetime.datetime.utcnow().isoformat() + "Z"
+            cls._format_utc_timestamp(datetime.datetime.now(datetime.timezone.utc))
         )
         player.state_json = cls._dump_json(player_state)
         player.updated = db.func.now()
@@ -7120,7 +7120,7 @@ class ZorkEmulator:
                 if latest_turn and latest_turn.kind == "player":
                     if latest_turn.created:
                         age = (
-                            datetime.datetime.utcnow() - latest_turn.created
+                            cls._now() - latest_turn.created
                         ).total_seconds()
                         if age < 5:
                             return

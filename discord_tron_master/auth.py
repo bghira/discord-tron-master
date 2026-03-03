@@ -50,7 +50,7 @@ class Auth:
                 api_key=api_key,
                 client_id=client_id,
                 user_id=user_id,
-                expires=datetime.datetime.utcnow() + datetime.timedelta(days=30),
+                expires=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(days=30),
             )
             db.session.add(new_api_key)
             db.session.commit()
@@ -63,7 +63,7 @@ class Auth:
                 # We found a perpetual key. Continue.
                 logging.info("Key is perpetually active.")
                 return True
-            elif key_data and key_data.expires > datetime.datetime.utcnow():
+            elif key_data and key_data.expires > datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None):
                 logging.debug("The api key has not expired yet.")
                 return True
             logging.error("API Key was Invalid: %s" % api_key)
@@ -81,7 +81,7 @@ class Auth:
                     datetime.datetime.timestamp(token_data.issued_at) * 1000
                     + token_data.expires_in
                 )
-                > datetime.datetime.utcnow().timestamp()
+                > datetime.datetime.now(datetime.timezone.utc).timestamp()
             ):
                 logging.debug("The token has not expired yet.")
                 return True

@@ -1,5 +1,5 @@
 from discord_tron_master.models.base import db
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import secrets
 
 
@@ -13,7 +13,7 @@ class OAuthToken(db.Model):
     )
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"))
     scopes = db.Column(db.Text)
-    issued_at = db.Column(db.DateTime, default=datetime.utcnow)
+    issued_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     client = db.relationship("OAuthClient")
     user = db.relationship("User")
@@ -25,12 +25,12 @@ class OAuthToken(db.Model):
         self.user_id = user_id
         self.scopes = scopes
         self.expires_in = expires_in or 3600
-        self.issued_at = datetime.utcnow()
+        self.issued_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     def is_expired(self, slop: float = 0.75):
         # Reduce expiry time by 25% to account for clock drift and delays.
         expires_in = self.expires_in * slop
-        test = datetime.utcnow() > self.issued_at + timedelta(seconds=expires_in)
+        test = datetime.now(timezone.utc).replace(tzinfo=None) > self.issued_at + timedelta(seconds=expires_in)
         return test
 
     def to_dict(self):
@@ -47,7 +47,7 @@ class OAuthToken(db.Model):
 
     # Update the issuance timestamp when we're refreshing a token.
     def set_issue_timestamp(self):
-        self.issued_at = datetime.utcnow()
+        self.issued_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     @staticmethod
     def make_token():
