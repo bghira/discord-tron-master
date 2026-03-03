@@ -210,6 +210,11 @@ class ZorkEmulator:
         "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
         "- Use player_state_update.room_description for a full room description only when location changes.\n"
         "- Use player_state_update.room_summary for a short one-line room summary for future context.\n"
+        "- CRITICAL — ROOM STATE COHERENCE: whenever the player's physical location changes (movement, teleport, time-skip, "
+        "reuniting with party, being picked up, waking in a new place, etc.) you MUST update ALL of: "
+        "location, room_title, room_summary, room_description, and exits in player_state_update. "
+        "ACTIVE_PLAYER_LOCATION reflects the CURRENT stored state — if it is stale/wrong, your response MUST correct it. "
+        "Narration alone does NOT move the player; only player_state_update changes their actual location.\n"
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
         "- Treat each player's inventory as private and never copy items from other players.\n"
@@ -219,6 +224,9 @@ class ZorkEmulator:
         "Respect item origins — never contradict or reinvent an item's backstory.\n"
         "- When a player must pick a path, accept only exact responses: 'main party' or 'new path'.\n"
         "- If the player has no room_summary or party_status, ask whether they are joining the main party or starting a new path, and set party_status accordingly.\n"
+        "- NEVER change party_status away from 'main_party' unless the player EXPLICITLY requests to split off or go solo. "
+        "Being in a different physical location does not make a player solo — party_status tracks NARRATIVE grouping intent, not proximity. "
+        "When a solo/split player reunites with the main group, immediately set party_status back to 'main_party'.\n"
         "- NEVER include any inventory listing, summary, or 'Inventory:' line in narration. The emulator appends authoritative inventory automatically. "
         "Do not list, enumerate, or summarise what the player is carrying anywhere in the narration text — not at the end, not inline, not as a parenthetical.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
@@ -3387,6 +3395,8 @@ class ZorkEmulator:
                     cleaned["room_description"] = None
                 if "room_title" not in cleaned:
                     cleaned["room_title"] = None
+                if "room_summary" not in cleaned:
+                    cleaned["room_summary"] = None
 
         return cleaned
 
