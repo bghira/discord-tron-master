@@ -278,6 +278,13 @@ class ZorkEmulator:
         "Optional category scope example:\n"
         '{"tool_call": "memory_search", "category": "char:marcus-blackwell", "queries": ["penthouse", "deal"]}\n'
         "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
+        "\nTOOL USAGE POLICY (HIGH PRIORITY):\n"
+        "- On MOST turns, call at least one tool BEFORE final narration/state JSON.\n"
+        "- Default behavior: call memory_search first.\n"
+        "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
+        "use sms_write when sending or replying.\n"
+        "- Only skip tools for trivial immediate physical follow-ups where continuity risk is near zero.\n"
+        "- If unsure what to query, use current location + active NPC names + key nouns from PLAYER_ACTION.\n"
         "\nYou also have a memory_terms tool for wildcard term/category listing. Use it BEFORE storing memories:\n"
         '{"tool_call": "memory_terms", "wildcard": "marcus*"}\n'
         "This returns existing category/term buckets so you can avoid duplicates.\n"
@@ -303,7 +310,7 @@ class ZorkEmulator:
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
         'NOT: {"tool_call": "memory_search", "queries": ["Marcus Anastasia relationship"]}\n'
         "USE memory_search AGGRESSIVELY — it is cheap and fast. Prefer searching too often over guessing.\n"
-        "You SHOULD use memory_search on MOST turns. Specifically:\n"
+        "You MUST use memory_search on MOST turns. Specifically:\n"
         "- ANY time a character, NPC, or named entity appears or is mentioned — even if they were in recent turns. "
         "Memory may contain richer detail than the truncated recent context.\n"
         "- ANY time the player references past events, locations, objects, or conversations.\n"
