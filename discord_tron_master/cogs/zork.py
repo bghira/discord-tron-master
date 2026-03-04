@@ -142,6 +142,7 @@ class Zork(commands.Cog):
 
             # Cancel any pending timed events.
             ZorkEmulator.cancel_pending_timer(campaign_id)
+            ZorkEmulator.cancel_pending_sms_deliveries(campaign_id)
 
             await message.channel.send(
                 f"Rewound to turn {turn_id}. Removed {deleted_count} subsequent turn(s)."
@@ -1339,4 +1340,5 @@ class Zork(commands.Cog):
             db.session.commit()
             ZorkMemory.delete_campaign_embeddings(campaign.id)
             ZorkEmulator.cancel_pending_timer(campaign.id)
+            ZorkEmulator.cancel_pending_sms_deliveries(campaign.id)
             await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")

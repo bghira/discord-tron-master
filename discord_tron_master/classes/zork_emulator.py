@@ -134,6 +134,7 @@ class ZorkEmulator:
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
     _pending_timers: Dict[int, dict] = {}  # campaign_id -> timer context dict
+    _pending_sms_tasks: Dict[int, set] = {}  # campaign_id -> set[asyncio.Task]
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
@@ -295,7 +296,7 @@ class ZorkEmulator:
         "- On MOST turns, call at least one tool BEFORE final narration/state JSON.\n"
         "- Default behavior: call memory_search first.\n"
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
-        "use sms_write when sending or replying.\n"
+        "use sms_write when sending or replying. Use sms_schedule for delayed replies.\n"
         "- CRITICAL SMS RULE: When an NPC replies via text/phone, you MUST call sms_write to record the NPC's reply "
         "BEFORE outputting final narration. Both sides of a conversation must be in the SMS log. "
         "If you narrate an NPC texting back but don't sms_write it, the reply is lost permanently.\n"
@@ -321,6 +322,9 @@ class ZorkEmulator:
         '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
         "For NPC replies, immediately call sms_write again with from/to swapped:\n"
         '{"tool_call": "sms_write", "thread": "saul", "from": "Saul", "to": "Dale", "message": "On my way."}\n'
+        "- Schedule a delayed incoming SMS (hidden until delivered, always uninterruptible):\n"
+        '{"tool_call": "sms_schedule", "thread": "saul", "from": "Saul", "to": "Dale", "message": "Traffic. 10 min.", "delay_seconds": 120}\n'
+        "sms_schedule is invisible to players at scheduling time. Do NOT narrate the delayed SMS as already received in the current response.\n"
         "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
         "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
         "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
@@ -4773,6 +4777,104 @@ class ZorkEmulator:
         return thread_key, label, entry
 
     @classmethod
+    def _register_pending_sms_task(cls, campaign_id: int, task: asyncio.Task) -> None:
+        bucket = cls._pending_sms_tasks.setdefault(campaign_id, set())
+        bucket.add(task)
+
+        def _cleanup(done_task: asyncio.Task):
+            tasks = cls._pending_sms_tasks.get(campaign_id)
+            if tasks is None:
+                return
+            tasks.discard(done_task)
+            if not tasks:
+                cls._pending_sms_tasks.pop(campaign_id, None)
+
+        task.add_done_callback(_cleanup)
+
+    @classmethod
+    def cancel_pending_sms_deliveries(cls, campaign_id: int) -> int:
+        tasks = cls._pending_sms_tasks.pop(campaign_id, set())
+        cancelled = 0
+        for task in list(tasks):
+            if task is not None and not task.done():
+                task.cancel()
+                cancelled += 1
+        return cancelled
+
+    @classmethod
+    def _schedule_sms_delivery(
+        cls,
+        campaign_id: int,
+        delay_seconds: int,
+        thread: str,
+        sender: str,
+        recipient: str,
+        message: str,
+    ) -> None:
+        task = asyncio.create_task(
+            cls._sms_delivery_task(
+                campaign_id=campaign_id,
+                delay_seconds=max(1, int(delay_seconds)),
+                thread=thread,
+                sender=sender,
+                recipient=recipient,
+                message=message,
+            )
+        )
+        cls._register_pending_sms_task(campaign_id, task)
+
+    @classmethod
+    async def _sms_delivery_task(
+        cls,
+        *,
+        campaign_id: int,
+        delay_seconds: int,
+        thread: str,
+        sender: str,
+        recipient: str,
+        message: str,
+    ) -> None:
+        try:
+            await asyncio.sleep(max(1, int(delay_seconds)))
+        except asyncio.CancelledError:
+            return
+
+        app = AppConfig.get_flask()
+        if app is None:
+            return
+        try:
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign_id)
+                if campaign is None:
+                    return
+                campaign_state_sms = cls.get_campaign_state(campaign)
+                game_time_sms = cls._extract_game_time_snapshot(campaign_state_sms)
+                latest_turn = (
+                    ZorkTurn.query.filter_by(campaign_id=campaign_id)
+                    .order_by(ZorkTurn.id.desc())
+                    .first()
+                )
+                turn_id = int(latest_turn.id) if latest_turn is not None else 0
+                cls._sms_write(
+                    campaign_state_sms,
+                    thread=thread,
+                    sender=sender,
+                    recipient=recipient,
+                    message=message,
+                    game_time=game_time_sms,
+                    turn_id=turn_id,
+                )
+                campaign.state_json = cls._dump_json(campaign_state_sms)
+                campaign.updated = db.func.now()
+                db.session.commit()
+        except Exception:
+            logger.exception(
+                "Zork scheduled SMS delivery failed: campaign=%s thread=%r",
+                campaign_id,
+                thread,
+            )
+
+    @classmethod
     def _apply_calendar_update(
         cls,
         campaign_state: Dict[str, object],
@@ -6177,6 +6279,8 @@ class ZorkEmulator:
                                 "- To inspect off-scene SMS communications:\n"
                                 '  {"tool_call": "sms_list", "wildcard": "*"}\n'
                                 '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
+                                "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
+                                '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
                             )
                             if roster_hints:
                                 hint_lines = []
@@ -6545,6 +6649,87 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("SMS WRITE AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "sms_schedule":
+                            thread = str(
+                                first_payload.get("thread")
+                                or first_payload.get("contact")
+                                or first_payload.get("conversation")
+                                or ""
+                            ).strip()[:80]
+                            sender = str(
+                                first_payload.get("from")
+                                or first_payload.get("sender")
+                                or thread
+                            ).strip()[:80]
+                            recipient = str(
+                                first_payload.get("to")
+                                or first_payload.get("recipient")
+                                or player_state.get("character_name")
+                                or f"Player {ctx.author.id}"
+                            ).strip()[:80]
+                            message_text = str(
+                                first_payload.get("message")
+                                or first_payload.get("content")
+                                or first_payload.get("text")
+                                or ""
+                            ).strip()
+                            raw_delay_seconds = first_payload.get(
+                                "delay_seconds",
+                                first_payload.get("delay"),
+                            )
+                            raw_delay_minutes = first_payload.get("delay_minutes")
+                            if raw_delay_seconds is None and raw_delay_minutes is not None:
+                                try:
+                                    raw_delay_seconds = int(raw_delay_minutes) * 60
+                                except (TypeError, ValueError):
+                                    raw_delay_seconds = None
+                            try:
+                                delay_seconds = int(raw_delay_seconds)
+                            except (TypeError, ValueError):
+                                delay_seconds = 90
+                            _speed = cls.get_speed_multiplier(campaign)
+                            if _speed > 0:
+                                delay_seconds = int(delay_seconds / _speed)
+                            delay_seconds = max(15, min(86_400, delay_seconds))
+
+                            if not thread or not sender or not recipient or not message_text:
+                                tool_result_block = (
+                                    "SMS_SCHEDULE_RESULT: skipped (missing thread/from/to/message)."
+                                )
+                            else:
+                                cls._schedule_sms_delivery(
+                                    campaign_id=campaign.id,
+                                    delay_seconds=delay_seconds,
+                                    thread=thread,
+                                    sender=sender,
+                                    recipient=recipient,
+                                    message=message_text,
+                                )
+                                tool_result_block = (
+                                    "SMS_SCHEDULE_RESULT: scheduled.\n"
+                                    f"- thread='{thread}'\n"
+                                    f"- from='{sender}' to='{recipient}'\n"
+                                    f"- delay_seconds={delay_seconds}\n"
+                                    "- delivery_visibility=hidden_until_delivery\n"
+                                    "- interruptible=false\n"
+                                    "Do NOT narrate this delayed SMS as already received in the current scene."
+                                )
+                            _zork_log("SMS SCHEDULE BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("SMS SCHEDULE AUGMENTED RESPONSE", response)
 
                         elif (
                             tool_name == "set_timer"
