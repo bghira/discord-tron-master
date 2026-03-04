@@ -292,6 +292,9 @@ class ZorkEmulator:
         "- Default behavior: call memory_search first.\n"
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
         "use sms_write when sending or replying.\n"
+        "- CRITICAL SMS RULE: When an NPC replies via text/phone, you MUST call sms_write to record the NPC's reply "
+        "BEFORE outputting final narration. Both sides of a conversation must be in the SMS log. "
+        "If you narrate an NPC texting back but don't sms_write it, the reply is lost permanently.\n"
         "- Only skip tools for trivial immediate physical follow-ups where continuity risk is near zero.\n"
         "- If unsure what to query, use current location + active NPC names + key nouns from PLAYER_ACTION.\n"
         "\nYou also have a memory_terms tool for wildcard term/category listing. Use it BEFORE storing memories:\n"
@@ -312,6 +315,8 @@ class ZorkEmulator:
         '{"tool_call": "sms_read", "thread": "saul", "limit": 20}\n'
         "- Write/send an SMS entry:\n"
         '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
+        "For NPC replies, immediately call sms_write again with from/to swapped:\n"
+        '{"tool_call": "sms_write", "thread": "saul", "from": "Saul", "to": "Dale", "message": "On my way."}\n'
         "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
         "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
         "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
@@ -4549,6 +4554,33 @@ class ZorkEmulator:
         return canonical_key, resolved_label, list(capped)
 
     @classmethod
+    def _extract_inline_sms_intent(
+        cls,
+        action: str,
+    ) -> Optional[Tuple[str, str]]:
+        text = str(action or "").strip()
+        if not text:
+            return None
+        m = re.match(
+            r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?([^:\n]{1,120})\s*:\s*(.+?)\s*$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return None
+        recipient = str(m.group(1) or "").strip().strip("\"'` ")
+        message = str(m.group(2) or "").strip()
+        if (
+            len(message) >= 2
+            and message[0] == message[-1]
+            and message[0] in {'"', "'"}
+        ):
+            message = message[1:-1].strip()
+        if not recipient or not message:
+            return None
+        return recipient[:80], message[:500]
+
+    @classmethod
     def _sms_write(
         cls,
         campaign_state: Dict[str, object],
@@ -4578,6 +4610,23 @@ class ZorkEmulator:
             "minute": min(59, max(0, cls._coerce_non_negative_int(game_time.get("minute", 0), default=0))),
             "turn_id": max(0, int(turn_id or 0)),
         }
+        if messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                if (
+                    str(last.get("from") or "") == str(entry.get("from") or "")
+                    and str(last.get("to") or "") == str(entry.get("to") or "")
+                    and str(last.get("message") or "") == str(entry.get("message") or "")
+                    and cls._coerce_non_negative_int(last.get("day", 0), default=0)
+                    == cls._coerce_non_negative_int(entry.get("day", 0), default=0)
+                    and cls._coerce_non_negative_int(last.get("hour", 0), default=0)
+                    == cls._coerce_non_negative_int(entry.get("hour", 0), default=0)
+                    and cls._coerce_non_negative_int(last.get("minute", 0), default=0)
+                    == cls._coerce_non_negative_int(entry.get("minute", 0), default=0)
+                ):
+                    threads[thread_key] = {"label": label, "messages": messages}
+                    campaign_state[cls.SMS_STATE_KEY] = threads
+                    return thread_key, label, dict(last)
         messages.append(entry)
         messages = messages[-cls.SMS_MAX_MESSAGES_PER_THREAD :]
         threads[thread_key] = {"label": label, "messages": messages}
@@ -5782,6 +5831,39 @@ class ZorkEmulator:
                     if action_clean in ("roster", "characters", "npcs"):
                         characters = cls.get_campaign_characters(campaign)
                         return cls.format_roster(characters)
+
+                    is_ooc_action = bool(
+                        re.match(r"\s*\[OOC\b", action or "", re.IGNORECASE)
+                    )
+                    if not is_ooc_action:
+                        sms_intent = cls._extract_inline_sms_intent(action)
+                        if sms_intent is not None:
+                            sms_recipient, sms_message = sms_intent
+                            campaign_state_sms = cls.get_campaign_state(campaign)
+                            game_time_sms = cls._extract_game_time_snapshot(
+                                campaign_state_sms
+                            )
+                            sms_sender = str(
+                                player_state.get("character_name")
+                                or f"Player {ctx.author.id}"
+                            ).strip()[:80]
+                            thread_key, _thread_label, _entry = cls._sms_write(
+                                campaign_state_sms,
+                                thread=cls._sms_normalize_thread_key(sms_recipient)
+                                or sms_recipient,
+                                sender=sms_sender,
+                                recipient=sms_recipient,
+                                message=sms_message,
+                                game_time=game_time_sms,
+                                turn_id=0,
+                            )
+                            campaign.state_json = cls._dump_json(campaign_state_sms)
+                            campaign.updated = db.func.now()
+                            db.session.commit()
+                            _zork_log(
+                                "SMS AUTO WRITE",
+                                f"thread={thread_key!r} sender={sms_sender!r} recipient={sms_recipient!r}",
+                            )
 
                     turns = cls.get_recent_turns(campaign.id)
                     party_snapshot = cls._build_party_snapshot_for_prompt(
