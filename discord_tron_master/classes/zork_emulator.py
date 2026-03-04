@@ -312,6 +312,7 @@ class ZorkEmulator:
         '{"tool_call": "sms_read", "thread": "saul", "limit": 20}\n'
         "- Write/send an SMS entry:\n"
         '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
+        "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
         "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
         "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
