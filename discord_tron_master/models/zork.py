@@ -1,3 +1,5 @@
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+
 from .base import db
 
 
@@ -7,9 +9,9 @@ class ZorkCampaign(db.Model):
     guild_id = db.Column(db.BigInteger(), nullable=False)
     name = db.Column(db.String(128), nullable=False)
     created_by = db.Column(db.BigInteger(), nullable=False)
-    summary = db.Column(db.Text(), nullable=False, default="")
-    state_json = db.Column(db.Text(), nullable=False, default="{}")
-    characters_json = db.Column(db.Text(), nullable=False, default="{}")
+    summary = db.Column(MEDIUMTEXT, nullable=False, default="")
+    state_json = db.Column(MEDIUMTEXT, nullable=False, default="{}")
+    characters_json = db.Column(MEDIUMTEXT, nullable=False, default="{}")
     last_narration = db.Column(db.Text(), nullable=True)
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
@@ -73,7 +75,7 @@ class ZorkPlayer(db.Model):
     level = db.Column(db.Integer, nullable=False, default=1)
     xp = db.Column(db.Integer, nullable=False, default=0)
     attributes_json = db.Column(db.Text(), nullable=False, default="{}")
-    state_json = db.Column(db.Text(), nullable=False, default="{}")
+    state_json = db.Column(MEDIUMTEXT, nullable=False, default="{}")
     last_active = db.Column(db.DateTime, nullable=False, default=db.func.now())
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
     updated = db.Column(db.DateTime, nullable=False, default=db.func.now())
@@ -136,9 +138,9 @@ class ZorkSnapshot(db.Model):
     campaign_id = db.Column(
         db.Integer, db.ForeignKey("zork_campaigns.id"), nullable=False
     )
-    campaign_state_json = db.Column(db.Text(), nullable=False)
-    campaign_characters_json = db.Column(db.Text(), nullable=False)
-    campaign_summary = db.Column(db.Text(), nullable=False, default="")
+    campaign_state_json = db.Column(MEDIUMTEXT, nullable=False)
+    campaign_characters_json = db.Column(MEDIUMTEXT, nullable=False)
+    campaign_summary = db.Column(MEDIUMTEXT, nullable=False, default="")
     campaign_last_narration = db.Column(db.Text(), nullable=True)
-    players_json = db.Column(db.Text(), nullable=False)
+    players_json = db.Column(MEDIUMTEXT, nullable=False)
     created = db.Column(db.DateTime, nullable=False, default=db.func.now())
