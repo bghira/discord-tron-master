@@ -4473,17 +4473,79 @@ class ZorkEmulator:
         selected_key = query_key if query_key in threads else None
         if selected_key is None and query_key:
             for key in threads.keys():
-                if query_key in key:
+                key_norm = cls._sms_normalize_thread_key(key)
+                if query_key in key_norm:
                     selected_key = key
                     break
-        if selected_key is None:
+        if selected_key is None and not query_key:
             return None, None, []
-        row = threads.get(selected_key) or {}
-        messages = row.get("messages")
-        if not isinstance(messages, list):
-            messages = []
-        capped = messages[-max(1, min(40, int(limit or 20))) :]
-        return selected_key, str(row.get("label") or selected_key), list(capped)
+
+        def _thread_matches(key: str, row: Dict[str, object]) -> bool:
+            if not query_key:
+                return False
+            key_norm = cls._sms_normalize_thread_key(key)
+            label_norm = cls._sms_normalize_thread_key(row.get("label"))
+            if query_key and (
+                query_key == key_norm
+                or query_key in key_norm
+                or query_key == label_norm
+                or query_key in label_norm
+            ):
+                return True
+            raw_messages = row.get("messages")
+            if not isinstance(raw_messages, list):
+                raw_messages = []
+            for msg in raw_messages:
+                if not isinstance(msg, dict):
+                    continue
+                from_norm = cls._sms_normalize_thread_key(msg.get("from"))
+                to_norm = cls._sms_normalize_thread_key(msg.get("to"))
+                if (from_norm and query_key in from_norm) or (to_norm and query_key in to_norm):
+                    return True
+            return False
+
+        matched_keys: List[str] = []
+        if selected_key is not None:
+            matched_keys.append(selected_key)
+        for key, row in threads.items():
+            if key in matched_keys or not isinstance(row, dict):
+                continue
+            if _thread_matches(key, row):
+                matched_keys.append(key)
+        if not matched_keys:
+            return None, None, []
+
+        merged_messages: List[Dict[str, object]] = []
+        for key in matched_keys:
+            row = threads.get(key) or {}
+            messages = row.get("messages")
+            if not isinstance(messages, list):
+                messages = []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                enriched = dict(msg)
+                enriched["thread"] = key
+                merged_messages.append(enriched)
+
+        merged_messages.sort(
+            key=lambda msg: (
+                cls._coerce_non_negative_int(msg.get("day", 0), default=0),
+                cls._coerce_non_negative_int(msg.get("hour", 0), default=0),
+                cls._coerce_non_negative_int(msg.get("minute", 0), default=0),
+                cls._coerce_non_negative_int(msg.get("turn_id", 0), default=0),
+            )
+        )
+        capped = merged_messages[-max(1, min(40, int(limit or 20))) :]
+
+        canonical_key = selected_key or query_key or matched_keys[0]
+        first_row = threads.get(matched_keys[0]) or {}
+        base_label = str(first_row.get("label") or matched_keys[0])
+        if len(matched_keys) <= 1:
+            resolved_label = base_label
+        else:
+            resolved_label = f"{base_label} (+{len(matched_keys) - 1} related thread(s))"
+        return canonical_key, resolved_label, list(capped)
 
     @classmethod
     def _sms_write(
