@@ -107,6 +107,9 @@ class ZorkEmulator:
     SMS_MAX_THREADS = 24
     SMS_MAX_MESSAGES_PER_THREAD = 40
     SMS_MAX_PREVIEW_CHARS = 120
+    MEMORY_SEARCH_USAGE_KEY = "_memory_search_term_usage"
+    MEMORY_SEARCH_USAGE_MAX_TERMS = 300
+    MEMORY_SEARCH_ROSTER_HINT_THRESHOLD = 3
     MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {
         "last_narration",
         "room_scene_images",
@@ -121,6 +124,7 @@ class ZorkEmulator:
         "speed_multiplier",
         "game_time",
         "calendar",
+        MEMORY_SEARCH_USAGE_KEY,
         SMS_STATE_KEY,
         TURN_TIME_INDEX_KEY,
     }
@@ -3437,6 +3441,22 @@ class ZorkEmulator:
             return ""
         return cls._strip_inventory_from_narration(text)
 
+    _REASONING_PREFIXES = re.compile(
+        r"^(I need to |I should |I'll |Let me |I want to |I will |First,? I |"
+        r"Now I |My plan |Step \d|To respond|Before I |I must )",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _looks_like_reasoning(cls, text: str) -> bool:
+        """Return True when *text* looks like model chain-of-thought rather than narration."""
+        stripped = text.strip()
+        if not stripped:
+            return False
+        if cls._REASONING_PREFIXES.match(stripped):
+            return True
+        return False
+
     @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
         if not isinstance(payload, dict):
@@ -4375,6 +4395,122 @@ class ZorkEmulator:
                 )
         alerts = alerts[:2]
         return "\n".join(alerts) if alerts else "None"
+
+    @classmethod
+    def _memory_search_term_key(cls, raw_term: object) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(raw_term or "").lower()).strip("-")[:80]
+
+    @classmethod
+    def _memory_search_usage_from_state(cls, campaign_state: Dict[str, object]) -> Dict[str, dict]:
+        raw = (
+            campaign_state.get(cls.MEMORY_SEARCH_USAGE_KEY)
+            if isinstance(campaign_state, dict)
+            else {}
+        )
+        if not isinstance(raw, dict):
+            raw = {}
+        out: Dict[str, dict] = {}
+        for raw_key, raw_value in raw.items():
+            key = cls._memory_search_term_key(raw_key)
+            if not key or not isinstance(raw_value, dict):
+                continue
+            count = cls._coerce_non_negative_int(raw_value.get("count", 0), default=0)
+            if count <= 0:
+                continue
+            label = str(raw_value.get("label") or raw_key).strip()[:120] or key
+            out[key] = {"count": count, "label": label}
+        return out
+
+    @staticmethod
+    def _memory_search_term_looks_character_like(term_key: str) -> bool:
+        if not term_key:
+            return False
+        parts = [part for part in term_key.split("-") if part]
+        if not parts or len(parts) > 4:
+            return False
+        if len(term_key) < 3 or len(term_key) > 48:
+            return False
+        blocked = {
+            "where",
+            "what",
+            "when",
+            "why",
+            "how",
+            "room",
+            "scene",
+            "inventory",
+            "calendar",
+            "event",
+            "events",
+            "map",
+            "summary",
+            "story",
+            "chapter",
+            "turn",
+        }
+        return not any(part in blocked for part in parts)
+
+    @classmethod
+    def _record_memory_search_usage_and_hints(
+        cls,
+        campaign,
+        queries: List[str],
+    ) -> List[Dict[str, object]]:
+        campaign_state = cls.get_campaign_state(campaign)
+        usage = cls._memory_search_usage_from_state(campaign_state)
+        updated_keys: List[str] = []
+        for query in queries[:8]:
+            query_text = str(query or "").strip()
+            if not query_text:
+                continue
+            term_key = cls._memory_search_term_key(query_text)
+            if not term_key:
+                continue
+            row = usage.get(term_key, {"count": 0, "label": query_text[:120]})
+            row["count"] = cls._coerce_non_negative_int(row.get("count", 0), default=0) + 1
+            if not str(row.get("label") or "").strip():
+                row["label"] = query_text[:120]
+            usage[term_key] = row
+            updated_keys.append(term_key)
+
+        if len(usage) > cls.MEMORY_SEARCH_USAGE_MAX_TERMS:
+            ranked = sorted(
+                usage.items(),
+                key=lambda kv: (
+                    cls._coerce_non_negative_int(kv[1].get("count", 0), default=0),
+                    kv[0],
+                ),
+                reverse=True,
+            )
+            usage = dict(ranked[: cls.MEMORY_SEARCH_USAGE_MAX_TERMS])
+
+        campaign_state[cls.MEMORY_SEARCH_USAGE_KEY] = usage
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+
+        characters = cls.get_campaign_characters(campaign)
+        hints: List[Dict[str, object]] = []
+        seen_keys: set[str] = set()
+        for term_key in updated_keys:
+            if term_key in seen_keys:
+                continue
+            seen_keys.add(term_key)
+            row = usage.get(term_key) or {}
+            count = cls._coerce_non_negative_int(row.get("count", 0), default=0)
+            if count < cls.MEMORY_SEARCH_ROSTER_HINT_THRESHOLD:
+                continue
+            if not cls._memory_search_term_looks_character_like(term_key):
+                continue
+            if isinstance(characters, dict) and cls._resolve_existing_character_slug(characters, term_key):
+                continue
+            hints.append(
+                {
+                    "term": str(row.get("label") or term_key),
+                    "slug": term_key,
+                    "count": count,
+                }
+            )
+        return hints
 
     @classmethod
     def _sms_normalize_thread_key(cls, value: object) -> str:
@@ -5945,6 +6081,11 @@ class ZorkEmulator:
                             category_scope = " ".join(
                                 str(first_payload.get("category") or "").strip().lower().split()
                             )
+                            roster_hints = (
+                                cls._record_memory_search_usage_and_hints(campaign, queries)
+                                if queries
+                                else []
+                            )
                             recall_sections = []
                             if queries:
                                 _zork_log(
@@ -6037,6 +6178,27 @@ class ZorkEmulator:
                                 '  {"tool_call": "sms_list", "wildcard": "*"}\n'
                                 '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
                             )
+                            if roster_hints:
+                                hint_lines = []
+                                for hint in roster_hints[:6]:
+                                    term = str(hint.get("term") or hint.get("slug") or "").strip() or "unknown-term"
+                                    slug = str(hint.get("slug") or "").strip() or "character-slug"
+                                    try:
+                                        count = int(hint.get("count") or 0)
+                                    except (TypeError, ValueError):
+                                        count = 0
+                                    hint_lines.append(
+                                        "- You have searched for "
+                                        f"'{term}' {count} times and it is not in WORLD_CHARACTERS. "
+                                        "If this is stable/non-stale information and you confirm it, "
+                                        f"store it via character_updates using slug '{slug}'."
+                                    )
+                                if hint_lines:
+                                    tool_result_block = (
+                                        f"{tool_result_block}\n"
+                                        "MEMORY_RECALL_ROSTER_RECOMMENDATIONS:\n"
+                                        + "\n".join(hint_lines)
+                                    )
                             _zork_log("MEMORY RECALL BLOCK", tool_result_block)
                             tool_augmented_prompt = (
                                 f"{tool_augmented_prompt}\n{tool_result_block}\n"
@@ -6832,6 +6994,43 @@ class ZorkEmulator:
                                 "calendar_update": calendar_update,
                             }
                         ) or "The world shifts, but nothing clear emerges."
+
+                    # Guard: model sometimes returns chain-of-thought planning
+                    # text instead of in-character narration.  Detect and retry.
+                    if narration and cls._looks_like_reasoning(narration):
+                        _zork_log("REASONING LEAK RETRY", narration[:300])
+                        _retry_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "Your previous response was internal reasoning, NOT player-facing narration. "
+                            "Return the actual in-character narration and JSON state now.\n"
+                        )
+                        _retry_resp = await gpt.turbo_completion(
+                            system_prompt, _retry_prompt, temperature=0.8, max_tokens=2048,
+                        )
+                        if _retry_resp:
+                            _retry_resp = cls._clean_response(_retry_resp)
+                            if not cls._looks_like_reasoning(_retry_resp):
+                                response = _retry_resp
+                                narration = response.strip()
+                                _rj = cls._extract_json(response)
+                                if _rj:
+                                    try:
+                                        _rp = cls._parse_json_lenient(_rj)
+                                        _rn = str(_rp.get("narration") or "").strip()
+                                        if not _rn:
+                                            _rn = cls._fallback_narration_from_payload(_rp)
+                                        if _rn:
+                                            narration = _rn
+                                        state_update = _rp.get("state_update", {}) or {}
+                                        summary_update = _rp.get("summary_update")
+                                        xp_awarded = _rp.get("xp_awarded", 0) or 0
+                                        player_state_update = _rp.get("player_state_update", {}) or {}
+                                        scene_image_prompt = _rp.get("scene_image_prompt")
+                                        character_updates = _rp.get("character_updates", {}) or {}
+                                        give_item = _rp.get("give_item")
+                                        calendar_update = _rp.get("calendar_update")
+                                    except Exception:
+                                        pass
 
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
