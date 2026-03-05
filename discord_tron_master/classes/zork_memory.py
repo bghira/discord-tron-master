@@ -86,6 +86,19 @@ CREATE TABLE IF NOT EXISTS manual_memories (
 CREATE INDEX IF NOT EXISTS idx_mm_campaign ON manual_memories(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_mm_campaign_category ON manual_memories(campaign_id, category);
 CREATE INDEX IF NOT EXISTS idx_mm_campaign_term ON manual_memories(campaign_id, term);
+
+CREATE TABLE IF NOT EXISTS source_material_chunks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL,
+    document_key    TEXT    NOT NULL,
+    document_label  TEXT    NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    chunk_text      TEXT    NOT NULL,
+    embedding       BLOB    NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sm_campaign ON source_material_chunks(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_sm_campaign_doc ON source_material_chunks(campaign_id, document_key);
 """
 
 
@@ -342,12 +355,199 @@ class ZorkMemory:
             return []
 
     # ------------------------------------------------------------------
+    # Source material memories (chunked campaign canon)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_source_document_key(value: str) -> str:
+        key = str(value or "").strip().lower()
+        key = "".join(ch if ch.isalnum() else "-" for ch in key)
+        key = "-".join(part for part in key.split("-") if part)
+        return key[:80] or "source-material"
+
+    @classmethod
+    def source_material_count(cls, campaign_id: int) -> int:
+        try:
+            conn = cls._get_conn()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM source_material_chunks WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            return int((row[0] if row else 0) or 0)
+        except Exception:
+            logger.exception(
+                "Zork memory: source_material_count failed for campaign %s",
+                campaign_id,
+            )
+            return 0
+
+    @classmethod
+    def list_source_material_documents(
+        cls,
+        campaign_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        try:
+            conn = cls._get_conn()
+            rows = conn.execute(
+                """
+                SELECT
+                    document_key,
+                    document_label,
+                    COUNT(*) AS n,
+                    MAX(created_at) AS last_at
+                FROM source_material_chunks
+                WHERE campaign_id = ?
+                GROUP BY document_key, document_label
+                ORDER BY last_at DESC, n DESC
+                LIMIT ?
+                """,
+                (campaign_id, max(1, int(limit))),
+            ).fetchall()
+            out: List[Dict[str, object]] = []
+            for document_key, document_label, count, last_at in rows:
+                out.append(
+                    {
+                        "document_key": str(document_key or ""),
+                        "document_label": str(document_label or ""),
+                        "chunk_count": int(count or 0),
+                        "last_at": str(last_at or ""),
+                    }
+                )
+            return out
+        except Exception:
+            logger.exception(
+                "Zork memory: list_source_material_documents failed for campaign %s",
+                campaign_id,
+            )
+            return []
+
+    @classmethod
+    def store_source_material_chunks(
+        cls,
+        campaign_id: int,
+        *,
+        document_label: str,
+        chunks: List[str],
+        replace_document: bool = True,
+    ) -> Tuple[int, str]:
+        """Store source-material chunks for a campaign and return (stored_count, document_key)."""
+        try:
+            label = " ".join(str(document_label or "").strip().split())[:120]
+            if not label:
+                label = "source-material"
+            document_key = cls._normalize_source_document_key(label)
+            clean_chunks = [
+                str(chunk or "").strip()[:8000]
+                for chunk in (chunks or [])
+                if str(chunk or "").strip()
+            ]
+            if not clean_chunks:
+                return 0, document_key
+
+            conn = cls._get_conn()
+            if replace_document:
+                conn.execute(
+                    """
+                    DELETE FROM source_material_chunks
+                    WHERE campaign_id = ? AND document_key = ?
+                    """,
+                    (campaign_id, document_key),
+                )
+            for idx, chunk_text in enumerate(clean_chunks, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO source_material_chunks
+                    (campaign_id, document_key, document_label, chunk_index, chunk_text, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        campaign_id,
+                        document_key,
+                        label,
+                        idx,
+                        chunk_text,
+                        _embed(chunk_text),
+                    ),
+                )
+            conn.commit()
+            return len(clean_chunks), document_key
+        except Exception:
+            logger.exception(
+                "Zork memory: store_source_material_chunks failed for campaign %s",
+                campaign_id,
+            )
+            return 0, "source-material"
+
+    @classmethod
+    def search_source_material(
+        cls,
+        query: str,
+        campaign_id: int,
+        *,
+        document_key: Optional[str] = None,
+        top_k: int = 5,
+    ) -> List[Tuple[str, str, int, str, float]]:
+        """Vector-search source material chunks.
+
+        Returns (document_key, document_label, chunk_index, chunk_text, score).
+        """
+        import numpy as np
+
+        try:
+            query_vec = _bytes_to_vector(_embed(query))
+            conn = cls._get_conn()
+            key = str(document_key or "").strip()
+            if key:
+                rows = conn.execute(
+                    """
+                    SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                    FROM source_material_chunks
+                    WHERE campaign_id = ? AND document_key = ?
+                    """,
+                    (campaign_id, key),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                    FROM source_material_chunks
+                    WHERE campaign_id = ?
+                    """,
+                    (campaign_id,),
+                ).fetchall()
+            if not rows:
+                return []
+
+            scored: List[Tuple[str, str, int, str, float]] = []
+            for row_key, row_label, row_chunk_idx, row_chunk_text, row_blob in rows:
+                vec = _bytes_to_vector(row_blob)
+                score = float(np.dot(query_vec, vec))
+                scored.append(
+                    (
+                        str(row_key or ""),
+                        str(row_label or ""),
+                        int(row_chunk_idx or 0),
+                        str(row_chunk_text or ""),
+                        score,
+                    )
+                )
+            scored.sort(key=lambda t: t[4], reverse=True)
+            return scored[: max(1, int(top_k))]
+        except Exception:
+            logger.exception(
+                "Zork memory: search_source_material failed for campaign %s",
+                campaign_id,
+            )
+            return []
+
+    # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------
 
     @classmethod
     def delete_campaign_embeddings(cls, campaign_id: int) -> int:
-        """Remove all campaign memories (turn embeddings + manual memories)."""
+        """Remove all campaign memories (turn embeddings + manual + source material)."""
         try:
             conn = cls._get_conn()
             cursor_turns = conn.execute(
@@ -358,8 +558,16 @@ class ZorkMemory:
                 "DELETE FROM manual_memories WHERE campaign_id = ?",
                 (campaign_id,),
             )
+            cursor_source = conn.execute(
+                "DELETE FROM source_material_chunks WHERE campaign_id = ?",
+                (campaign_id,),
+            )
             conn.commit()
-            deleted = int(cursor_turns.rowcount or 0) + int(cursor_manual.rowcount or 0)
+            deleted = (
+                int(cursor_turns.rowcount or 0)
+                + int(cursor_manual.rowcount or 0)
+                + int(cursor_source.rowcount or 0)
+            )
             logger.info(
                 "Zork memory: deleted %d total memories for campaign %s",
                 deleted,

@@ -67,6 +67,9 @@ class ZorkEmulator:
     IMMUTABLE_CHARACTER_FIELDS = {"name", "personality", "background", "appearance"}
     MAX_CHARACTERS_IN_PROMPT = 20
     ATTENTION_WINDOW_SECONDS = 600
+    MIN_TURN_ADVANCE_MINUTES = 1
+    DEFAULT_TURN_ADVANCE_MINUTES = 5
+    MAX_TURN_ADVANCE_MINUTES = 180
     ROOM_IMAGE_STATE_KEY = "room_scene_images"
     PLAYER_STATS_KEY = "zork_stats"
     PLAYER_STATS_MESSAGES_KEY = "messages_sent"
@@ -82,6 +85,8 @@ class ZorkEmulator:
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_MIN_SETUP_CHUNKS = 4
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
+    SOURCE_MATERIAL_CATEGORY = "source"
+    SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_CAMPAIGN_PERSONA = (
@@ -211,6 +216,7 @@ class ZorkEmulator:
         "- Keep diction plain and direct; prioritize immediate consequences and available choices.\n"
         "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
+        "- When SOURCE_MATERIAL_DOCS is present, treat it as canon and use memory_search with category 'source' before asserting key plot facts.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
         "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
@@ -223,6 +229,11 @@ class ZorkEmulator:
         "Narration alone does NOT move the player; only player_state_update changes their actual location.\n"
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
+        "- CRITICAL — STATE/NARRATION CONSISTENCY: whenever narration moves or repositions a named entity, "
+        "you MUST update structured state in the same turn (state_update.<entity>.location and/or "
+        "character_updates.<slug>.location). Narrative movement without matching state updates is invalid.\n"
+        "- If a companion/pet/NPC is described as following the player (e.g. at your heels, beside you, with you), "
+        "update that entity's location to the player's current location in structured state immediately.\n"
         "- Treat each player's inventory as private and never copy items from other players.\n"
         "- For inventory changes, ONLY use player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
         "- Do not return player_state_update.inventory full lists.\n"
@@ -275,6 +286,10 @@ class ZorkEmulator:
         "- Causality first: do not introduce new pursuers, attacks, disasters, media attention, or environmental threats without concrete setup in prior turns/state.\n"
         "- Escalations must follow a believable chain of evidence and opportunity (how they found the player, why now, and through what channel).\n"
         "- No omniscient coincidence pressure: avoid out-of-nowhere helicopters, enemy arrivals, or wildlife hazards unless foreshadowed or logically triggered.\n"
+        "- NPCs have independent motivations, schedules, and emotional states that exist regardless of the player.\n"
+        "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
+        "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
+        "- Most human interactions are not foreplay. NPCs should behave like people with their own priorities unless the scene has organically built to intimacy through player and NPC choices.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -314,6 +329,10 @@ class ZorkEmulator:
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
         "A category can contain multiple memories.\n"
         "When category is provided in memory_search, curated memories in that category are vector searched.\n"
+        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as well. "
+        "Use memory_search with category 'source' to query canon chunks before narrating key plot facts:\n"
+        '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
+        "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -387,6 +406,8 @@ class ZorkEmulator:
         "- Use interrupt_scope=local for hazards anchored to the active player's immediate room/situation.\n"
         "- Use interrupt_scope=global for campaign-wide clocks where any player can intervene.\n"
         "- Prefer non-interruptible timers for true forced beats; do not default everything to interruptible.\n"
+        "- In ON-RAILS mode, timers should be your primary tool to convert off-route drift into "
+        "consequences that naturally funnel play back to the outlined story path.\n"
         "Rules:\n"
         "- Use ~60s for urgent, ~120s for moderate, ~180-300s for slow-building tension.\n"
         "- Use whenever the scene has a deadline, the player is stalling, an NPC is impatient, "
@@ -404,6 +425,8 @@ class ZorkEmulator:
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- If player tries to derail, steer back via NPC actions or environmental events.\n"
+        "- If player goes off-route or stalls, use grounded calendar pressure and timed events "
+        "(set_timer_*) to re-align toward the next outlined beat without abrupt teleportation.\n"
     )
     STORY_OUTLINE_TOOL_PROMPT = (
         "\nYou have a story_outline tool. To use it, return ONLY:\n"
@@ -430,10 +453,12 @@ class ZorkEmulator:
         "Set period based on hour: 5-11=morning, 12-16=afternoon, 17-20=evening, 21-4=night.\n\n"
         "You may also return a calendar_update key (object) to manage scheduled events:\n"
         '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
-        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str} '
+        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str, "known_by": [str, ...]} '
         "and each remove entry is a string matching an event name.\n"
         "HARNESS BEHAVIOR:\n"
         "- The harness converts add entries into absolute due dates and stores fire_day + fire_hour (the exact in-game deadline).\n"
+        "- known_by is optional. If provided, reminders are only injected when at least one known character is in the active scene.\n"
+        "- Keep known_by to character names from PARTY_SNAPSHOT / WORLD_CHARACTERS. Omit known_by for globally-known events.\n"
         "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
         "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events, including hour-level countdowns near deadline.\n"
         "- CALENDAR_REMINDERS are sparse urgency signals. Do NOT echo them every turn; only surface them in narration when relevant to the current action/scene, when the player asks, or when the event is immediate.\n"
@@ -881,6 +906,145 @@ class ZorkEmulator:
             "hour": min(23, max(0, hour)),
             "minute": min(59, max(0, minute)),
         }
+
+    @staticmethod
+    def _game_period_from_hour(hour: int) -> str:
+        if 5 <= hour <= 11:
+            return "morning"
+        if 12 <= hour <= 16:
+            return "afternoon"
+        if 17 <= hour <= 20:
+            return "evening"
+        return "night"
+
+    @classmethod
+    def _game_time_to_total_minutes(cls, game_time: Dict[str, int]) -> int:
+        day = cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1
+        hour = min(23, max(0, cls._coerce_non_negative_int(game_time.get("hour", 0), default=0)))
+        minute = min(59, max(0, cls._coerce_non_negative_int(game_time.get("minute", 0), default=0)))
+        return ((max(1, day) - 1) * 24 * 60) + (hour * 60) + minute
+
+    @classmethod
+    def _game_time_from_total_minutes(cls, total_minutes: int) -> Dict[str, object]:
+        total = max(0, int(total_minutes))
+        day = (total // (24 * 60)) + 1
+        within = total % (24 * 60)
+        hour = within // 60
+        minute = within % 60
+        period = cls._game_period_from_hour(hour)
+        return {
+            "day": day,
+            "hour": hour,
+            "minute": minute,
+            "period": period,
+            "date_label": f"Day {day}, {period.title()}",
+        }
+
+    @staticmethod
+    def _is_ooc_action_text(action_text: object) -> bool:
+        return bool(re.match(r"\s*\[OOC\b", str(action_text or ""), re.IGNORECASE))
+
+    @classmethod
+    def _speed_multiplier_from_state(cls, campaign_state: Dict[str, object]) -> float:
+        raw = 1.0
+        if isinstance(campaign_state, dict):
+            raw = campaign_state.get("speed_multiplier", 1.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 1.0
+        if value <= 0:
+            return 1.0
+        return max(0.1, min(10.0, value))
+
+    @classmethod
+    def _estimate_turn_time_advance_minutes(
+        cls, action_text: str, narration_text: str
+    ) -> int:
+        action_l = str(action_text or "").lower()
+        combined = f"{action_l}\n{str(narration_text or '').lower()}"
+        if any(token in combined for token in ("time skip", "timeskip", "time-skip")):
+            return 60
+        if any(
+            token in combined
+            for token in (
+                "sleep",
+                "rest",
+                "nap",
+                "wait",
+                "travel",
+                "drive",
+                "ride",
+                "fly",
+                "train",
+                "journey",
+            )
+        ):
+            return 30
+        if any(
+            token in combined
+            for token in ("fight", "combat", "attack", "shoot", "chase", "run")
+        ):
+            return 8
+        if any(
+            token in action_l
+            for token in ("look", "examine", "inspect", "ask", "say", "talk")
+        ):
+            return 3
+        return cls.DEFAULT_TURN_ADVANCE_MINUTES
+
+    @classmethod
+    def _ensure_game_time_progress(
+        cls,
+        campaign_state: Dict[str, object],
+        pre_turn_game_time: Dict[str, int],
+        *,
+        action_text: str,
+        narration_text: str,
+    ) -> Dict[str, object]:
+        if not isinstance(campaign_state, dict):
+            return campaign_state
+        pre_snapshot = (
+            pre_turn_game_time
+            if isinstance(pre_turn_game_time, dict)
+            else cls._extract_game_time_snapshot(campaign_state)
+        )
+        cur_snapshot = cls._extract_game_time_snapshot(campaign_state)
+        pre_total = cls._game_time_to_total_minutes(pre_snapshot)
+        cur_total = cls._game_time_to_total_minutes(cur_snapshot)
+
+        # Keep derived fields canonical when model already advanced time.
+        if cur_total > pre_total:
+            campaign_state["game_time"] = cls._game_time_from_total_minutes(cur_total)
+            return campaign_state
+
+        # Meta/OOC turns do not auto-advance in-game time.
+        if cls._is_ooc_action_text(action_text):
+            campaign_state["game_time"] = cls._game_time_from_total_minutes(cur_total)
+            return campaign_state
+
+        base_minutes = cls._estimate_turn_time_advance_minutes(
+            action_text, narration_text
+        )
+        speed_multiplier = cls._speed_multiplier_from_state(campaign_state)
+        scaled_minutes = int(round(base_minutes * speed_multiplier))
+        delta_minutes = max(cls.MIN_TURN_ADVANCE_MINUTES, scaled_minutes)
+        delta_minutes = min(cls.MAX_TURN_ADVANCE_MINUTES, delta_minutes)
+
+        # If model froze or regressed time, force monotonic advance from pre-turn time.
+        new_total = max(pre_total, cur_total) + delta_minutes
+        campaign_state["game_time"] = cls._game_time_from_total_minutes(new_total)
+        _zork_log(
+            "GAME TIME AUTO-ADVANCE",
+            (
+                f"pre=Day {pre_snapshot.get('day')} {int(pre_snapshot.get('hour', 0)):02d}:"
+                f"{int(pre_snapshot.get('minute', 0)):02d} "
+                f"post_model=Day {cur_snapshot.get('day')} {int(cur_snapshot.get('hour', 0)):02d}:"
+                f"{int(cur_snapshot.get('minute', 0)):02d} "
+                f"delta_min={delta_minutes} speed={speed_multiplier}"
+            ),
+        )
+        return campaign_state
 
     @classmethod
     def _record_turn_game_time(
@@ -2206,15 +2370,20 @@ class ZorkEmulator:
     ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
 
     @classmethod
-    def _estimate_attachment_chunk_count(cls, text: str) -> int:
+    def _chunk_text_by_tokens(
+        cls,
+        text: str,
+        *,
+        min_chunk_tokens: Optional[int] = None,
+        max_chunks: Optional[int] = None,
+    ) -> Tuple[List[str], int, int, float, int]:
         clean = str(text or "").strip()
         if not clean:
-            return 0
+            return [], 0, 0, 0.0, 0
         total_tokens = glm_token_count(clean)
-        target_chunk_tokens = max(
-            cls.ATTACHMENT_CHUNK_TOKENS,
-            total_tokens // cls.ATTACHMENT_MAX_CHUNKS,
-        )
+        chunk_floor = max(1, int(min_chunk_tokens or cls.ATTACHMENT_CHUNK_TOKENS))
+        chunk_limit = max(1, int(max_chunks or cls.ATTACHMENT_MAX_CHUNKS))
+        target_chunk_tokens = max(chunk_floor, total_tokens // chunk_limit)
         chars_per_tok = len(clean) / max(total_tokens, 1)
         chunk_char_target = max(1, int(target_chunk_tokens * chars_per_tok))
         paragraphs = clean.split("\n\n")
@@ -2232,6 +2401,11 @@ class ZorkEmulator:
                 current_len += para_len + 2
         if current_chunk:
             chunks.append("\n\n".join(current_chunk))
+        return chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target
+
+    @classmethod
+    def _estimate_attachment_chunk_count(cls, text: str) -> int:
+        chunks, _, _, _, _ = cls._chunk_text_by_tokens(text)
         return len(chunks)
 
     @classmethod
@@ -2265,29 +2439,13 @@ class ZorkEmulator:
         progress_channel = channel or ctx_message.channel
 
         # Step 1 — token-aware dynamic chunking
-        total_tokens = glm_token_count(text)
-        # Target chunk size: at least min_chunk_tokens, but never more than MAX_CHUNKS
-        target_chunk_tokens = max(min_chunk_tokens, total_tokens // cls.ATTACHMENT_MAX_CHUNKS)
-        # Convert token target to a char estimate for paragraph-boundary splitting
-        # Use measured ratio from this text for accuracy
-        chars_per_tok = len(text) / max(total_tokens, 1)
-        chunk_char_target = int(target_chunk_tokens * chars_per_tok)
-
-        paragraphs = text.split("\n\n")
-        chunks: List[str] = []
-        current_chunk: List[str] = []
-        current_len = 0
-        for para in paragraphs:
-            para_len = len(para)
-            if current_len + para_len + 2 > chunk_char_target and current_chunk:
-                chunks.append("\n\n".join(current_chunk))
-                current_chunk = [para]
-                current_len = para_len
-            else:
-                current_chunk.append(para)
-                current_len += para_len + 2
-        if current_chunk:
-            chunks.append("\n\n".join(current_chunk))
+        chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target = (
+            cls._chunk_text_by_tokens(
+                text,
+                min_chunk_tokens=min_chunk_tokens,
+                max_chunks=cls.ATTACHMENT_MAX_CHUNKS,
+            )
+        )
 
         if not chunks:
             return ""
@@ -2472,6 +2630,123 @@ class ZorkEmulator:
 
         return joined
 
+    @classmethod
+    def _extract_attachment_label(cls, message, fallback: str = "source-material") -> str:
+        attachments = getattr(message, "attachments", None) or []
+        for att in attachments:
+            filename = str(getattr(att, "filename", "") or "").strip()
+            if not filename.lower().endswith(".txt"):
+                continue
+            stem = filename.rsplit("/", 1)[-1]
+            stem = stem[:-4] if stem.lower().endswith(".txt") else stem
+            stem = " ".join(stem.replace("_", " ").replace("-", " ").split())
+            if stem:
+                return stem[:120]
+        return str(fallback or "source-material").strip()[:120] or "source-material"
+
+    @classmethod
+    async def ingest_source_material_attachment(
+        cls,
+        campaign: ZorkCampaign,
+        message,
+        *,
+        label: Optional[str] = None,
+        channel=None,
+    ) -> Tuple[bool, str]:
+        raw_text = await cls._extract_attachment_text(message)
+        if isinstance(raw_text, str) and raw_text.startswith("ERROR:"):
+            return False, raw_text.replace("ERROR:", "", 1)
+        if not raw_text:
+            return False, "No `.txt` attachment found."
+
+        chunks, total_tokens, _, _, _ = cls._chunk_text_by_tokens(raw_text)
+        if not chunks:
+            return False, "Attachment has no usable text."
+
+        resolved_label = " ".join(str(label or "").strip().split())[:120]
+        if not resolved_label:
+            resolved_label = cls._extract_attachment_label(message)
+
+        progress_channel = channel or getattr(message, "channel", None)
+        status_msg = None
+        if progress_channel is not None:
+            try:
+                status_msg = await progress_channel.send(
+                    f"Ingesting source material `{resolved_label}`... "
+                    f"({len(chunks)} chunks, ~{total_tokens} tokens)"
+                )
+            except Exception:
+                status_msg = None
+
+        stored_count, document_key = await asyncio.to_thread(
+            ZorkMemory.store_source_material_chunks,
+            campaign.id,
+            document_label=resolved_label,
+            chunks=chunks,
+            replace_document=True,
+        )
+        docs = await asyncio.to_thread(
+            ZorkMemory.list_source_material_documents,
+            campaign.id,
+            cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
+        )
+        total_chunk_count = 0
+        for row in docs:
+            try:
+                total_chunk_count += int(row.get("chunk_count") or 0)
+            except (TypeError, ValueError):
+                continue
+
+        if stored_count <= 0:
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(content="Source material ingestion failed.")
+                except Exception:
+                    pass
+            return False, "Source material ingestion failed."
+
+        result_msg = (
+            f"Source material stored: `{resolved_label}` as key `{document_key}` "
+            f"({stored_count} chunks, ~{total_tokens} tokens). "
+            f"Campaign source corpus now has {total_chunk_count} chunk(s) across {len(docs)} document(s)."
+        )
+        if status_msg is not None:
+            try:
+                await status_msg.edit(content=result_msg)
+                await asyncio.sleep(4)
+                await status_msg.delete()
+            except Exception:
+                pass
+        return True, result_msg
+
+    @classmethod
+    def _source_material_prompt_payload(cls, campaign_id: int) -> Dict[str, object]:
+        docs = ZorkMemory.list_source_material_documents(
+            campaign_id,
+            limit=cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
+        )
+        total_chunk_count = 0
+        compact_docs = []
+        for row in docs:
+            try:
+                chunk_count = int(row.get("chunk_count") or 0)
+            except (TypeError, ValueError):
+                chunk_count = 0
+            total_chunk_count += chunk_count
+            compact_docs.append(
+                {
+                    "document_key": str(row.get("document_key") or ""),
+                    "document_label": str(row.get("document_label") or ""),
+                    "chunk_count": chunk_count,
+                }
+            )
+        return {
+            "available": bool(compact_docs),
+            "document_count": len(compact_docs),
+            "chunk_count": total_chunk_count,
+            "docs": compact_docs,
+        }
+
     # ── End Campaign Setup ─────────────────────────────────────────────
 
     @classmethod
@@ -2504,6 +2779,115 @@ class ZorkEmulator:
             return existing
         merged = f"{existing}\n{chr(10).join(new_lines)}"
         return cls._trim_text(merged, cls.MAX_SUMMARY_CHARS)
+
+    @classmethod
+    def _summary_has_durable_keywords(cls, text: str) -> bool:
+        text_l = str(text or "").lower()
+        durable_tokens = (
+            "killed",
+            "died",
+            "dead",
+            "injured",
+            "wounded",
+            "captured",
+            "escaped",
+            "revealed",
+            "discovered",
+            "agreed",
+            "betrayed",
+            "joined",
+            "left",
+            "arrived",
+            "departed",
+            "consumed",
+            "lost",
+            "gained",
+            "acquired",
+            "stole",
+            "destroyed",
+            "completed",
+            "resolved",
+            "overdue",
+            "appointment",
+            "deadline",
+            "timer",
+            "calendar",
+        )
+        return any(token in text_l for token in durable_tokens)
+
+    @classmethod
+    def _summary_is_transient_action(cls, text: str) -> bool:
+        text_l = " ".join(str(text or "").strip().lower().split())
+        if not text_l:
+            return True
+        transient_re = re.compile(
+            r"^(?:[a-z0-9' <>()@-]{2,80})\s+"
+            r"(?:readies?|approaches?|looks?|glances?|stands?|walks?|moves?|heads?|"
+            r"goes?|waits?|turns?|opens?|closes?|draws?|steps?|continues?)\b"
+        )
+        return bool(transient_re.match(text_l))
+
+    @classmethod
+    def _structured_change_looks_durable(
+        cls,
+        state_update: object,
+        player_state_update: object,
+        character_updates: object,
+        calendar_update: object,
+    ) -> bool:
+        if isinstance(calendar_update, dict) and calendar_update:
+            return True
+        if isinstance(character_updates, dict) and character_updates:
+            return True
+        if isinstance(state_update, dict) and state_update:
+            meaningful_state_keys = {
+                str(k)
+                for k in state_update.keys()
+                if str(k) not in {"game_time", "current_chapter", "current_scene"}
+            }
+            if meaningful_state_keys:
+                return True
+        if isinstance(player_state_update, dict) and player_state_update:
+            durable_player_keys = {
+                "location",
+                "inventory_add",
+                "inventory_remove",
+                "hp",
+                "conditions",
+                "status",
+                "party_status",
+                "character_name",
+            }
+            if any(str(k) in durable_player_keys for k in player_state_update.keys()):
+                return True
+        return False
+
+    @classmethod
+    def _should_keep_summary_update(
+        cls,
+        summary_text: str,
+        *,
+        state_update: object,
+        player_state_update: object,
+        character_updates: object,
+        calendar_update: object,
+    ) -> bool:
+        text = " ".join(str(summary_text or "").strip().split())
+        if not text:
+            return False
+        if cls._summary_has_durable_keywords(text):
+            return True
+        if cls._structured_change_looks_durable(
+            state_update,
+            player_state_update,
+            character_updates,
+            calendar_update,
+        ):
+            return True
+        if cls._summary_is_transient_action(text):
+            return False
+        # Keep concise informational lines when they are not obviously transient.
+        return len(text.split()) >= 6
 
     @classmethod
     def _fit_state_to_budget(
@@ -3550,6 +3934,195 @@ class ZorkEmulator:
             return [cls._scrub_inventory_from_state(item) for item in value]
         return value
 
+    @staticmethod
+    def _normalize_location_text(value: object) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip())
+
+    @classmethod
+    def _resolve_player_location_for_state_sync(
+        cls, player_state: Dict[str, object]
+    ) -> str:
+        if not isinstance(player_state, dict):
+            return ""
+        for key in ("location", "room_title", "room_summary"):
+            text = cls._normalize_location_text(player_state.get(key))
+            if text:
+                return text[:160]
+        return ""
+
+    @staticmethod
+    def _entity_name_candidates_for_sync(
+        state_key: object, entity_state: Dict[str, object]
+    ) -> List[str]:
+        candidates: List[str] = []
+        raw_name = ""
+        if isinstance(entity_state, dict):
+            raw_name = str(entity_state.get("name") or "").strip().lower()
+        if raw_name:
+            candidates.append(re.sub(r"\s+", " ", raw_name))
+        key_text = re.sub(r"[_\-]+", " ", str(state_key or "").strip().lower())
+        key_text = re.sub(r"\s+", " ", key_text).strip()
+        if key_text:
+            candidates.append(key_text)
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if len(candidate) < 3:
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            deduped.append(candidate)
+        return deduped
+
+    @classmethod
+    def _narration_implies_entity_with_player(
+        cls,
+        narration_text: str,
+        name_candidates: List[str],
+    ) -> bool:
+        text = str(narration_text or "").strip().lower()
+        if not text or not name_candidates:
+            return False
+        cues = (
+            "at your heels",
+            "at your heel",
+            "by your side",
+            "beside you",
+            "with you",
+            "follows you",
+            "following you",
+            "trailing you",
+            "trotting at",
+            "walks with you",
+            "stays close",
+        )
+        if not any(cue in text for cue in cues):
+            return False
+        for name in name_candidates:
+            if re.search(rf"\b{re.escape(name)}\b", text):
+                return True
+        return False
+
+    @classmethod
+    def _auto_sync_companion_locations(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        player_state: Dict[str, object],
+        narration_text: str,
+    ) -> int:
+        if not isinstance(campaign_state, dict):
+            return 0
+        player_location = cls._resolve_player_location_for_state_sync(player_state)
+        if not player_location:
+            return 0
+        changed = 0
+        for raw_key, raw_value in campaign_state.items():
+            key = str(raw_key or "")
+            if key in cls.MODEL_STATE_EXCLUDE_KEYS:
+                continue
+            if not isinstance(raw_value, dict):
+                continue
+            if "location" not in raw_value:
+                continue
+            current_location = cls._normalize_location_text(raw_value.get("location"))
+            if not current_location or current_location == player_location:
+                continue
+            follows_flag = any(
+                bool(raw_value.get(flag))
+                for flag in (
+                    "follows_player",
+                    "following_player",
+                    "with_player",
+                    "companion",
+                    "pet",
+                    "at_heels",
+                )
+            )
+            if not follows_flag:
+                names = cls._entity_name_candidates_for_sync(key, raw_value)
+                if not cls._narration_implies_entity_with_player(
+                    narration_text, names
+                ):
+                    continue
+            raw_value["location"] = player_location
+            changed += 1
+        return changed
+
+    @classmethod
+    def _auto_sync_character_locations(
+        cls,
+        campaign: ZorkCampaign,
+        *,
+        player_state: Dict[str, object],
+        narration_text: str,
+    ) -> int:
+        player_location = cls._resolve_player_location_for_state_sync(player_state)
+        if not player_location:
+            return 0
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict) or not characters:
+            return 0
+        changed = 0
+        for slug, entry in characters.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("deceased_reason"):
+                continue
+            current_location = cls._normalize_location_text(entry.get("location"))
+            if not current_location or current_location == player_location:
+                continue
+            names = cls._entity_name_candidates_for_sync(slug, entry)
+            if not cls._narration_implies_entity_with_player(narration_text, names):
+                continue
+            entry["location"] = player_location
+            changed += 1
+        if changed:
+            campaign.characters_json = cls._dump_json(characters)
+        return changed
+
+    @classmethod
+    def _sync_active_player_character_location(
+        cls,
+        campaign: ZorkCampaign,
+        *,
+        player_state: Dict[str, object],
+    ) -> int:
+        player_location = cls._resolve_player_location_for_state_sync(player_state)
+        if not player_location:
+            return 0
+        character_name = cls._normalize_location_text(
+            player_state.get("character_name")
+        ).lower()
+        if not character_name:
+            return 0
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict) or not characters:
+            return 0
+
+        target_slug = cls._resolve_existing_character_slug(characters, character_name)
+        if target_slug is None:
+            for slug, entry in characters.items():
+                if not isinstance(entry, dict):
+                    continue
+                entry_name = cls._normalize_location_text(entry.get("name")).lower()
+                if entry_name and entry_name == character_name:
+                    target_slug = slug
+                    break
+        if target_slug is None:
+            return 0
+
+        entry = characters.get(target_slug)
+        if not isinstance(entry, dict):
+            return 0
+        current_location = cls._normalize_location_text(entry.get("location"))
+        if current_location == player_location:
+            return 0
+        entry["location"] = player_location
+        campaign.characters_json = cls._dump_json(characters)
+        return 1
+
     @classmethod
     def total_points_for_level(cls, level: int) -> int:
         return cls.BASE_POINTS + max(level - 1, 0) * cls.POINTS_PER_LEVEL
@@ -4346,6 +4919,7 @@ class ZorkEmulator:
             "fire_day": fire_day,
             "fire_hour": fire_hour,
             "description": str(event.get("description") or "")[:200],
+            "known_by": cls._calendar_known_by_from_event(event),
         }
         for key in ("created_day", "created_hour"):
             raw = event.get(key)
@@ -4405,8 +4979,12 @@ class ZorkEmulator:
         )
         return entries
 
-    @staticmethod
-    def _calendar_reminder_text(calendar_entries: List[Dict[str, object]]) -> str:
+    @classmethod
+    def _calendar_reminder_text(
+        cls,
+        calendar_entries: List[Dict[str, object]],
+        active_scene_names: Optional[List[str]] = None,
+    ) -> str:
         if not calendar_entries:
             return "None"
 
@@ -4425,7 +5003,23 @@ class ZorkEmulator:
             return hours in {24, 12, 6, 3, 2, 1}
 
         alerts = []
+        active_keys = {
+            cls._calendar_name_key(name)
+            for name in (active_scene_names or [])
+            if cls._calendar_name_key(name)
+        }
+        global_tokens = {"all", "any", "everyone", "global", "scene", "party"}
         for event in calendar_entries:
+            known_by = cls._calendar_known_by_from_event(event)
+            if known_by:
+                known_keys = {
+                    cls._calendar_name_key(name)
+                    for name in known_by
+                    if cls._calendar_name_key(name)
+                }
+                if not (known_keys & global_tokens):
+                    if not active_keys or not (known_keys & active_keys):
+                        continue
             hours = int(event.get("hours_remaining", 0))
             name = str(event.get("name", "Unknown"))
             fire_day = int(event.get("fire_day", 1))
@@ -4993,6 +5587,7 @@ class ZorkEmulator:
                     "created_day": current_day,
                     "created_hour": current_hour,
                     "description": str(entry.get("description") or "")[:200],
+                    "known_by": cls._calendar_known_by_from_event(entry),
                 }
                 calendar.append(event)
 
@@ -5366,6 +5961,85 @@ class ZorkEmulator:
         }
 
     @classmethod
+    def _calendar_name_key(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "", text)
+
+    @classmethod
+    def _calendar_known_by_from_event(cls, event: object) -> List[str]:
+        if not isinstance(event, dict):
+            return []
+        raw_known_by = event.get("known_by")
+        items: List[object]
+        if isinstance(raw_known_by, list):
+            items = raw_known_by
+        elif isinstance(raw_known_by, str):
+            if "," in raw_known_by:
+                items = [chunk.strip() for chunk in raw_known_by.split(",")]
+            else:
+                items = [raw_known_by]
+        else:
+            items = []
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in items:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            key = cls._calendar_name_key(name)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(name[:80])
+            if len(out) >= 24:
+                break
+        return out
+
+    @classmethod
+    def _active_scene_character_names(
+        cls,
+        player_state: Dict[str, object],
+        party_snapshot: List[Dict[str, object]],
+        characters_for_prompt: List[Dict[str, object]],
+    ) -> List[str]:
+        names: List[str] = []
+        seen: set[str] = set()
+
+        def _add_name(raw_name: object) -> None:
+            text = str(raw_name or "").strip()
+            if not text:
+                return
+            key = cls._calendar_name_key(text)
+            if not key or key in seen:
+                return
+            seen.add(key)
+            names.append(text[:80])
+
+        _add_name(player_state.get("character_name"))
+        for entry in party_snapshot:
+            if not isinstance(entry, dict):
+                continue
+            _add_name(entry.get("name"))
+
+        for entry in characters_for_prompt:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("deceased_reason"):
+                continue
+            char_name = entry.get("name") or entry.get("_slug")
+            char_state = {
+                "location": entry.get("location"),
+                "room_title": entry.get("room_title"),
+                "room_summary": entry.get("room_summary"),
+                "room_id": entry.get("room_id"),
+            }
+            if cls._same_scene(player_state, char_state):
+                _add_name(char_name)
+        return names
+
+    @classmethod
     def points_spent(cls, attributes: Dict[str, int]) -> int:
         total = 0
         for value in attributes.values():
@@ -5519,14 +6193,23 @@ class ZorkEmulator:
 
         story_context = cls._build_story_context(state)
         on_rails = bool(state.get("on_rails", False))
+        _active_scene_names = cls._active_scene_character_names(
+            player_state,
+            party_snapshot,
+            characters_for_prompt,
+        )
 
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
         _calendar = cls._calendar_for_prompt(state)
-        _calendar_reminders = cls._calendar_reminder_text(_calendar)
+        _calendar_reminders = cls._calendar_reminder_text(
+            _calendar,
+            active_scene_names=_active_scene_names,
+        )
         _currently_attentive = cls._build_currently_attentive_players_for_prompt(
             campaign.id
         )
+        _source_payload = cls._source_material_prompt_payload(campaign.id)
         _active_location_context = {
             "room_title": player_state.get("room_title"),
             "location": player_state.get("location"),
@@ -5548,6 +6231,11 @@ class ZorkEmulator:
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
         )
+        if _source_payload.get("available"):
+            user_prompt += (
+                f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
+                f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
+            )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
         _active_name = (player_state.get("character_name") or "").strip()
@@ -6230,6 +6918,31 @@ class ZorkEmulator:
                             category_scope = " ".join(
                                 str(first_payload.get("category") or "").strip().lower().split()
                             )
+                            source_docs = ZorkMemory.list_source_material_documents(
+                                campaign.id,
+                                limit=cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
+                            )
+                            has_source_material = bool(source_docs)
+                            source_total_chunks = 0
+                            for row in source_docs:
+                                try:
+                                    source_total_chunks += int(row.get("chunk_count") or 0)
+                                except (TypeError, ValueError):
+                                    continue
+                            source_scope = False
+                            source_scope_key = None
+                            if category_scope in (
+                                cls.SOURCE_MATERIAL_CATEGORY,
+                                "source-material",
+                            ):
+                                source_scope = True
+                            elif category_scope.startswith(
+                                f"{cls.SOURCE_MATERIAL_CATEGORY}:"
+                            ):
+                                source_scope = True
+                                source_scope_key = ZorkMemory._normalize_source_document_key(
+                                    category_scope.split(":", 1)[1]
+                                )
                             roster_hints = (
                                 cls._record_memory_search_usage_and_hints(campaign, queries)
                                 if queries
@@ -6274,7 +6987,7 @@ class ZorkEmulator:
                                             f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
                                         )
                                     manual_lines = []
-                                    if category_scope:
+                                    if category_scope and not source_scope:
                                         manual_hits = ZorkMemory.search_manual_memories(
                                             query,
                                             campaign.id,
@@ -6287,7 +7000,31 @@ class ZorkEmulator:
                                             manual_lines.append(
                                                 f"- [manual {mem_category}, relevance {mem_score:.2f}]: {mem_content[:300]}"
                                             )
-                                    if recall_lines or manual_lines:
+                                    source_lines = []
+                                    if has_source_material and (
+                                        source_scope or not category_scope
+                                    ):
+                                        source_hits = ZorkMemory.search_source_material(
+                                            query,
+                                            campaign.id,
+                                            document_key=source_scope_key,
+                                            top_k=5 if source_scope else 3,
+                                        )
+                                        for (
+                                            source_doc_key,
+                                            source_doc_label,
+                                            source_chunk_index,
+                                            source_chunk_text,
+                                            source_score,
+                                        ) in source_hits:
+                                            if source_score < 0.40:
+                                                continue
+                                            source_lines.append(
+                                                "- [source "
+                                                f"{source_doc_label} ({source_doc_key}) chunk {source_chunk_index}, "
+                                                f"relevance {source_score:.2f}]: {source_chunk_text[:320]}"
+                                            )
+                                    if recall_lines or manual_lines or source_lines:
                                         lines = []
                                         if recall_lines:
                                             lines.append("Narrator turn matches:")
@@ -6295,6 +7032,9 @@ class ZorkEmulator:
                                         if manual_lines:
                                             lines.append("Manual memory matches:")
                                             lines.extend(manual_lines)
+                                        if source_lines:
+                                            lines.append("Source material matches:")
+                                            lines.extend(source_lines)
                                         recall_sections.append(
                                             f"Results for '{query}':\n"
                                             + "\n".join(lines)
@@ -6306,14 +7046,43 @@ class ZorkEmulator:
                                 )
                             elif queries:
                                 if category_scope:
-                                    tool_result_block = (
-                                        "MEMORY_RECALL: No relevant memories found "
-                                        f"(including manual category '{category_scope}')."
-                                    )
+                                    if source_scope:
+                                        source_scope_label = (
+                                            f"'{cls.SOURCE_MATERIAL_CATEGORY}:{source_scope_key}'"
+                                            if source_scope_key
+                                            else f"'{cls.SOURCE_MATERIAL_CATEGORY}'"
+                                        )
+                                        tool_result_block = (
+                                            "MEMORY_RECALL: No relevant memories found "
+                                            f"in source material category {source_scope_label}."
+                                        )
+                                    else:
+                                        tool_result_block = (
+                                            "MEMORY_RECALL: No relevant memories found "
+                                            f"(including manual category '{category_scope}')."
+                                        )
                                 else:
                                     tool_result_block = "MEMORY_RECALL: No relevant memories found."
                             else:
                                 tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
+                            if has_source_material:
+                                source_index_lines = [
+                                    (
+                                        "SOURCE_MATERIAL_INDEX: "
+                                        f"{len(source_docs)} document(s), {source_total_chunks} total chunk(s)."
+                                    )
+                                ]
+                                for row in source_docs[:5]:
+                                    source_index_lines.append(
+                                        "- "
+                                        f"key='{row.get('document_key')}' "
+                                        f"label='{row.get('document_label')}' "
+                                        f"chunks={row.get('chunk_count')}"
+                                    )
+                                tool_result_block = (
+                                    f"{tool_result_block}\n"
+                                    + "\n".join(source_index_lines)
+                                )
                             tool_result_block = (
                                 f"{tool_result_block}\n"
                                 "MEMORY_RECALL_NEXT_ACTIONS:\n"
@@ -6329,6 +7098,14 @@ class ZorkEmulator:
                                 "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
                                 '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
                             )
+                            if has_source_material:
+                                tool_result_block = (
+                                    f"{tool_result_block}"
+                                    "- To query indexed source-canon chunks (faithful adaptation):\n"
+                                    '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
+                                    "- To scope one source document only:\n"
+                                    '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
+                                )
                             if roster_hints:
                                 hint_lines = []
                                 for hint in roster_hints[:6]:
@@ -7298,6 +8075,12 @@ class ZorkEmulator:
                     campaign_state = cls._apply_state_update(
                         campaign_state, state_update
                     )
+                    campaign_state = cls._ensure_game_time_progress(
+                        campaign_state,
+                        pre_turn_game_time,
+                        action_text=action,
+                        narration_text=raw_narration,
+                    )
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
@@ -7382,9 +8165,21 @@ class ZorkEmulator:
                     if summary_update:
                         summary_update = summary_update.strip()
                         summary_update = cls._strip_inventory_mentions(summary_update)
-                        campaign.summary = cls._append_summary(
-                            campaign.summary, summary_update
-                        )
+                        if cls._should_keep_summary_update(
+                            summary_update,
+                            state_update=state_update,
+                            player_state_update=player_state_update,
+                            character_updates=character_updates,
+                            calendar_update=calendar_update,
+                        ):
+                            campaign.summary = cls._append_summary(
+                                campaign.summary, summary_update
+                            )
+                        else:
+                            _zork_log(
+                                f"SUMMARY FILTERED campaign={campaign.id}",
+                                summary_update,
+                            )
 
                     player_state = cls.get_player_state(player)
                     _pre_update_inv = {
@@ -7406,6 +8201,30 @@ class ZorkEmulator:
                         player.user_id,
                         player_state,
                     )
+                    _active_char_sync_count = cls._sync_active_player_character_location(
+                        campaign,
+                        player_state=player_state,
+                    )
+                    _state_loc_sync_count = cls._auto_sync_companion_locations(
+                        campaign_state,
+                        player_state=player_state,
+                        narration_text=raw_narration,
+                    )
+                    _char_loc_sync_count = cls._auto_sync_character_locations(
+                        campaign,
+                        player_state=player_state,
+                        narration_text=raw_narration,
+                    )
+                    if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                        _zork_log(
+                            f"LOCATION AUTO-SYNC campaign={campaign.id}",
+                            (
+                                f"active_player_character={_active_char_sync_count} "
+                                f"state_entities={_state_loc_sync_count} "
+                                f"world_characters={_char_loc_sync_count}"
+                            ),
+                        )
+                    campaign.state_json = cls._dump_json(campaign_state)
 
                     # --- give_item: cross-player item transfer ---
                     # Heuristic fallback: if model forgot give_item but removed
@@ -7902,9 +8721,21 @@ class ZorkEmulator:
                 if summary_update:
                     summary_update = summary_update.strip()
                     summary_update = cls._strip_inventory_mentions(summary_update)
-                    campaign.summary = cls._append_summary(
-                        campaign.summary, summary_update
-                    )
+                    if cls._should_keep_summary_update(
+                        summary_update,
+                        state_update=state_update,
+                        player_state_update=player_state_update,
+                        character_updates=character_updates,
+                        calendar_update=calendar_update,
+                    ):
+                        campaign.summary = cls._append_summary(
+                            campaign.summary, summary_update
+                        )
+                    else:
+                        _zork_log(
+                            f"SUMMARY FILTERED (timed event) campaign={campaign.id}",
+                            summary_update,
+                        )
 
                 player_state = cls.get_player_state(active_player)
                 player_state_update = cls._sanitize_player_state_update(
@@ -7922,6 +8753,30 @@ class ZorkEmulator:
                     active_player.user_id,
                     player_state,
                 )
+                _active_char_sync_count = cls._sync_active_player_character_location(
+                    campaign,
+                    player_state=player_state,
+                )
+                _state_loc_sync_count = cls._auto_sync_companion_locations(
+                    campaign_state,
+                    player_state=player_state,
+                    narration_text=narration,
+                )
+                _char_loc_sync_count = cls._auto_sync_character_locations(
+                    campaign,
+                    player_state=player_state,
+                    narration_text=narration,
+                )
+                if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                    _zork_log(
+                        f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
+                        (
+                            f"active_player_character={_active_char_sync_count} "
+                            f"state_entities={_state_loc_sync_count} "
+                            f"world_characters={_char_loc_sync_count}"
+                        ),
+                    )
+                campaign.state_json = cls._dump_json(campaign_state)
 
                 if isinstance(xp_awarded, int) and xp_awarded > 0:
                     active_player.xp += xp_awarded

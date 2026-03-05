@@ -353,6 +353,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork` enable adventure mode in this channel\n"
             f"- `{prefix}zork <action>` take an action (ex: look, open door, take lamp)\n"
             f"- `{prefix}zork thread [name]` create a dedicated Zork thread/campaign for yourself\n"
+            f"- `{prefix}zork source-material [label]` ingest attached `.txt` as campaign canon memory chunks\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
@@ -888,6 +889,47 @@ class Zork(commands.Cog):
         await thread.send(
             f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
         )
+
+    @zork.command(name="source-material")
+    async def zork_source_material(self, ctx, *, label: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        try:
+            ok, message = await ZorkEmulator.ingest_source_material_attachment(
+                campaign,
+                ctx.message,
+                label=label,
+                channel=ctx.channel,
+            )
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(ctx)
+
+        if not ok and "No `.txt` attachment found." in message:
+            prefix = self._prefix()
+            await ctx.send(
+                "Attach a `.txt` file to ingest source material.\n"
+                f"Usage: `{prefix}zork source-material [label]`"
+            )
+            return
+        await ctx.send(message)
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):
