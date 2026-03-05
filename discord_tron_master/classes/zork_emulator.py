@@ -122,6 +122,7 @@ class ZorkEmulator:
     SMS_MAX_THREADS = 24
     SMS_MAX_MESSAGES_PER_THREAD = 40
     SMS_MAX_PREVIEW_CHARS = 120
+    CALENDAR_REMINDER_STATE_KEY = "_calendar_reminder_state"
     AUTO_FIX_COUNTERS_KEY = "_auto_fix_counters"
     PLOT_THREADS_STATE_KEY = "_plot_threads"
     MAX_PLOT_THREADS = 24
@@ -147,6 +148,7 @@ class ZorkEmulator:
         "speed_multiplier",
         "game_time",
         "calendar",
+        CALENDAR_REMINDER_STATE_KEY,
         MEMORY_SEARCH_USAGE_KEY,
         AUTO_FIX_COUNTERS_KEY,
         SMS_STATE_KEY,
@@ -5400,6 +5402,7 @@ class ZorkEmulator:
         if not isinstance(calendar, list):
             calendar = []
         entries: List[Dict[str, object]] = []
+        calendar_changed = False
         for raw in calendar:
             normalized = cls._calendar_normalize_event(
                 raw,
@@ -5413,6 +5416,27 @@ class ZorkEmulator:
                 normalized.get("fire_hour", 23), default=23
             )
             fire_hour = min(23, max(0, fire_hour))
+            if isinstance(raw, dict):
+                raw_fire_day = raw.get("fire_day")
+                raw_fire_hour = raw.get("fire_hour")
+                has_fire_day = isinstance(raw_fire_day, (int, float)) and not isinstance(
+                    raw_fire_day, bool
+                )
+                has_fire_hour = isinstance(raw_fire_hour, (int, float)) and not isinstance(
+                    raw_fire_hour, bool
+                )
+                if (not has_fire_day) or int(raw_fire_day) != fire_day:
+                    raw["fire_day"] = fire_day
+                    calendar_changed = True
+                if (not has_fire_hour) or int(raw_fire_hour) != fire_hour:
+                    raw["fire_hour"] = fire_hour
+                    calendar_changed = True
+                if "time_remaining" in raw:
+                    raw.pop("time_remaining", None)
+                    calendar_changed = True
+                if "time_unit" in raw:
+                    raw.pop("time_unit", None)
+                    calendar_changed = True
             hours_remaining = ((fire_day - current_day) * 24) + (fire_hour - current_hour)
             days_remaining = fire_day - current_day
             if hours_remaining < 0:
@@ -5435,6 +5459,8 @@ class ZorkEmulator:
                 str(item.get("name", "")).lower(),
             )
         )
+        if calendar_changed and isinstance(campaign_state, dict):
+            campaign_state["calendar"] = calendar
         return entries
 
     @classmethod
@@ -5442,23 +5468,47 @@ class ZorkEmulator:
         cls,
         calendar_entries: List[Dict[str, object]],
         active_scene_names: Optional[List[str]] = None,
+        campaign_state: Optional[Dict[str, object]] = None,
     ) -> str:
         if not calendar_entries:
             return "None"
 
-        def _should_surface(hours: int) -> bool:
-            # Keep reminders sparse to avoid repetitive narration every turn.
+        def _event_key(event: Dict[str, object]) -> str:
+            name = str(event.get("name", "")).strip().lower()
+            slug = re.sub(r"[^a-z0-9]+", "-", name).strip("-")[:80] or "event"
+            created_day = event.get("created_day")
+            created_hour = event.get("created_hour")
+            if isinstance(created_day, (int, float)) and not isinstance(
+                created_day, bool
+            ) and isinstance(created_hour, (int, float)) and not isinstance(
+                created_hour, bool
+            ):
+                return (
+                    f"{slug}:"
+                    f"{max(1, int(created_day))}:"
+                    f"{min(23, max(0, int(created_hour)))}"
+                )
+            desc = str(event.get("description", "")).strip().lower()
+            desc_slug = re.sub(r"[^a-z0-9]+", "-", desc).strip("-")[:40] or "na"
+            return f"{slug}:{desc_slug}"
+
+        def _reminder_bucket(hours: int) -> Optional[str]:
             if hours == 0:
-                return True
+                return "now"
             if hours < 0:
                 overdue = abs(hours)
+                # Overdue reminders at 1h for first 3h, then every 6h.
                 if overdue <= 3:
-                    return True
-                if overdue in {6, 12, 24}:
-                    return True
-                return overdue % 24 == 0 and overdue <= (24 * 7)
-            # Future reminders only at milestone deadlines.
-            return hours in {24, 12, 6, 3, 2, 1}
+                    return f"overdue_1h_{overdue}"
+                return f"overdue_6h_{overdue // 6}"
+            # Future reminders use widening cadence buckets.
+            if hours > 24:
+                return f"future_12h_{hours // 12}"
+            if hours > 6:
+                return f"future_6h_{hours // 6}"
+            if hours > 1:
+                return f"future_2h_{hours // 2}"
+            return "future_1h_1"
 
         alerts = []
         active_keys = {
@@ -5467,6 +5517,13 @@ class ZorkEmulator:
             if cls._calendar_name_key(name)
         }
         global_tokens = {"all", "any", "everyone", "global", "scene", "party"}
+        reminder_state = {}
+        if isinstance(campaign_state, dict):
+            raw_state = campaign_state.get(cls.CALENDAR_REMINDER_STATE_KEY)
+            if isinstance(raw_state, dict):
+                reminder_state = dict(raw_state)
+        current_event_keys: set[str] = set()
+        reminder_state_changed = False
         for event in calendar_entries:
             known_by = cls._calendar_known_by_from_event(event)
             if known_by:
@@ -5482,7 +5539,12 @@ class ZorkEmulator:
             name = str(event.get("name", "Unknown"))
             fire_day = int(event.get("fire_day", 1))
             fire_hour = max(0, min(23, int(event.get("fire_hour", 23))))
-            if not _should_surface(hours):
+            bucket = _reminder_bucket(hours)
+            if not bucket:
+                continue
+            event_key = _event_key(event)
+            current_event_keys.add(event_key)
+            if reminder_state.get(event_key) == bucket:
                 continue
             if hours < 0:
                 alerts.append(
@@ -5496,6 +5558,18 @@ class ZorkEmulator:
                 alerts.append(
                     f"- SOON: {name} (fires in {hours} hour(s) at Day {fire_day}, {fire_hour:02d}:00)"
                 )
+            reminder_state[event_key] = bucket
+            reminder_state_changed = True
+        if isinstance(campaign_state, dict):
+            stale_keys = [
+                key for key in list(reminder_state.keys()) if key not in current_event_keys
+            ]
+            if stale_keys:
+                for key in stale_keys:
+                    reminder_state.pop(key, None)
+                reminder_state_changed = True
+            if reminder_state_changed:
+                campaign_state[cls.CALENDAR_REMINDER_STATE_KEY] = reminder_state
         alerts = alerts[:2]
         return "\n".join(alerts) if alerts else "None"
 
@@ -7373,11 +7447,37 @@ class ZorkEmulator:
 
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
+        _calendar_state_before = json.dumps(
+            state.get("calendar") or [],
+            ensure_ascii=True,
+            sort_keys=True,
+        )
         _calendar = cls._calendar_for_prompt(state)
+        _calendar_state_after = json.dumps(
+            state.get("calendar") or [],
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+        _calendar_reminder_state_before = json.dumps(
+            state.get(cls.CALENDAR_REMINDER_STATE_KEY) or {},
+            ensure_ascii=True,
+            sort_keys=True,
+        )
         _calendar_reminders = cls._calendar_reminder_text(
             _calendar,
             active_scene_names=_active_scene_names,
+            campaign_state=state,
         )
+        _calendar_reminder_state_after = json.dumps(
+            state.get(cls.CALENDAR_REMINDER_STATE_KEY) or {},
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+        if (
+            _calendar_reminder_state_after != _calendar_reminder_state_before
+            or _calendar_state_after != _calendar_state_before
+        ):
+            campaign.state_json = cls._dump_json(state)
         _currently_attentive = cls._build_currently_attentive_players_for_prompt(
             campaign.id
         )
