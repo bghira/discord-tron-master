@@ -338,6 +338,9 @@ class ZorkEmulator:
         "  * Does any NPC reference information they should not have?\n"
         "  * Does narration contradict WORLD_STATE or WORLD_CHARACTERS locations/status?\n"
         "  * If yes, correct it before responding.\n"
+        "- REASONING CHECKS (must be reflected in reasoning):\n"
+        "  * Calendar removals: only remove events that THIS turn's action/narration directly resolved.\n"
+        "  * Movement consistency: if any NPC/entity moves in narration, include matching location updates in character_updates/state_update.\n"
         "- Causality first: do not introduce new pursuers, attacks, disasters, media attention, or environmental threats without concrete setup in prior turns/state.\n"
         "- Escalations must follow a believable chain of evidence and opportunity (how they found the player, why now, and through what channel).\n"
         "- No omniscient coincidence pressure: avoid out-of-nowhere helicopters, enemy arrivals, or wildlife hazards unless foreshadowed or logically triggered.\n"
@@ -8173,6 +8176,15 @@ class ZorkEmulator:
             and "narration" not in payload
         )
 
+    @staticmethod
+    def _tool_call_signature(payload: dict) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        try:
+            return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        except Exception:
+            return str(payload)
+
     @classmethod
     def _extract_json(cls, text: str) -> Optional[str]:
         text = text.strip()
@@ -8801,6 +8813,7 @@ class ZorkEmulator:
                     empty_response_repair_count = 0
                     anti_echo_retry_count = 0
                     used_tool_names = set()
+                    seen_tool_signatures = set()
                     forced_planning_payload = None
 
                     # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
@@ -8837,6 +8850,43 @@ class ZorkEmulator:
                         tool_name = str(first_payload.get("tool_call") or "").strip()
                         if tool_name:
                             used_tool_names.add(tool_name)
+                        tool_signature = cls._tool_call_signature(first_payload)
+                        if tool_signature and tool_signature in seen_tool_signatures:
+                            _zork_log(
+                                "TOOL DEDUP SKIP",
+                                f"tool={tool_name!r} payload={tool_signature}",
+                            )
+                            tool_result_block = (
+                                "TOOL_DEDUP_RESULT: duplicate tool_call payload already executed this turn. "
+                                "Skipped duplicate execution.\n"
+                                "Do NOT repeat identical tool calls. Use a distinct tool/payload or return final JSON (no tool_call)."
+                            )
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("TOOL DEDUP AUGMENTED RESPONSE", response)
+                            json_text_tc = cls._extract_json(response)
+                            if not json_text_tc:
+                                first_payload = None
+                                break
+                            try:
+                                first_payload = cls._parse_json_lenient(json_text_tc)
+                            except Exception:
+                                first_payload = None
+                                break
+                            continue
+                        if tool_signature:
+                            seen_tool_signatures.add(tool_signature)
 
                         if tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
