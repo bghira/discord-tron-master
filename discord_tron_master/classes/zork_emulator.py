@@ -10375,6 +10375,7 @@ class ZorkEmulator:
                     else:
                         narration = inventory_line
 
+                    post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     sms_notice = cls._sms_unread_hourly_notification(
                         campaign_state,
                         actor_id=ctx.author.id,
@@ -10405,7 +10406,6 @@ class ZorkEmulator:
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
-                    post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
 
                     # Don't store OOC meta-messages in turn history.
                     _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
