@@ -196,6 +196,7 @@ class ZorkEmulator:
         "This is an adult-oriented game. You may include mature themes, explicit content, violence, "
         "dark humor, and adult situations when appropriate to the story and player actions.\n\n"
         "Return ONLY valid JSON with these keys:\n"
+        "- reasoning: string (first key in final turn JSON; concise internal grounding for this turn: what evidence/context you used, which actors are involved, and why the chosen outcome follows)\n"
         "- narration: string (what the player sees)\n"
         "- state_update: object (world state patches; set a key to null to remove it when no longer relevant. "
         "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale keys every turn by setting them to null. "
@@ -244,6 +245,8 @@ class ZorkEmulator:
         "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.)\n\n"
         "Rules:\n"
         "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
+        "- In final non-tool responses, include reasoning and put it as the first key.\n"
+        "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
         "- Write in classic Zork style: concise, concrete, and gameplay-forward.\n"
@@ -4347,6 +4350,15 @@ class ZorkEmulator:
         return False
 
     @classmethod
+    def _sanitize_reasoning(cls, value: object) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            return None
+        return cleaned[:1200]
+
+    @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
         if not isinstance(payload, dict):
             return ""
@@ -8416,20 +8428,26 @@ class ZorkEmulator:
                                     interrupt_note += (
                                         f' Interruption context: "{interrupt_action}"'
                                     )
+                                interrupt_state = cls.get_campaign_state(campaign)
+                                interrupt_turn_time = cls._extract_game_time_snapshot(
+                                    interrupt_state
+                                )
                                 timer_interrupt_turn = ZorkTurn(
                                     campaign_id=campaign.id,
                                     user_id=ctx.author.id,
                                     kind="narrator",
                                     content=interrupt_note,
                                     channel_id=ctx.channel.id,
+                                    meta_json=cls._dump_json(
+                                        {"game_time": interrupt_turn_time}
+                                    ),
                                 )
                                 db.session.add(timer_interrupt_turn)
                                 db.session.flush()
-                                interrupt_state = cls.get_campaign_state(campaign)
                                 cls._record_turn_game_time(
                                     interrupt_state,
                                     timer_interrupt_turn.id,
-                                    cls._extract_game_time_snapshot(interrupt_state),
+                                    interrupt_turn_time,
                                 )
                                 campaign.state_json = cls._dump_json(interrupt_state)
                                 db.session.commit()
@@ -8585,12 +8603,14 @@ class ZorkEmulator:
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                         quick_state = cls.get_campaign_state(campaign)
                         quick_time = cls._extract_game_time_snapshot(quick_state)
+                        quick_turn_meta = cls._dump_json({"game_time": quick_time})
                         look_player_turn = ZorkTurn(
                             campaign_id=campaign.id,
                             user_id=ctx.author.id,
                             kind="player",
                             content=action,
                             channel_id=ctx.channel.id,
+                            meta_json=quick_turn_meta,
                         )
                         look_narrator_turn = ZorkTurn(
                             campaign_id=campaign.id,
@@ -8598,6 +8618,7 @@ class ZorkEmulator:
                             kind="narrator",
                             content=narration,
                             channel_id=ctx.channel.id,
+                            meta_json=quick_turn_meta,
                         )
                         db.session.add(look_player_turn)
                         db.session.add(look_narrator_turn)
@@ -8616,12 +8637,14 @@ class ZorkEmulator:
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                         quick_state = cls.get_campaign_state(campaign)
                         quick_time = cls._extract_game_time_snapshot(quick_state)
+                        quick_turn_meta = cls._dump_json({"game_time": quick_time})
                         inv_player_turn = ZorkTurn(
                             campaign_id=campaign.id,
                             user_id=ctx.author.id,
                             kind="player",
                             content=action,
                             channel_id=ctx.channel.id,
+                            meta_json=quick_turn_meta,
                         )
                         inv_narrator_turn = ZorkTurn(
                             campaign_id=campaign.id,
@@ -8629,6 +8652,7 @@ class ZorkEmulator:
                             kind="narrator",
                             content=narration,
                             channel_id=ctx.channel.id,
+                            meta_json=quick_turn_meta,
                         )
                         db.session.add(inv_player_turn)
                         db.session.add(inv_narrator_turn)
@@ -9839,7 +9863,7 @@ class ZorkEmulator:
                         tool_augmented_prompt = (
                             f"{tool_augmented_prompt}\n"
                             f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
-                            "Do NOT call any tools now. Return final narration/state JSON directly.\n"
+                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning.\n"
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
@@ -9929,6 +9953,7 @@ class ZorkEmulator:
                             )
 
                     narration = response.strip()
+                    reasoning = None
                     state_update = {}
                     summary_update = None
                     xp_awarded = 0
@@ -9955,6 +9980,9 @@ class ZorkEmulator:
                                 )
                             if narration_candidate:
                                 narration = narration_candidate
+                            reasoning = cls._sanitize_reasoning(
+                                payload.get("reasoning")
+                            )
                             state_update = payload.get("state_update", {}) or {}
                             summary_update = payload.get("summary_update")
                             xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -10072,6 +10100,9 @@ class ZorkEmulator:
                                             )
                                         if narration_candidate:
                                             narration = narration_candidate
+                                        reasoning = cls._sanitize_reasoning(
+                                            payload.get("reasoning")
+                                        )
                                         state_update = (
                                             payload.get("state_update", {}) or {}
                                         )
@@ -10102,6 +10133,9 @@ class ZorkEmulator:
                             salvage = json.loads(cls._extract_json(narration) or "{}")
                             if isinstance(salvage, dict) and salvage:
                                 narration = str(salvage.get("narration", "")).strip()
+                                reasoning = cls._sanitize_reasoning(
+                                    salvage.get("reasoning")
+                                )
                                 if not narration:
                                     narration = cls._fallback_narration_from_payload(
                                         salvage
@@ -10128,7 +10162,8 @@ class ZorkEmulator:
                         _retry_prompt = (
                             f"{tool_augmented_prompt}\n"
                             "Your previous response was internal reasoning, NOT player-facing narration. "
-                            "Return the actual in-character narration and JSON state now.\n"
+                            "Return the actual in-character narration and JSON state now. "
+                            "Include a concise reasoning field.\n"
                         )
                         _retry_resp = await gpt.turbo_completion(
                             system_prompt, _retry_prompt, temperature=0.8, max_tokens=2048,
@@ -10147,6 +10182,9 @@ class ZorkEmulator:
                                             _rn = cls._fallback_narration_from_payload(_rp)
                                         if _rn:
                                             narration = _rn
+                                        reasoning = cls._sanitize_reasoning(
+                                            _rp.get("reasoning")
+                                        )
                                         state_update = _rp.get("state_update", {}) or {}
                                         summary_update = _rp.get("summary_update")
                                         xp_awarded = _rp.get("xp_awarded", 0) or 0
@@ -10187,6 +10225,7 @@ class ZorkEmulator:
                             f"{tool_augmented_prompt}\n"
                             "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
                             "Return final JSON now (no tool_call), including:\n"
+                            "- reasoning string grounded in evidence/context used\n"
                             "- narration with one concrete scene development\n"
                             "- state_update object (with game_time advanced)\n"
                             "- summary_update with durable consequence when applicable.\n"
@@ -10216,6 +10255,9 @@ class ZorkEmulator:
                                         )
                                     if _repair_narration:
                                         narration = _repair_narration
+                                    reasoning = cls._sanitize_reasoning(
+                                        _repair_payload.get("reasoning")
+                                    )
                                     state_update = (
                                         _repair_payload.get("state_update", {}) or {}
                                     )
@@ -10256,7 +10298,7 @@ class ZorkEmulator:
                             f"{tool_augmented_prompt}\n"
                             "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
                             "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
-                            "Return final JSON (no tool_call).\n"
+                            "Return final JSON (no tool_call) with reasoning.\n"
                         )
                         _clock_retry_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -10281,6 +10323,9 @@ class ZorkEmulator:
                                         )
                                     if _clock_narration:
                                         narration = _clock_narration
+                                    reasoning = cls._sanitize_reasoning(
+                                        _clock_payload.get("reasoning")
+                                    )
                                     state_update = _clock_payload.get("state_update", {}) or {}
                                     summary_update = _clock_payload.get("summary_update")
                                     xp_awarded = _clock_payload.get("xp_awarded", 0) or 0
@@ -10306,7 +10351,7 @@ class ZorkEmulator:
                             "OUTPUT_VALIDATION_FAILED: previous narration echoed/paraphrased player wording.\n"
                             "Do NOT restate player phrasing. NPC first line must add new information, a decision, "
                             "a demand, a consequence, or a direct question.\n"
-                            "Return final JSON (no tool_call).\n"
+                            "Return final JSON (no tool_call) with reasoning.\n"
                         )
                         _anti_echo_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -10331,6 +10376,9 @@ class ZorkEmulator:
                                         )
                                     if _anti_narration:
                                         narration = _anti_narration
+                                    reasoning = cls._sanitize_reasoning(
+                                        _anti_payload.get("reasoning")
+                                    )
                                     state_update = (
                                         _anti_payload.get("state_update", {}) or {}
                                     )
@@ -10411,6 +10459,7 @@ class ZorkEmulator:
 
                     _zork_log(
                         f"TURN RESULT campaign={campaign.id}",
+                        f"--- REASONING ---\n{reasoning}\n\n"
                         f"--- NARRATION ---\n{narration}\n\n"
                         f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
                         f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
@@ -10831,6 +10880,13 @@ class ZorkEmulator:
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
+                    player_turn_meta = cls._dump_json(
+                        {"game_time": pre_turn_game_time}
+                    )
+                    narrator_turn_meta_payload = {"game_time": post_turn_game_time}
+                    if reasoning:
+                        narrator_turn_meta_payload["reasoning"] = reasoning
+                    narrator_turn_meta = cls._dump_json(narrator_turn_meta_payload)
 
                     # Don't store OOC meta-messages in turn history.
                     _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
@@ -10842,6 +10898,7 @@ class ZorkEmulator:
                             kind="player",
                             content=action,
                             channel_id=ctx.channel.id,
+                            meta_json=player_turn_meta,
                         )
                         db.session.add(player_turn)
                     narrator_turn = ZorkTurn(
@@ -10850,6 +10907,7 @@ class ZorkEmulator:
                         kind="narrator",
                         content=narration,
                         channel_id=ctx.channel.id,
+                        meta_json=narrator_turn_meta,
                     )
                     db.session.add(narrator_turn)
                     db.session.flush()
@@ -11062,6 +11120,7 @@ class ZorkEmulator:
                 response = cls._clean_response(response)
 
                 narration = response.strip()
+                reasoning = None
                 state_update = {}
                 summary_update = None
                 xp_awarded = 0
@@ -11080,6 +11139,7 @@ class ZorkEmulator:
                             )
                         if narration_candidate:
                             narration = narration_candidate
+                        reasoning = cls._sanitize_reasoning(payload.get("reasoning"))
                         state_update = payload.get("state_update", {}) or {}
                         summary_update = payload.get("summary_update")
                         xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -11113,6 +11173,9 @@ class ZorkEmulator:
                                         )
                                     if narration_candidate:
                                         narration = narration_candidate
+                                    reasoning = cls._sanitize_reasoning(
+                                        payload.get("reasoning")
+                                    )
                                     state_update = payload.get("state_update", {}) or {}
                                     summary_update = payload.get("summary_update")
                                     xp_awarded = payload.get("xp_awarded", 0) or 0
@@ -11137,6 +11200,9 @@ class ZorkEmulator:
                         salvage = json.loads(cls._extract_json(narration) or "{}")
                         if isinstance(salvage, dict) and salvage:
                             narration = str(salvage.get("narration", "")).strip()
+                            reasoning = cls._sanitize_reasoning(
+                                salvage.get("reasoning")
+                            )
                             if not narration:
                                 narration = cls._fallback_narration_from_payload(
                                     salvage
@@ -11333,6 +11399,11 @@ class ZorkEmulator:
                 campaign.last_narration = narration
                 campaign.updated = db.func.now()
                 active_player.updated = db.func.now()
+                timed_turn_meta_payload = {
+                    "game_time": cls._extract_game_time_snapshot(campaign_state)
+                }
+                if reasoning:
+                    timed_turn_meta_payload["reasoning"] = reasoning
 
                 narrator_turn = ZorkTurn(
                     campaign_id=campaign.id,
@@ -11340,6 +11411,7 @@ class ZorkEmulator:
                     kind="narrator",
                     content=f"[TIMED EVENT] {narration}",
                     channel_id=channel_id,
+                    meta_json=cls._dump_json(timed_turn_meta_payload),
                 )
                 db.session.add(narrator_turn)
                 db.session.flush()

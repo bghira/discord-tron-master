@@ -110,6 +110,7 @@ class ZorkTurn(db.Model):
     user_id = db.Column(db.BigInteger(), nullable=True)
     kind = db.Column(db.String(32), nullable=False)  # player, narrator, system
     content = db.Column(db.Text(), nullable=False)
+    meta_json = db.Column(MEDIUMTEXT, nullable=False, default="{}")
     discord_message_id = db.Column(db.BigInteger(), nullable=True)
     user_message_id = db.Column(db.BigInteger(), nullable=True)
     channel_id = db.Column(db.BigInteger(), nullable=True)
@@ -122,6 +123,7 @@ class ZorkTurn(db.Model):
             "user_id": self.user_id,
             "kind": self.kind,
             "content": self.content,
+            "meta_json": self.meta_json,
             "discord_message_id": self.discord_message_id,
             "user_message_id": self.user_message_id,
             "channel_id": self.channel_id,
