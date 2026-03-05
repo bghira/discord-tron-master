@@ -814,9 +814,15 @@ class Zork(commands.Cog):
                     if isinstance(att_text, str) and att_text.startswith("ERROR:"):
                         await ctx.send(att_text.replace("ERROR:", "", 1))
                     elif att_text:
-                        att_summary = await ZorkEmulator._summarise_long_text(
-                            att_text, ctx.message
+                        short_msg = ZorkEmulator._attachment_setup_length_error(
+                            att_text
                         )
+                        if short_msg:
+                            await ctx.send(short_msg)
+                        else:
+                            att_summary = await ZorkEmulator._summarise_long_text(
+                                att_text, ctx.message
+                            )
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign, campaign_name, attachment_summary=att_summary
                     )
@@ -866,9 +872,13 @@ class Zork(commands.Cog):
             if isinstance(att_text, str) and att_text.startswith("ERROR:"):
                 await thread.send(att_text.replace("ERROR:", "", 1))
             elif att_text:
-                att_summary = await ZorkEmulator._summarise_long_text(
-                    att_text, ctx.message, channel=thread
-                )
+                short_msg = ZorkEmulator._attachment_setup_length_error(att_text)
+                if short_msg:
+                    await thread.send(short_msg)
+                else:
+                    att_summary = await ZorkEmulator._summarise_long_text(
+                        att_text, ctx.message, channel=thread
+                    )
             setup_message = await ZorkEmulator.start_campaign_setup(
                 campaign, name or thread_name, attachment_summary=att_summary
             )

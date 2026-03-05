@@ -80,6 +80,7 @@ class ZorkEmulator:
     ATTACHMENT_PROMPT_OVERHEAD_TOKENS = 6_000  # reserve for system + user + IMDB + storyline JSON
     ATTACHMENT_RESPONSE_RESERVE_TOKENS = 4_000 # max_tokens used by finalize response
     ATTACHMENT_MAX_PARALLEL = 4
+    ATTACHMENT_MIN_SETUP_CHUNKS = 4
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
@@ -1686,9 +1687,13 @@ class ZorkEmulator:
         if isinstance(att_text, str) and att_text.startswith("ERROR:"):
             await ctx.channel.send(att_text.replace("ERROR:", "", 1))
         elif att_text:
-            summary = await cls._summarise_long_text(att_text, ctx)
-            if summary:
-                setup_data["attachment_summary"] = summary
+            short_msg = cls._attachment_setup_length_error(att_text)
+            if short_msg:
+                await ctx.channel.send(short_msg)
+            else:
+                summary = await cls._summarise_long_text(att_text, ctx)
+                if summary:
+                    setup_data["attachment_summary"] = summary
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(
@@ -2199,6 +2204,48 @@ class ZorkEmulator:
         return text if text else None
 
     ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
+
+    @classmethod
+    def _estimate_attachment_chunk_count(cls, text: str) -> int:
+        clean = str(text or "").strip()
+        if not clean:
+            return 0
+        total_tokens = glm_token_count(clean)
+        target_chunk_tokens = max(
+            cls.ATTACHMENT_CHUNK_TOKENS,
+            total_tokens // cls.ATTACHMENT_MAX_CHUNKS,
+        )
+        chars_per_tok = len(clean) / max(total_tokens, 1)
+        chunk_char_target = max(1, int(target_chunk_tokens * chars_per_tok))
+        paragraphs = clean.split("\n\n")
+        chunks: List[str] = []
+        current_chunk: List[str] = []
+        current_len = 0
+        for para in paragraphs:
+            para_len = len(para)
+            if current_len + para_len + 2 > chunk_char_target and current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = [para]
+                current_len = para_len
+            else:
+                current_chunk.append(para)
+                current_len += para_len + 2
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+        return len(chunks)
+
+    @classmethod
+    def _attachment_setup_length_error(cls, text: str) -> Optional[str]:
+        chunk_count = cls._estimate_attachment_chunk_count(text)
+        if chunk_count >= cls.ATTACHMENT_MIN_SETUP_CHUNKS:
+            return None
+        token_count = glm_token_count(str(text or ""))
+        min_tokens = cls.ATTACHMENT_CHUNK_TOKENS * cls.ATTACHMENT_MIN_SETUP_CHUNKS
+        return (
+            "Uploaded text is too short for setup ingestion "
+            f"({chunk_count}/{cls.ATTACHMENT_MIN_SETUP_CHUNKS} chunks, ~{token_count} tokens). "
+            f"Please upload a longer `.txt` file (about {min_tokens}+ tokens / {cls.ATTACHMENT_MIN_SETUP_CHUNKS}+ sections)."
+        )
 
     @classmethod
     async def _summarise_long_text(cls, text: str, ctx_message, channel=None) -> str:
