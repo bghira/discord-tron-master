@@ -64,7 +64,13 @@ class ZorkEmulator:
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 10
     MAX_CHARACTERS_CHARS = 8000
-    IMMUTABLE_CHARACTER_FIELDS = {"name", "personality", "background", "appearance"}
+    IMMUTABLE_CHARACTER_FIELDS = {
+        "name",
+        "personality",
+        "background",
+        "appearance",
+        "speech_style",
+    }
     MAX_CHARACTERS_IN_PROMPT = 20
     ATTENTION_WINDOW_SECONDS = 600
     MIN_TURN_ADVANCE_MINUTES = 1
@@ -113,6 +119,13 @@ class ZorkEmulator:
     SMS_MAX_THREADS = 24
     SMS_MAX_MESSAGES_PER_THREAD = 40
     SMS_MAX_PREVIEW_CHARS = 120
+    PLOT_THREADS_STATE_KEY = "_plot_threads"
+    MAX_PLOT_THREADS = 24
+    MAX_PLOT_DEPENDENCIES = 8
+    CHAPTER_PLAN_STATE_KEY = "_chapter_plan"
+    MAX_OFFRAILS_CHAPTERS = 16
+    CONSEQUENCE_STATE_KEY = "_consequences"
+    MAX_CONSEQUENCES = 40
     MEMORY_SEARCH_USAGE_KEY = "_memory_search_term_usage"
     MEMORY_SEARCH_USAGE_MAX_TERMS = 300
     MEMORY_SEARCH_ROSTER_HINT_THRESHOLD = 3
@@ -132,6 +145,9 @@ class ZorkEmulator:
         "calendar",
         MEMORY_SEARCH_USAGE_KEY,
         SMS_STATE_KEY,
+        PLOT_THREADS_STATE_KEY,
+        CHAPTER_PLAN_STATE_KEY,
+        CONSEQUENCE_STATE_KEY,
         TURN_TIME_INDEX_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
@@ -195,10 +211,15 @@ class ZorkEmulator:
         "- character_updates: object (optional; keyed by stable slug IDs like 'marcus-blackwell'. "
         "Use this to create or update NPCs in the world character tracker. "
         "Slug IDs must be lowercase-hyphenated, derived from the character name, and stable across turns. "
-        "On first appearance provide all fields: name, personality, background, appearance, location, "
-        "current_status, allegiance, relationship. On subsequent turns only mutable fields are accepted: "
-        "location, current_status, allegiance, relationship, deceased_reason, and any other dynamic key. "
-        "Immutable fields (name, personality, background, appearance) are locked at creation and silently ignored on updates. "
+        "On first appearance provide all fields: name, personality, background, appearance, speech_style, location, "
+        "current_status, allegiance, relationship. "
+        "speech_style should be 2-3 sentences on how the character talks: sentence length, vocabulary, verbal tics, and what they avoid saying. "
+        "On subsequent turns only mutable fields are accepted: "
+        "location, current_status, allegiance, relationship, relationships, deceased_reason, and any other dynamic key. "
+        "Immutable fields (name, personality, background, appearance, speech_style) are locked at creation and silently ignored on updates. "
+        "relationships is a map keyed by other character slug/name, e.g. "
+        "{\"deshawn\": {\"status\": \"partner\", \"knows_about\": [\"pregnancy\"], \"doesnt_know\": [\"blood-test-result\"], \"dynamic\": \"protective-but-autonomous\"}}. "
+        "Use it to track disclosures, secrets, and dynamic shifts.\n"
         "To remove a character from the roster, set that character slug to null in character_updates "
         "or set it to {'remove': true}. "
         "Set deceased_reason to a string when a character dies. "
@@ -210,6 +231,9 @@ class ZorkEmulator:
         "- Write in classic Zork style: concise, concrete, and gameplay-forward.\n"
         "- Keep narration minimal by default (roughly 1-4 sentences, usually 30-120 words).\n"
         "- No literary flourish: avoid poetic language, novel-style interior monologue, melodrama, or comic-book framing.\n"
+        "- ANTI-CLICHE: Avoid default narrative beats. Not every tense moment needs a drawn weapon. "
+        "Not every silence is meaningful. Not every NPC encounter is adversarial-then-allied.\n"
+        "- If you are about to write a beat that could appear in any story, pick the version that could only happen in THIS story with THESE characters.\n"
         "- DELTA MODE: each turn should add NEW developments only. Do not recap unchanged context from WORLD_SUMMARY or RECENT_TURNS.\n"
         "- Do not re-state the player's action in paraphrase unless needed for immediate clarity.\n"
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
@@ -260,6 +284,9 @@ class ZorkEmulator:
         "  Set it in player_state_update.character_name.\n"
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
+        "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
+        "- Information boundaries: NPCs should not reference facts outside what they plausibly know. "
+        "Use relationships[*].knows_about/doesnt_know where present to enforce this.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
         "- CRITICAL — OTHER PLAYER CHARACTERS ARE OFF-LIMITS:\n"
@@ -283,13 +310,24 @@ class ZorkEmulator:
         "- For sleep/rest/wait, do NOT invent refusal or conflict (insomnia, sudden danger, interruptions) unless it is already established by prior events, active timers, or immediate scene facts.\n"
         "- If time cannot safely jump because the campaign timeline is shared, still honor intent by ending with the player sleeping/resting in the present moment.\n"
         "- Only advance to later times (e.g. morning) when the player explicitly requests it AND the jump is consistent with established world timing.\n"
+        "- Time skips do not reset emotional continuity. Characters carry unresolved anger/anxiety/grief/conflict unless intervening events plausibly resolve it.\n"
+        "- Scene continuity: rooms persist across visits. If doors were opened, objects moved, items left behind, or things broken, reflect that persistent state when anyone re-enters.\n"
+        "- Record persistent physical room changes under state_update.locations.<location_key>.modifications so later visits can reflect them.\n"
+        "- Before finalizing narration, run a contradiction self-check:\n"
+        "  * Does any NPC reference information they should not have?\n"
+        "  * Does narration contradict WORLD_STATE or WORLD_CHARACTERS locations/status?\n"
+        "  * If yes, correct it before responding.\n"
         "- Causality first: do not introduce new pursuers, attacks, disasters, media attention, or environmental threats without concrete setup in prior turns/state.\n"
         "- Escalations must follow a believable chain of evidence and opportunity (how they found the player, why now, and through what channel).\n"
         "- No omniscient coincidence pressure: avoid out-of-nowhere helicopters, enemy arrivals, or wildlife hazards unless foreshadowed or logically triggered.\n"
+        "- SETUP AND PAYOFF: when introducing a specific detail (object, NPC trait, environmental feature), consider future payoff over the next 5-20 turns.\n"
+        "- Not every detail needs immediate resolution, but specific details should usually matter later. Track long-thread setups via plot_plan.\n"
+        "- For threads likely to span more than 3 turns, use plot_plan to persist setup/payoff intent instead of winging it each turn.\n"
         "- NPCs have independent motivations, schedules, and emotional states that exist regardless of the player.\n"
         "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
         "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
         "- Most human interactions are not foreplay. NPCs should behave like people with their own priorities unless the scene has organically built to intimacy through player and NPC choices.\n"
+        "- Tone lock: match narration to WORLD_STATE.tone. Player humor is allowed, but ambient world/NPC behavior should remain tonally consistent unless the story explicitly shifts tone.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -348,6 +386,13 @@ class ZorkEmulator:
         "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
         "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
         "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
+        "\nPlanning tools:\n"
+        "- Use plot_plan for long-running setups/payoffs:\n"
+        '{"tool_call": "plot_plan", "plans": [{"thread": "thread-slug", "setup": "...", "intended_payoff": "...", "target_turns": 12, "dependencies": ["dep1"]}]}\n'
+        "- Use chapter_plan in off-rails mode to structure emergent arcs:\n"
+        '{"tool_call": "chapter_plan", "action": "create", "chapter": {"slug": "arc-slug", "title": "Arc Title", "summary": "...", "scenes": ["scene-a","scene-b"], "active": true}}\n'
+        "- Use consequence_log when you narrate a promised downstream effect:\n"
+        '{"tool_call": "consequence_log", "add": {"trigger": "...", "consequence": "...", "severity": "moderate", "expires_turns": 20}}\n'
         "Use SEPARATE queries for each character or topic — do NOT combine multiple subjects into one query.\n"
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
@@ -434,6 +479,49 @@ class ZorkEmulator:
         "No other keys alongside tool_call.\n"
         "Returns full expanded chapter with all scene details.\n"
         "Use when you need details about a chapter not fully shown in STORY_CONTEXT.\n"
+    )
+
+    PLOT_PLAN_TOOL_PROMPT = (
+        "\nYou have a plot_plan tool for forward-looking narrative intentions.\n"
+        "Use it to create/update/resolve multi-turn threads so you do not mystery-box indefinitely.\n"
+        "Return ONLY:\n"
+        '{"tool_call": "plot_plan", "plans": [{"thread": "elizabeth-pregnancy", "setup": "Elizabeth is stalling on proof", '
+        '"intended_payoff": "Blood test reveals she is pregnant but not by Deshawn", "target_turns": 15, '
+        '"dependencies": ["blood test scene", "clinic arrival"]}]}\n'
+        "You may also resolve/update existing threads by setting status/resolution fields:\n"
+        '{"tool_call": "plot_plan", "plans": [{"thread": "elizabeth-pregnancy", "status": "resolved", "resolution": "Result confirmed. Relationship ruptured."}]}\n'
+        "ACTIVE_PLOT_THREADS are returned in prompt context.\n"
+        "You MUST consult ACTIVE_PLOT_THREADS before narrating scenes that touch those threads.\n"
+        "Any narrative thread expected to span more than 3 turns SHOULD have a plot plan.\n"
+    )
+
+    CHAPTER_PLAN_TOOL_PROMPT = (
+        "\nOFF-RAILS CHAPTER MANAGEMENT TOOL:\n"
+        "In off-rails mode, you may create/advance/resolve emergent chapter structure via chapter_plan.\n"
+        "Create chapter:\n"
+        '{"tool_call": "chapter_plan", "action": "create", "chapter": {"slug": "elizabeths-reckoning", "title": "Elizabeth\'s Reckoning", '
+        '"summary": "The blood test confrontation and aftermath", "scenes": ["clinic-arrival", "the-test", "results-and-fallout"], "active": true}}\n'
+        "Advance scene:\n"
+        '{"tool_call": "chapter_plan", "action": "advance_scene", "chapter": "elizabeths-reckoning", "to_scene": "the-test"}\n'
+        "Resolve chapter:\n"
+        '{"tool_call": "chapter_plan", "action": "resolve", "chapter": "elizabeths-reckoning", "resolution": "Blood test confirmed pregnancy, not Deshawn\'s. Elizabeth departed."}\n'
+        "ACTIVE_CHAPTERS are returned in prompt context.\n"
+        "Use ACTIVE_CHAPTERS to maintain momentum and avoid aimless wandering.\n"
+        "If no chapters are active and the player seems directionless, create one from the strongest unresolved thread in WORLD_STATE/ACTIVE_PLOT_THREADS.\n"
+    )
+
+    CONSEQUENCE_TOOL_PROMPT = (
+        "\nYou have a consequence_log tool for promised downstream effects.\n"
+        "Use it when narration establishes a future consequence that should persist.\n"
+        "Add consequence:\n"
+        '{"tool_call": "consequence_log", "add": {"trigger": "Stormbringer\'s shriek in Zarkos", '
+        '"consequence": "Creatures in the city are now alert to the party\'s presence", '
+        '"severity": "moderate", "expires_turns": 30}}\n'
+        "Resolve consequence:\n"
+        '{"tool_call": "consequence_log", "resolve": {"id": "stormbringer-shriek-zarkos", "resolution": "City alert collapsed after patrol reset."}}\n'
+        "Remove consequence explicitly:\n"
+        '{"tool_call": "consequence_log", "remove": ["stormbringer-shriek-zarkos"]}\n'
+        "ACTIVE_CONSEQUENCES are returned in prompt context. You MUST consult them while narrating relevant scenes.\n"
     )
 
     CALENDAR_TOOL_PROMPT = (
@@ -3939,6 +4027,58 @@ class ZorkEmulator:
         return re.sub(r"\s+", " ", str(value or "").strip())
 
     @classmethod
+    def _location_state_key(cls, value: object) -> str:
+        text = cls._normalize_location_text(value).lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:100]
+
+    @classmethod
+    def _active_location_modifications_for_prompt(
+        cls,
+        campaign_state: Dict[str, object],
+        player_state: Dict[str, object],
+    ) -> Dict[str, object]:
+        if not isinstance(campaign_state, dict) or not isinstance(player_state, dict):
+            return {}
+        raw_locations = campaign_state.get("locations")
+        if not isinstance(raw_locations, dict):
+            return {}
+        candidate_keys: List[str] = []
+        for raw in (
+            player_state.get("location"),
+            player_state.get("room_title"),
+            player_state.get("room_summary"),
+        ):
+            key = cls._location_state_key(raw)
+            if key and key not in candidate_keys:
+                candidate_keys.append(key)
+        if not candidate_keys:
+            return {}
+        for key in candidate_keys:
+            row = raw_locations.get(key)
+            if not isinstance(row, dict):
+                continue
+            mods = row.get("modifications")
+            if isinstance(mods, list):
+                clean_mods = []
+                for item in mods[:24]:
+                    item_text = " ".join(str(item or "").strip().split())[:180]
+                    if item_text:
+                        clean_mods.append(item_text)
+                if clean_mods:
+                    return {
+                        "location_key": key,
+                        "modifications": clean_mods,
+                    }
+            elif isinstance(mods, dict) and mods:
+                return {
+                    "location_key": key,
+                    "modifications": mods,
+                }
+        return {}
+
+    @classmethod
     def _resolve_player_location_for_state_sync(
         cls, player_state: Dict[str, object]
     ) -> str:
@@ -4761,6 +4901,62 @@ class ZorkEmulator:
                 # Existing character — only accept mutable fields.
                 for key, value in fields.items():
                     if key not in cls.IMMUTABLE_CHARACTER_FIELDS:
+                        if key == "relationships":
+                            current_rel = existing[target_slug].get("relationships")
+                            if not isinstance(current_rel, dict):
+                                current_rel = {}
+                            if value is None:
+                                existing[target_slug].pop("relationships", None)
+                                continue
+                            if not isinstance(value, dict):
+                                continue
+                            merged_rel = dict(current_rel)
+                            for rel_key_raw, rel_value in value.items():
+                                rel_key = " ".join(
+                                    str(rel_key_raw or "").strip().lower().split()
+                                )[:80]
+                                if not rel_key:
+                                    continue
+                                if rel_value is None:
+                                    merged_rel.pop(rel_key, None)
+                                    continue
+                                if not isinstance(rel_value, dict):
+                                    continue
+                                row = dict(merged_rel.get(rel_key) or {})
+                                for rel_field in (
+                                    "status",
+                                    "dynamic",
+                                    "notes",
+                                ):
+                                    if rel_field in rel_value:
+                                        row[rel_field] = str(
+                                            rel_value.get(rel_field) or ""
+                                        ).strip()[:220]
+                                for rel_list_field in ("knows_about", "doesnt_know"):
+                                    if rel_list_field in rel_value:
+                                        items = rel_value.get(rel_list_field)
+                                        if isinstance(items, list):
+                                            clean_items = []
+                                            seen_items = set()
+                                            for item in items[:32]:
+                                                item_text = " ".join(
+                                                    str(item or "").strip().split()
+                                                )[:120]
+                                                if not item_text:
+                                                    continue
+                                                item_key = item_text.lower()
+                                                if item_key in seen_items:
+                                                    continue
+                                                seen_items.add(item_key)
+                                                clean_items.append(item_text)
+                                            row[rel_list_field] = clean_items
+                                if row:
+                                    merged_rel[rel_key] = row
+                            if merged_rel:
+                                existing[target_slug]["relationships"] = merged_rel
+                            else:
+                                existing[target_slug].pop("relationships", None)
+                            continue
                         existing[target_slug][key] = value
             else:
                 if on_rails:
@@ -5156,6 +5352,663 @@ class ZorkEmulator:
                 }
             )
         return hints
+
+    @classmethod
+    def _plot_thread_key(cls, value: object) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:80]
+
+    @classmethod
+    def _plot_threads_from_state(
+        cls, campaign_state: Dict[str, object]
+    ) -> Dict[str, Dict[str, object]]:
+        raw = (
+            campaign_state.get(cls.PLOT_THREADS_STATE_KEY)
+            if isinstance(campaign_state, dict)
+            else {}
+        )
+        if not isinstance(raw, dict):
+            raw = {}
+        threads: Dict[str, Dict[str, object]] = {}
+        for raw_key, raw_value in raw.items():
+            if not isinstance(raw_value, dict):
+                continue
+            thread_key = cls._plot_thread_key(raw_value.get("thread") or raw_key)
+            if not thread_key:
+                continue
+            status = str(raw_value.get("status") or "active").strip().lower()
+            if status not in {"active", "resolved"}:
+                status = "active"
+            dependencies = raw_value.get("dependencies")
+            if not isinstance(dependencies, list):
+                dependencies = []
+            dep_clean = []
+            for dep in dependencies[: cls.MAX_PLOT_DEPENDENCIES]:
+                dep_text = " ".join(str(dep or "").strip().split())[:120]
+                if dep_text:
+                    dep_clean.append(dep_text)
+            target_turns = cls._coerce_non_negative_int(
+                raw_value.get("target_turns", 0), default=0
+            )
+            if target_turns <= 0:
+                target_turns = 8
+            threads[thread_key] = {
+                "thread": thread_key,
+                "setup": str(raw_value.get("setup") or "").strip()[:260],
+                "intended_payoff": str(raw_value.get("intended_payoff") or "").strip()[
+                    :260
+                ],
+                "target_turns": min(250, max(1, target_turns)),
+                "dependencies": dep_clean,
+                "status": status,
+                "resolution": str(raw_value.get("resolution") or "").strip()[:260],
+                "created_turn": cls._coerce_non_negative_int(
+                    raw_value.get("created_turn", 0), default=0
+                ),
+                "updated_turn": cls._coerce_non_negative_int(
+                    raw_value.get("updated_turn", 0), default=0
+                ),
+            }
+        return threads
+
+    @classmethod
+    def _plot_threads_for_prompt(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        limit: int = 10,
+    ) -> List[Dict[str, object]]:
+        threads = cls._plot_threads_from_state(campaign_state)
+        rows = list(threads.values())
+        rows.sort(
+            key=lambda row: (
+                0 if str(row.get("status")) == "active" else 1,
+                -cls._coerce_non_negative_int(row.get("updated_turn", 0), default=0),
+                str(row.get("thread") or ""),
+            )
+        )
+        out = []
+        for row in rows[: max(1, int(limit or 10))]:
+            out.append(
+                {
+                    "thread": row.get("thread"),
+                    "setup": row.get("setup"),
+                    "intended_payoff": row.get("intended_payoff"),
+                    "target_turns": row.get("target_turns"),
+                    "dependencies": list(row.get("dependencies") or []),
+                    "status": row.get("status"),
+                    "resolution": row.get("resolution"),
+                }
+            )
+        return out
+
+    @classmethod
+    def _apply_plot_plan_tool(
+        cls,
+        campaign_state: Dict[str, object],
+        payload: Dict[str, object],
+        *,
+        current_turn: int = 0,
+    ) -> Dict[str, object]:
+        threads = cls._plot_threads_from_state(campaign_state)
+        raw_plans = payload.get("plans")
+        if isinstance(raw_plans, dict):
+            raw_plans = [raw_plans]
+        if not isinstance(raw_plans, list):
+            raw_plans = []
+        updated = 0
+        removed = 0
+
+        for raw_plan in raw_plans[:12]:
+            if not isinstance(raw_plan, dict):
+                continue
+            thread_key = cls._plot_thread_key(
+                raw_plan.get("thread") or raw_plan.get("slug")
+            )
+            if not thread_key:
+                continue
+            delete_requested = bool(
+                raw_plan.get("remove")
+                or raw_plan.get("delete")
+                or raw_plan.get("_delete")
+            )
+            if delete_requested:
+                if thread_key in threads:
+                    threads.pop(thread_key, None)
+                    removed += 1
+                continue
+
+            row = dict(
+                threads.get(
+                    thread_key,
+                    {
+                        "thread": thread_key,
+                        "setup": "",
+                        "intended_payoff": "",
+                        "target_turns": 8,
+                        "dependencies": [],
+                        "status": "active",
+                        "resolution": "",
+                        "created_turn": max(0, int(current_turn or 0)),
+                        "updated_turn": max(0, int(current_turn or 0)),
+                    },
+                )
+            )
+            for field in ("setup", "intended_payoff", "resolution"):
+                if field in raw_plan and raw_plan.get(field) is not None:
+                    row[field] = " ".join(
+                        str(raw_plan.get(field) or "").strip().split()
+                    )[:260]
+
+            if "target_turns" in raw_plan:
+                target_turns = cls._coerce_non_negative_int(
+                    raw_plan.get("target_turns", row.get("target_turns", 8)), default=8
+                )
+                row["target_turns"] = min(250, max(1, target_turns))
+
+            raw_deps = raw_plan.get("dependencies")
+            if isinstance(raw_deps, list):
+                dep_clean = []
+                for dep in raw_deps[: cls.MAX_PLOT_DEPENDENCIES]:
+                    dep_text = " ".join(str(dep or "").strip().split())[:120]
+                    if dep_text:
+                        dep_clean.append(dep_text)
+                row["dependencies"] = dep_clean
+
+            status = str(raw_plan.get("status") or row.get("status") or "active").strip().lower()
+            if raw_plan.get("resolve"):
+                status = "resolved"
+            if status not in {"active", "resolved"}:
+                status = "active"
+            row["status"] = status
+
+            if row.get("status") == "resolved" and not row.get("resolution"):
+                row["resolution"] = "resolved"
+            if row.get("status") != "resolved":
+                row["resolution"] = str(row.get("resolution") or "")[:260]
+
+            row["updated_turn"] = max(0, int(current_turn or 0))
+            if cls._coerce_non_negative_int(row.get("created_turn", 0), default=0) <= 0:
+                row["created_turn"] = max(0, int(current_turn or 0))
+            threads[thread_key] = row
+            updated += 1
+
+        if len(threads) > cls.MAX_PLOT_THREADS:
+            ranked = sorted(
+                threads.items(),
+                key=lambda kv: (
+                    0 if str(kv[1].get("status")) == "active" else 1,
+                    -cls._coerce_non_negative_int(kv[1].get("updated_turn", 0), default=0),
+                    kv[0],
+                ),
+            )
+            threads = dict(ranked[: cls.MAX_PLOT_THREADS])
+
+        campaign_state[cls.PLOT_THREADS_STATE_KEY] = threads
+        active_threads = [
+            row for row in cls._plot_threads_for_prompt(campaign_state, limit=12) if str(row.get("status")) == "active"
+        ]
+        return {
+            "updated": updated,
+            "removed": removed,
+            "total": len(threads),
+            "active": active_threads,
+        }
+
+    @classmethod
+    def _chapter_slug_key(cls, value: object) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:80]
+
+    @classmethod
+    def _chapter_plan_from_state(
+        cls, campaign_state: Dict[str, object]
+    ) -> Dict[str, Dict[str, object]]:
+        raw = (
+            campaign_state.get(cls.CHAPTER_PLAN_STATE_KEY)
+            if isinstance(campaign_state, dict)
+            else {}
+        )
+        if not isinstance(raw, dict):
+            raw = {}
+        chapters: Dict[str, Dict[str, object]] = {}
+        for raw_slug, raw_entry in raw.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            slug = cls._chapter_slug_key(raw_entry.get("slug") or raw_slug)
+            if not slug:
+                continue
+            scenes_raw = raw_entry.get("scenes")
+            if not isinstance(scenes_raw, list):
+                scenes_raw = []
+            scenes = []
+            for scene in scenes_raw[:20]:
+                scene_slug = cls._chapter_slug_key(scene)
+                if scene_slug:
+                    scenes.append(scene_slug)
+            current_scene = cls._chapter_slug_key(raw_entry.get("current_scene"))
+            if not current_scene and scenes:
+                current_scene = scenes[0]
+            status = str(raw_entry.get("status") or "active").strip().lower()
+            if status not in {"active", "resolved"}:
+                status = "active"
+            chapters[slug] = {
+                "slug": slug,
+                "title": " ".join(str(raw_entry.get("title") or slug).strip().split())[
+                    :120
+                ],
+                "summary": str(raw_entry.get("summary") or "").strip()[:260],
+                "scenes": scenes,
+                "current_scene": current_scene,
+                "status": status,
+                "resolution": str(raw_entry.get("resolution") or "").strip()[:260],
+                "created_turn": cls._coerce_non_negative_int(
+                    raw_entry.get("created_turn", 0), default=0
+                ),
+                "updated_turn": cls._coerce_non_negative_int(
+                    raw_entry.get("updated_turn", 0), default=0
+                ),
+            }
+        return chapters
+
+    @classmethod
+    def _chapters_for_prompt(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        active_only: bool = True,
+        limit: int = 8,
+    ) -> List[Dict[str, object]]:
+        chapters = cls._chapter_plan_from_state(campaign_state)
+        rows = list(chapters.values())
+        if active_only:
+            rows = [row for row in rows if str(row.get("status")) == "active"]
+        rows.sort(
+            key=lambda row: (
+                0 if str(row.get("status")) == "active" else 1,
+                -cls._coerce_non_negative_int(row.get("updated_turn", 0), default=0),
+                str(row.get("slug") or ""),
+            )
+        )
+        out = []
+        for row in rows[: max(1, int(limit or 8))]:
+            out.append(
+                {
+                    "slug": row.get("slug"),
+                    "title": row.get("title"),
+                    "summary": row.get("summary"),
+                    "current_scene": row.get("current_scene"),
+                    "scenes": list(row.get("scenes") or []),
+                    "status": row.get("status"),
+                    "resolution": row.get("resolution"),
+                }
+            )
+        return out
+
+    @classmethod
+    def _apply_chapter_plan_tool(
+        cls,
+        campaign_state: Dict[str, object],
+        payload: Dict[str, object],
+        *,
+        current_turn: int = 0,
+        on_rails: bool = False,
+    ) -> Dict[str, object]:
+        if on_rails:
+            return {"updated": 0, "ignored": True, "reason": "on_rails_enabled"}
+
+        chapters = cls._chapter_plan_from_state(campaign_state)
+        action = str(payload.get("action") or "create").strip().lower()
+        changed = 0
+
+        def _resolve_slug() -> str:
+            chapter_ref = payload.get("chapter")
+            if isinstance(chapter_ref, dict):
+                return cls._chapter_slug_key(
+                    chapter_ref.get("slug") or chapter_ref.get("title")
+                )
+            return cls._chapter_slug_key(payload.get("chapter") or payload.get("slug"))
+
+        slug = _resolve_slug()
+        chapter_payload = payload.get("chapter")
+        if isinstance(chapter_payload, dict):
+            if not slug:
+                slug = cls._chapter_slug_key(
+                    chapter_payload.get("slug") or chapter_payload.get("title")
+                )
+        if action in {"create", "update"}:
+            if not slug:
+                return {"updated": 0, "ignored": True, "reason": "missing_slug"}
+            row = dict(
+                chapters.get(
+                    slug,
+                    {
+                        "slug": slug,
+                        "title": slug,
+                        "summary": "",
+                        "scenes": [],
+                        "current_scene": "",
+                        "status": "active",
+                        "resolution": "",
+                        "created_turn": max(0, int(current_turn or 0)),
+                        "updated_turn": max(0, int(current_turn or 0)),
+                    },
+                )
+            )
+            if isinstance(chapter_payload, dict):
+                if chapter_payload.get("title") is not None:
+                    row["title"] = " ".join(
+                        str(chapter_payload.get("title") or "").strip().split()
+                    )[:120] or row.get("title") or slug
+                if chapter_payload.get("summary") is not None:
+                    row["summary"] = str(chapter_payload.get("summary") or "").strip()[
+                        :260
+                    ]
+                scenes_raw = chapter_payload.get("scenes")
+                if isinstance(scenes_raw, list):
+                    scenes = []
+                    for scene in scenes_raw[:20]:
+                        scene_slug = cls._chapter_slug_key(scene)
+                        if scene_slug:
+                            scenes.append(scene_slug)
+                    row["scenes"] = scenes
+                if chapter_payload.get("current_scene") is not None:
+                    row["current_scene"] = cls._chapter_slug_key(
+                        chapter_payload.get("current_scene")
+                    )
+                if chapter_payload.get("active") is not None:
+                    row["status"] = (
+                        "active" if bool(chapter_payload.get("active")) else "resolved"
+                    )
+            if not row.get("current_scene") and row.get("scenes"):
+                row["current_scene"] = row["scenes"][0]
+            row["updated_turn"] = max(0, int(current_turn or 0))
+            if cls._coerce_non_negative_int(row.get("created_turn", 0), default=0) <= 0:
+                row["created_turn"] = max(0, int(current_turn or 0))
+            chapters[slug] = row
+            changed += 1
+
+        elif action == "advance_scene":
+            if not slug or slug not in chapters:
+                return {"updated": 0, "ignored": True, "reason": "chapter_not_found"}
+            row = dict(chapters.get(slug) or {})
+            to_scene = cls._chapter_slug_key(
+                payload.get("to_scene") or payload.get("scene")
+            )
+            scenes = list(row.get("scenes") or [])
+            if to_scene:
+                if to_scene not in scenes:
+                    scenes.append(to_scene)
+                row["current_scene"] = to_scene
+            elif scenes:
+                current = cls._chapter_slug_key(row.get("current_scene"))
+                try:
+                    idx = scenes.index(current)
+                except ValueError:
+                    idx = -1
+                next_idx = min(len(scenes) - 1, idx + 1)
+                row["current_scene"] = scenes[next_idx]
+            row["scenes"] = scenes[:20]
+            row["status"] = "active"
+            row["updated_turn"] = max(0, int(current_turn or 0))
+            chapters[slug] = row
+            changed += 1
+
+        elif action in {"resolve", "close"}:
+            if not slug or slug not in chapters:
+                return {"updated": 0, "ignored": True, "reason": "chapter_not_found"}
+            row = dict(chapters.get(slug) or {})
+            row["status"] = "resolved"
+            row["resolution"] = " ".join(
+                str(payload.get("resolution") or row.get("resolution") or "").split()
+            )[:260]
+            row["updated_turn"] = max(0, int(current_turn or 0))
+            chapters[slug] = row
+            changed += 1
+
+        if len(chapters) > cls.MAX_OFFRAILS_CHAPTERS:
+            ranked = sorted(
+                chapters.items(),
+                key=lambda kv: (
+                    0 if str(kv[1].get("status")) == "active" else 1,
+                    -cls._coerce_non_negative_int(kv[1].get("updated_turn", 0), default=0),
+                    kv[0],
+                ),
+            )
+            chapters = dict(ranked[: cls.MAX_OFFRAILS_CHAPTERS])
+
+        campaign_state[cls.CHAPTER_PLAN_STATE_KEY] = chapters
+        active_chapters = cls._chapters_for_prompt(
+            campaign_state, active_only=True, limit=10
+        )
+        return {
+            "updated": changed,
+            "ignored": False,
+            "total": len(chapters),
+            "active": active_chapters,
+        }
+
+    @classmethod
+    def _consequence_id_key(cls, value: object) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:90]
+
+    @classmethod
+    def _consequences_from_state(
+        cls, campaign_state: Dict[str, object]
+    ) -> Dict[str, Dict[str, object]]:
+        raw = (
+            campaign_state.get(cls.CONSEQUENCE_STATE_KEY)
+            if isinstance(campaign_state, dict)
+            else {}
+        )
+        if not isinstance(raw, dict):
+            raw = {}
+        out: Dict[str, Dict[str, object]] = {}
+        for raw_key, raw_entry in raw.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            cid = cls._consequence_id_key(raw_entry.get("id") or raw_key)
+            if not cid:
+                continue
+            status = str(raw_entry.get("status") or "active").strip().lower()
+            if status not in {"active", "resolved"}:
+                status = "active"
+            expires_at_turn = cls._coerce_non_negative_int(
+                raw_entry.get("expires_at_turn", 0), default=0
+            )
+            out[cid] = {
+                "id": cid,
+                "trigger": str(raw_entry.get("trigger") or "").strip()[:240],
+                "consequence": str(raw_entry.get("consequence") or "").strip()[:300],
+                "severity": str(raw_entry.get("severity") or "low").strip().lower()[:24],
+                "status": status,
+                "created_turn": cls._coerce_non_negative_int(
+                    raw_entry.get("created_turn", 0), default=0
+                ),
+                "updated_turn": cls._coerce_non_negative_int(
+                    raw_entry.get("updated_turn", 0), default=0
+                ),
+                "expires_at_turn": expires_at_turn,
+                "resolution": str(raw_entry.get("resolution") or "").strip()[:260],
+            }
+        return out
+
+    @classmethod
+    def _consequences_for_prompt(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        current_turn: int = 0,
+        limit: int = 12,
+    ) -> List[Dict[str, object]]:
+        rows = list(cls._consequences_from_state(campaign_state).values())
+        active_rows = []
+        turn_now = max(0, int(current_turn or 0))
+        for row in rows:
+            if str(row.get("status")) != "active":
+                continue
+            expires_at_turn = cls._coerce_non_negative_int(
+                row.get("expires_at_turn", 0), default=0
+            )
+            if expires_at_turn > 0 and turn_now > 0 and expires_at_turn < turn_now:
+                continue
+            active_rows.append(row)
+        active_rows.sort(
+            key=lambda row: (
+                {"critical": 0, "high": 1, "moderate": 2, "low": 3}.get(
+                    str(row.get("severity") or "low"), 4
+                ),
+                cls._coerce_non_negative_int(row.get("expires_at_turn", 0), default=0)
+                if cls._coerce_non_negative_int(row.get("expires_at_turn", 0), default=0) > 0
+                else 10**9,
+                -cls._coerce_non_negative_int(row.get("updated_turn", 0), default=0),
+            )
+        )
+        out = []
+        for row in active_rows[: max(1, int(limit or 12))]:
+            out.append(
+                {
+                    "id": row.get("id"),
+                    "trigger": row.get("trigger"),
+                    "consequence": row.get("consequence"),
+                    "severity": row.get("severity"),
+                    "expires_at_turn": row.get("expires_at_turn"),
+                }
+            )
+        return out
+
+    @classmethod
+    def _apply_consequence_log_tool(
+        cls,
+        campaign_state: Dict[str, object],
+        payload: Dict[str, object],
+        *,
+        current_turn: int = 0,
+    ) -> Dict[str, object]:
+        rows = cls._consequences_from_state(campaign_state)
+        turn_now = max(0, int(current_turn or 0))
+        added = 0
+        updated = 0
+        resolved = 0
+        removed = 0
+
+        def _iter_entries(value: object) -> List[Dict[str, object]]:
+            if isinstance(value, dict):
+                return [value]
+            if isinstance(value, list):
+                return [entry for entry in value if isinstance(entry, dict)]
+            return []
+
+        for entry in _iter_entries(payload.get("add")):
+            trigger = " ".join(str(entry.get("trigger") or "").strip().split())[:240]
+            consequence = " ".join(
+                str(entry.get("consequence") or "").strip().split()
+            )[:300]
+            if not trigger or not consequence:
+                continue
+            cid = cls._consequence_id_key(
+                entry.get("id")
+                or entry.get("slug")
+                or trigger[:60]
+            )
+            if not cid:
+                continue
+            severity = str(entry.get("severity") or "low").strip().lower()
+            if severity not in {"low", "moderate", "high", "critical"}:
+                severity = "low"
+            expires_turns = cls._coerce_non_negative_int(
+                entry.get("expires_turns", 0), default=0
+            )
+            expires_at_turn = (turn_now + expires_turns) if expires_turns > 0 else 0
+            row = dict(rows.get(cid) or {})
+            is_new = not bool(row)
+            row.update(
+                {
+                    "id": cid,
+                    "trigger": trigger,
+                    "consequence": consequence,
+                    "severity": severity,
+                    "status": "active",
+                    "updated_turn": turn_now,
+                    "expires_at_turn": expires_at_turn,
+                    "resolution": str(row.get("resolution") or "")[:260],
+                }
+            )
+            if is_new:
+                row["created_turn"] = turn_now
+                added += 1
+            else:
+                updated += 1
+            rows[cid] = row
+
+        for entry in _iter_entries(payload.get("resolve")):
+            cid = cls._consequence_id_key(
+                entry.get("id") or entry.get("slug") or entry.get("trigger")
+            )
+            if not cid or cid not in rows:
+                continue
+            row = dict(rows.get(cid) or {})
+            row["status"] = "resolved"
+            row["updated_turn"] = turn_now
+            row["resolution"] = " ".join(
+                str(entry.get("resolution") or row.get("resolution") or "resolved")
+                .strip()
+                .split()
+            )[:260]
+            rows[cid] = row
+            resolved += 1
+
+        remove_keys = payload.get("remove")
+        if isinstance(remove_keys, list):
+            for raw_key in remove_keys:
+                cid = cls._consequence_id_key(raw_key)
+                if cid and cid in rows:
+                    rows.pop(cid, None)
+                    removed += 1
+
+        for cid, row in list(rows.items()):
+            expires_at_turn = cls._coerce_non_negative_int(
+                row.get("expires_at_turn", 0), default=0
+            )
+            if (
+                expires_at_turn > 0
+                and turn_now > 0
+                and turn_now > expires_at_turn
+                and str(row.get("status")) == "active"
+            ):
+                rows.pop(cid, None)
+                removed += 1
+
+        if len(rows) > cls.MAX_CONSEQUENCES:
+            ranked = sorted(
+                rows.items(),
+                key=lambda kv: (
+                    0 if str(kv[1].get("status")) == "active" else 1,
+                    -cls._coerce_non_negative_int(kv[1].get("updated_turn", 0), default=0),
+                    kv[0],
+                ),
+            )
+            rows = dict(ranked[: cls.MAX_CONSEQUENCES])
+
+        campaign_state[cls.CONSEQUENCE_STATE_KEY] = rows
+        active = cls._consequences_for_prompt(
+            campaign_state, current_turn=turn_now, limit=12
+        )
+        return {
+            "added": added,
+            "updated": updated,
+            "resolved": resolved,
+            "removed": removed,
+            "total": len(rows),
+            "active": active,
+        }
 
     @classmethod
     def _sms_normalize_thread_key(cls, value: object) -> str:
@@ -5760,6 +6613,7 @@ class ZorkEmulator:
                 entry = {
                     "_slug": slug,
                     "name": char.get("name", slug),
+                    "speech_style": char.get("speech_style"),
                     "location": char.get("location"),
                     "current_status": char.get("current_status"),
                     "allegiance": char.get("allegiance"),
@@ -6210,6 +7064,25 @@ class ZorkEmulator:
             campaign.id
         )
         _source_payload = cls._source_material_prompt_payload(campaign.id)
+        _active_plot_threads = cls._plot_threads_for_prompt(state, limit=10)
+        _active_chapters = cls._chapters_for_prompt(
+            state, active_only=True, limit=8
+        )
+        _latest_turn_id = 0
+        if isinstance(turns, list):
+            for turn in turns:
+                try:
+                    _latest_turn_id = max(
+                        _latest_turn_id, int(getattr(turn, "id", 0) or 0)
+                    )
+                except (TypeError, ValueError):
+                    continue
+        _active_consequences = cls._consequences_for_prompt(
+            state, current_turn=_latest_turn_id, limit=12
+        )
+        _active_location_mods = cls._active_location_modifications_for_prompt(
+            state, player_state
+        )
         _active_location_context = {
             "room_title": player_state.get("room_title"),
             "location": player_state.get("location"),
@@ -6235,6 +7108,20 @@ class ZorkEmulator:
             user_prompt += (
                 f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
                 f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
+            )
+        if _active_plot_threads:
+            user_prompt += (
+                f"ACTIVE_PLOT_THREADS: {cls._dump_json(_active_plot_threads)}\n"
+            )
+        if _active_chapters:
+            user_prompt += f"ACTIVE_CHAPTERS: {cls._dump_json(_active_chapters)}\n"
+        if _active_consequences:
+            user_prompt += (
+                f"ACTIVE_CONSEQUENCES: {cls._dump_json(_active_consequences)}\n"
+            )
+        if _active_location_mods:
+            user_prompt += (
+                f"ACTIVE_LOCATION_MODIFICATIONS: {cls._dump_json(_active_location_mods)}\n"
             )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
@@ -6264,6 +7151,10 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
         if story_context:
             system_prompt = f"{system_prompt}{cls.STORY_OUTLINE_TOOL_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.PLOT_PLAN_TOOL_PROMPT}"
+        if not on_rails:
+            system_prompt = f"{system_prompt}{cls.CHAPTER_PLAN_TOOL_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.CONSEQUENCE_TOOL_PROMPT}"
         system_prompt = f"{system_prompt}{cls.CALENDAR_TOOL_PROMPT}"
         system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
         return system_prompt, user_prompt
@@ -6881,7 +7772,7 @@ class ZorkEmulator:
                         response = cls._clean_response(response)
                     _zork_log("INITIAL API RESPONSE", response)
 
-                    # --- Tool-call detection (memory_*, sms_*, set_timer, story_outline) ---
+                    # --- Tool-call detection (memory_*, sms_*, set_timer, story_outline, plot_plan, chapter_plan, consequence_log) ---
                     json_text_tc = cls._extract_json(response)
                     first_payload = None
                     if json_text_tc:
@@ -7311,6 +8202,169 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "plot_plan":
+                            campaign_state_plot = cls.get_campaign_state(campaign)
+                            latest_turn_id = 0
+                            if isinstance(turns, list):
+                                for turn in turns:
+                                    try:
+                                        latest_turn_id = max(
+                                            latest_turn_id, int(getattr(turn, "id", 0) or 0)
+                                        )
+                                    except (TypeError, ValueError):
+                                        continue
+                            plan_result = cls._apply_plot_plan_tool(
+                                campaign_state_plot,
+                                first_payload,
+                                current_turn=latest_turn_id,
+                            )
+                            campaign.state_json = cls._dump_json(campaign_state_plot)
+                            campaign.updated = db.func.now()
+                            active_plans = list(plan_result.get("active") or [])
+                            lines = [
+                                "PLOT_PLAN_RESULT:",
+                                f"- updated: {int(plan_result.get('updated', 0) or 0)}",
+                                f"- removed: {int(plan_result.get('removed', 0) or 0)}",
+                                f"- total_threads: {int(plan_result.get('total', 0) or 0)}",
+                                f"- active_threads: {len(active_plans)}",
+                            ]
+                            for row in active_plans[:8]:
+                                lines.append(
+                                    "- "
+                                    f"thread='{row.get('thread')}' target_turns={row.get('target_turns')} "
+                                    f"setup=\"{row.get('setup')}\" payoff=\"{row.get('intended_payoff')}\""
+                                )
+                            tool_result_block = "\n".join(lines)
+                            _zork_log("PLOT PLAN BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("PLOT PLAN AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "chapter_plan":
+                            campaign_state_chapter = cls.get_campaign_state(campaign)
+                            latest_turn_id = 0
+                            if isinstance(turns, list):
+                                for turn in turns:
+                                    try:
+                                        latest_turn_id = max(
+                                            latest_turn_id, int(getattr(turn, "id", 0) or 0)
+                                        )
+                                    except (TypeError, ValueError):
+                                        continue
+                            plan_result = cls._apply_chapter_plan_tool(
+                                campaign_state_chapter,
+                                first_payload,
+                                current_turn=latest_turn_id,
+                                on_rails=bool(campaign_state_chapter.get("on_rails", False)),
+                            )
+                            if not bool(plan_result.get("ignored")):
+                                campaign.state_json = cls._dump_json(campaign_state_chapter)
+                                campaign.updated = db.func.now()
+                            active_chapters = list(plan_result.get("active") or [])
+                            if bool(plan_result.get("ignored")):
+                                tool_result_block = (
+                                    "CHAPTER_PLAN_RESULT: ignored.\n"
+                                    f"- reason: {plan_result.get('reason')}"
+                                )
+                            else:
+                                lines = [
+                                    "CHAPTER_PLAN_RESULT:",
+                                    f"- updated: {int(plan_result.get('updated', 0) or 0)}",
+                                    f"- total_chapters: {int(plan_result.get('total', 0) or 0)}",
+                                    f"- active_chapters: {len(active_chapters)}",
+                                ]
+                                for row in active_chapters[:8]:
+                                    lines.append(
+                                        "- "
+                                        f"chapter='{row.get('slug')}' title='{row.get('title')}' "
+                                        f"current_scene='{row.get('current_scene')}'"
+                                    )
+                                tool_result_block = "\n".join(lines)
+                            _zork_log("CHAPTER PLAN BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("CHAPTER PLAN AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "consequence_log":
+                            campaign_state_cons = cls.get_campaign_state(campaign)
+                            latest_turn_id = 0
+                            if isinstance(turns, list):
+                                for turn in turns:
+                                    try:
+                                        latest_turn_id = max(
+                                            latest_turn_id,
+                                            int(getattr(turn, "id", 0) or 0),
+                                        )
+                                    except (TypeError, ValueError):
+                                        continue
+                            cons_result = cls._apply_consequence_log_tool(
+                                campaign_state_cons,
+                                first_payload,
+                                current_turn=latest_turn_id,
+                            )
+                            campaign.state_json = cls._dump_json(campaign_state_cons)
+                            campaign.updated = db.func.now()
+                            active_rows = list(cons_result.get("active") or [])
+                            lines = [
+                                "CONSEQUENCE_LOG_RESULT:",
+                                f"- added: {int(cons_result.get('added', 0) or 0)}",
+                                f"- updated: {int(cons_result.get('updated', 0) or 0)}",
+                                f"- resolved: {int(cons_result.get('resolved', 0) or 0)}",
+                                f"- removed: {int(cons_result.get('removed', 0) or 0)}",
+                                f"- total: {int(cons_result.get('total', 0) or 0)}",
+                                f"- active: {len(active_rows)}",
+                            ]
+                            for row in active_rows[:8]:
+                                expires = cls._coerce_non_negative_int(
+                                    row.get("expires_at_turn", 0), default=0
+                                )
+                                exp_text = (
+                                    f"expires@turn{expires}" if expires > 0 else "no-expiry"
+                                )
+                                lines.append(
+                                    "- "
+                                    f"id='{row.get('id')}' severity='{row.get('severity')}' {exp_text} "
+                                    f"consequence=\"{row.get('consequence')}\""
+                                )
+                            tool_result_block = "\n".join(lines)
+                            _zork_log("CONSEQUENCE LOG BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("CONSEQUENCE LOG AUGMENTED RESPONSE", response)
 
                         elif tool_name == "sms_list":
                             wildcard = str(
