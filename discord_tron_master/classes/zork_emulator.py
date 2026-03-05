@@ -95,6 +95,9 @@ class ZorkEmulator:
     SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
+    SCENE_IMAGE_PRESERVE_PREFIX = (
+        "preserving all scene image details from scene in image x"
+    )
     DEFAULT_CAMPAIGN_PERSONA = (
         "A cooperative, curious adventurer: observant, resourceful, and willing to "
         "engage with absurd situations in-character."
@@ -119,6 +122,7 @@ class ZorkEmulator:
     SMS_MAX_THREADS = 24
     SMS_MAX_MESSAGES_PER_THREAD = 40
     SMS_MAX_PREVIEW_CHARS = 120
+    AUTO_FIX_COUNTERS_KEY = "_auto_fix_counters"
     PLOT_THREADS_STATE_KEY = "_plot_threads"
     MAX_PLOT_THREADS = 24
     MAX_PLOT_DEPENDENCIES = 8
@@ -144,6 +148,7 @@ class ZorkEmulator:
         "game_time",
         "calendar",
         MEMORY_SEARCH_USAGE_KEY,
+        AUTO_FIX_COUNTERS_KEY,
         SMS_STATE_KEY,
         PLOT_THREADS_STATE_KEY,
         CHAPTER_PLAN_STATE_KEY,
@@ -1033,6 +1038,132 @@ class ZorkEmulator:
         return bool(re.match(r"\s*\[OOC\b", str(action_text or ""), re.IGNORECASE))
 
     @classmethod
+    def _increment_auto_fix_counter(
+        cls,
+        campaign_state: Dict[str, object],
+        key: str,
+        amount: int = 1,
+    ) -> None:
+        if not isinstance(campaign_state, dict):
+            return
+        safe_key = re.sub(r"[^a-z0-9_]+", "_", str(key or "").strip().lower()).strip("_")
+        if not safe_key:
+            return
+        try:
+            safe_amount = max(1, int(amount))
+        except (TypeError, ValueError):
+            safe_amount = 1
+        counters = campaign_state.get(cls.AUTO_FIX_COUNTERS_KEY)
+        if not isinstance(counters, dict):
+            counters = {}
+            campaign_state[cls.AUTO_FIX_COUNTERS_KEY] = counters
+        current = cls._coerce_non_negative_int(counters.get(safe_key, 0), default=0)
+        counters[safe_key] = min(10**9, current + safe_amount)
+
+    @classmethod
+    def _should_force_auto_memory_search(cls, action_text: str) -> bool:
+        if cls._is_ooc_action_text(action_text):
+            return False
+        text = " ".join(str(action_text or "").strip().lower().split())
+        if not text or text.startswith("!"):
+            return False
+        if len(text) < 6:
+            return False
+        trivial = {
+            "look",
+            "l",
+            "inventory",
+            "inv",
+            "i",
+            "map",
+            "yes",
+            "y",
+            "no",
+            "n",
+            "ok",
+            "okay",
+            "thanks",
+            "thank you",
+        }
+        return text not in trivial
+
+    @classmethod
+    def _derive_auto_memory_queries(
+        cls,
+        action_text: str,
+        player_state: Dict[str, object],
+        party_snapshot: List[Dict[str, object]],
+        limit: int = 4,
+    ) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+
+        def _push(raw: object) -> None:
+            text = " ".join(str(raw or "").strip().split())
+            if not text:
+                return
+            key = text.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            out.append(text[:120])
+
+        _push(player_state.get("location"))
+        _push(player_state.get("room_title"))
+        player_name = " ".join(
+            str(player_state.get("character_name") or "").strip().lower().split()
+        )
+        for row in party_snapshot[: cls.MAX_PARTY_CONTEXT_PLAYERS]:
+            if not isinstance(row, dict):
+                continue
+            name = " ".join(str(row.get("name") or "").strip().split())
+            if not name:
+                continue
+            if name.lower() == player_name:
+                continue
+            _push(name)
+            if len(out) >= limit:
+                break
+        _push(action_text)
+        return out[: max(1, int(limit or 4))]
+
+    @classmethod
+    def _is_emptyish_turn_payload(
+        cls,
+        *,
+        narration: str,
+        state_update: Dict[str, object],
+        player_state_update: Dict[str, object],
+        summary_update: object,
+        xp_awarded: object,
+        scene_image_prompt: object,
+        character_updates: Dict[str, object],
+        calendar_update: object,
+    ) -> bool:
+        text = " ".join(str(narration or "").strip().lower().split())
+        trivial_narration = text in {
+            "",
+            "the world shifts, but nothing clear emerges.",
+            "a hollow silence answers. try again.",
+            "a hollow silence answers.",
+        }
+        short_narration = len(text) < 24
+        has_world = bool(state_update) or bool(character_updates) or bool(calendar_update)
+        has_player = bool(player_state_update)
+        has_summary = bool(str(summary_update or "").strip())
+        has_image = bool(str(scene_image_prompt or "").strip())
+        try:
+            has_xp = int(xp_awarded or 0) > 0
+        except (TypeError, ValueError):
+            has_xp = False
+        has_signal = has_world or has_player or has_summary or has_image or has_xp
+        if trivial_narration and not has_signal:
+            return True
+        if short_narration and not has_signal:
+            return True
+        return False
+
+    @classmethod
     def _speed_multiplier_from_state(cls, campaign_state: Dict[str, object]) -> float:
         raw = 1.0
         if isinstance(campaign_state, dict):
@@ -1122,6 +1253,10 @@ class ZorkEmulator:
         # If model froze or regressed time, force monotonic advance from pre-turn time.
         new_total = max(pre_total, cur_total) + delta_minutes
         campaign_state["game_time"] = cls._game_time_from_total_minutes(new_total)
+        cls._increment_auto_fix_counter(
+            campaign_state,
+            "game_time_auto_advance",
+        )
         _zork_log(
             "GAME TIME AUTO-ADVANCE",
             (
@@ -4145,6 +4280,49 @@ class ZorkEmulator:
         return False
 
     @classmethod
+    def _narration_mentions_entity_in_active_scene(
+        cls,
+        narration_text: str,
+        name_candidates: List[str],
+    ) -> bool:
+        text = str(narration_text or "").strip().lower()
+        if not text or not name_candidates:
+            return False
+        remote_cues = (
+            "sms",
+            "text message",
+            "texts you",
+            "calls you",
+            "on the phone",
+            "voicemail",
+            "news feed",
+            "on tv",
+            "radio says",
+            "video call",
+        )
+        if any(cue in text for cue in remote_cues):
+            return False
+        presence_cues = (
+            "is here",
+            "in the room",
+            "across from you",
+            "beside you",
+            "nearby",
+            "waits",
+            "stands",
+            "sits",
+            "arrives",
+            "at the desk",
+            "at reception",
+        )
+        if not any(cue in text for cue in presence_cues):
+            return False
+        for name in name_candidates:
+            if re.search(rf"\b{re.escape(name)}\b", text):
+                return True
+        return False
+
+    @classmethod
     def _auto_sync_companion_locations(
         cls,
         campaign_state: Dict[str, object],
@@ -4214,7 +4392,12 @@ class ZorkEmulator:
             if not current_location or current_location == player_location:
                 continue
             names = cls._entity_name_candidates_for_sync(slug, entry)
-            if not cls._narration_implies_entity_with_player(narration_text, names):
+            if not (
+                cls._narration_implies_entity_with_player(narration_text, names)
+                or cls._narration_mentions_entity_in_active_scene(
+                    narration_text, names
+                )
+            ):
                 continue
             entry["location"] = player_location
             changed += 1
@@ -4595,6 +4778,9 @@ class ZorkEmulator:
                                 ],
                             )
                         )
+        prefix = cls.SCENE_IMAGE_PRESERVE_PREFIX.strip()
+        if prefix and not prompt_for_generation.lower().startswith(prefix.lower()):
+            prompt_for_generation = f"{prefix}. {prompt_for_generation}".strip()
         cfg = AppConfig()
         user_config = cfg.get_user_config(user_id=ctx.author.id)
         user_config["auto_model"] = False
@@ -7780,12 +7966,34 @@ class ZorkEmulator:
                             first_payload = cls._parse_json_lenient(json_text_tc)
                         except Exception:
                             first_payload = None
+                    auto_forced_memory_search = False
+                    empty_response_repair_count = 0
 
                     # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
                     # The model can refine queries when the first search has no useful hits.
                     tool_augmented_prompt = user_prompt
                     tool_chain_steps = 0
                     max_tool_chain_steps = 4
+                    if (
+                        not (first_payload and cls._is_tool_call(first_payload))
+                        and cls._should_force_auto_memory_search(action)
+                    ):
+                        forced_queries = cls._derive_auto_memory_queries(
+                            action,
+                            player_state,
+                            party_snapshot,
+                            limit=4,
+                        )
+                        if forced_queries:
+                            first_payload = {
+                                "tool_call": "memory_search",
+                                "queries": forced_queries,
+                            }
+                            auto_forced_memory_search = True
+                            _zork_log(
+                                "FORCED MEMORY SEARCH",
+                                f"queries={forced_queries}",
+                            )
                     while (
                         first_payload
                         and cls._is_tool_call(first_payload)
@@ -9095,6 +9303,95 @@ class ZorkEmulator:
                                     except Exception:
                                         pass
 
+                    if cls._is_emptyish_turn_payload(
+                        narration=narration,
+                        state_update=state_update
+                        if isinstance(state_update, dict)
+                        else {},
+                        player_state_update=player_state_update
+                        if isinstance(player_state_update, dict)
+                        else {},
+                        summary_update=summary_update,
+                        xp_awarded=xp_awarded,
+                        scene_image_prompt=scene_image_prompt,
+                        character_updates=character_updates
+                        if isinstance(character_updates, dict)
+                        else {},
+                        calendar_update=calendar_update,
+                    ):
+                        empty_response_repair_count += 1
+                        _zork_log(
+                            "EMPTY PAYLOAD RETRY",
+                            (
+                                f"narration={str(narration or '')[:220]!r}\n"
+                                f"state_keys={list((state_update or {}).keys()) if isinstance(state_update, dict) else []}\n"
+                                f"player_state_keys={list((player_state_update or {}).keys()) if isinstance(player_state_update, dict) else []}"
+                            ),
+                        )
+                        _repair_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
+                            "Return final JSON now (no tool_call), including:\n"
+                            "- narration with one concrete scene development\n"
+                            "- state_update object (with game_time advanced)\n"
+                            "- summary_update with durable consequence when applicable.\n"
+                        )
+                        _repair_response = await gpt.turbo_completion(
+                            system_prompt,
+                            _repair_prompt,
+                            temperature=0.75,
+                            max_tokens=2048,
+                        )
+                        if _repair_response:
+                            _repair_response = cls._clean_response(_repair_response)
+                            _repair_json = cls._extract_json(_repair_response)
+                            if _repair_json:
+                                try:
+                                    _repair_payload = cls._parse_json_lenient(
+                                        _repair_json
+                                    )
+                                    _repair_narration = str(
+                                        _repair_payload.get("narration") or ""
+                                    ).strip()
+                                    if not _repair_narration:
+                                        _repair_narration = (
+                                            cls._fallback_narration_from_payload(
+                                                _repair_payload
+                                            )
+                                        )
+                                    if _repair_narration:
+                                        narration = _repair_narration
+                                    state_update = (
+                                        _repair_payload.get("state_update", {}) or {}
+                                    )
+                                    summary_update = _repair_payload.get(
+                                        "summary_update"
+                                    )
+                                    xp_awarded = (
+                                        _repair_payload.get("xp_awarded", 0) or 0
+                                    )
+                                    player_state_update = (
+                                        _repair_payload.get("player_state_update", {})
+                                        or {}
+                                    )
+                                    scene_image_prompt = _repair_payload.get(
+                                        "scene_image_prompt"
+                                    )
+                                    character_updates = (
+                                        _repair_payload.get("character_updates", {})
+                                        or {}
+                                    )
+                                    give_item = _repair_payload.get("give_item")
+                                    calendar_update = _repair_payload.get(
+                                        "calendar_update"
+                                    )
+                                    _zork_log(
+                                        "EMPTY PAYLOAD REPAIR RESPONSE",
+                                        _repair_response[:1200],
+                                    )
+                                except Exception:
+                                    pass
+
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
@@ -9135,6 +9432,16 @@ class ZorkEmulator:
                         action_text=action,
                         narration_text=raw_narration,
                     )
+                    if auto_forced_memory_search:
+                        cls._increment_auto_fix_counter(
+                            campaign_state, "forced_memory_search"
+                        )
+                    if empty_response_repair_count > 0:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "empty_response_repair_retry",
+                            amount=empty_response_repair_count,
+                        )
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
@@ -9270,6 +9577,21 @@ class ZorkEmulator:
                         narration_text=raw_narration,
                     )
                     if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_active_character",
+                            amount=_active_char_sync_count,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_state_entities",
+                            amount=_state_loc_sync_count,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_world_characters",
+                            amount=_char_loc_sync_count,
+                        )
                         _zork_log(
                             f"LOCATION AUTO-SYNC campaign={campaign.id}",
                             (
@@ -9730,7 +10052,14 @@ class ZorkEmulator:
                     character_updates = merged_character_updates
 
                 campaign_state = cls.get_campaign_state(campaign)
+                pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
+                campaign_state = cls._ensure_game_time_progress(
+                    campaign_state,
+                    pre_turn_game_time,
+                    action_text=action,
+                    narration_text=narration,
+                )
                 campaign_state = cls._scrub_inventory_from_state(campaign_state)
                 campaign.state_json = cls._dump_json(campaign_state)
 
@@ -9822,6 +10151,21 @@ class ZorkEmulator:
                     narration_text=narration,
                 )
                 if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                    cls._increment_auto_fix_counter(
+                        campaign_state,
+                        "location_auto_sync_active_character",
+                        amount=_active_char_sync_count,
+                    )
+                    cls._increment_auto_fix_counter(
+                        campaign_state,
+                        "location_auto_sync_state_entities",
+                        amount=_state_loc_sync_count,
+                    )
+                    cls._increment_auto_fix_counter(
+                        campaign_state,
+                        "location_auto_sync_world_characters",
+                        amount=_char_loc_sync_count,
+                    )
                     _zork_log(
                         f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
                         (
