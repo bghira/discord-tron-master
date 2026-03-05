@@ -1164,6 +1164,82 @@ class ZorkEmulator:
         return False
 
     @classmethod
+    def _looks_like_major_narrative_beat(
+        cls,
+        *,
+        narration: str,
+        summary_update: object,
+        state_update: Dict[str, object],
+        character_updates: Dict[str, object],
+        calendar_update: object,
+    ) -> bool:
+        text = " ".join(
+            (
+                f"{str(narration or '')} "
+                f"{str(summary_update or '')}"
+            ).lower().split()
+        )
+        major_cues = (
+            "reveals",
+            "reveal",
+            "confirms",
+            "confirmed",
+            "pregnant",
+            "paternity",
+            "dies",
+            "dead",
+            "betray",
+            "arrest",
+            "results",
+            "test result",
+            "truth",
+            "identity",
+            "confession",
+            "explodes",
+            "escape",
+            "ambush",
+        )
+        if any(cue in text for cue in major_cues):
+            return True
+        if isinstance(character_updates, dict):
+            for row in character_updates.values():
+                if isinstance(row, dict) and str(row.get("deceased_reason") or "").strip():
+                    return True
+        if isinstance(calendar_update, dict) and calendar_update:
+            if isinstance(calendar_update.get("add"), list) or isinstance(
+                calendar_update.get("remove"), list
+            ):
+                return True
+        if isinstance(state_update, dict):
+            for key in ("current_chapter", "current_scene"):
+                if key in state_update:
+                    return True
+        return False
+
+    @classmethod
+    def _action_requests_clock_time(cls, action_text: str) -> bool:
+        text = " ".join(str(action_text or "").strip().lower().split())
+        if not text:
+            return False
+        return any(
+            token in text
+            for token in (
+                "what time",
+                "current time",
+                "check time",
+                "clock",
+                "time is it",
+            )
+        )
+
+    @classmethod
+    def _narration_has_explicit_clock_time(cls, narration_text: str) -> bool:
+        text = str(narration_text or "")
+        if not text:
+            return False
+        return bool(re.search(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", text))
+
+    @classmethod
     def _speed_multiplier_from_state(cls, campaign_state: Dict[str, object]) -> float:
         raw = 1.0
         if isinstance(campaign_state, dict):
@@ -6559,6 +6635,7 @@ class ZorkEmulator:
         cls,
         campaign_state: Dict[str, object],
         calendar_update: dict,
+        resolution_context: str = "",
     ) -> Dict[str, object]:
         """Process calendar add/remove ops and persist absolute fire_day entries."""
         if not isinstance(calendar_update, dict):
@@ -6583,10 +6660,65 @@ class ZorkEmulator:
         to_remove = calendar_update.get("remove")
         if isinstance(to_remove, list):
             remove_set = {str(n).strip().lower() for n in to_remove if n}
+            context_text = " ".join(str(resolution_context or "").lower().split())
+            allowed_remove_set = set()
+            blocked_removals = []
+            for event in calendar:
+                name_raw = str(event.get("name", "")).strip()
+                if not name_raw:
+                    continue
+                name_key = name_raw.lower()
+                if name_key not in remove_set:
+                    continue
+                name_norm = re.sub(r"[^a-z0-9]+", " ", name_key).strip()
+                name_tokens = [t for t in name_norm.split() if len(t) > 2]
+                name_mentioned = (
+                    name_norm in context_text
+                    or any(t in context_text for t in name_tokens)
+                )
+                completion_cues = (
+                    "completed",
+                    "finished",
+                    "resolved",
+                    "result delivered",
+                    "results delivered",
+                    "outcome delivered",
+                    "concluded",
+                    "cancelled",
+                    "abandoned",
+                    "closed out",
+                )
+                premature_cues = (
+                    "arrives",
+                    "arrived",
+                    "in progress",
+                    "processing",
+                    "pending",
+                    "awaiting",
+                    "sample",
+                    "blood drawn",
+                    "not back yet",
+                )
+                has_completion = any(cue in context_text for cue in completion_cues)
+                has_premature = any(cue in context_text for cue in premature_cues)
+                if name_mentioned and has_completion and not has_premature:
+                    allowed_remove_set.add(name_key)
+                else:
+                    blocked_removals.append(name_raw)
             calendar = [
                 e for e in calendar
-                if str(e.get("name", "")).strip().lower() not in remove_set
+                if str(e.get("name", "")).strip().lower() not in allowed_remove_set
             ]
+            if blocked_removals:
+                cls._increment_auto_fix_counter(
+                    campaign_state,
+                    "calendar_remove_blocked",
+                    amount=len(blocked_removals),
+                )
+                _zork_log(
+                    "CALENDAR REMOVE BLOCKED",
+                    f"blocked={blocked_removals} context={context_text[:220]}",
+                )
 
         # Add new events.
         to_add = calendar_update.get("add")
@@ -7968,6 +8100,8 @@ class ZorkEmulator:
                             first_payload = None
                     auto_forced_memory_search = False
                     empty_response_repair_count = 0
+                    used_tool_names = set()
+                    forced_planning_payload = None
 
                     # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
                     # The model can refine queries when the first search has no useful hits.
@@ -8001,6 +8135,8 @@ class ZorkEmulator:
                     ):
                         tool_chain_steps += 1
                         tool_name = str(first_payload.get("tool_call") or "").strip()
+                        if tool_name:
+                            used_tool_names.add(tool_name)
 
                         if tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
@@ -9392,6 +9528,112 @@ class ZorkEmulator:
                                 except Exception:
                                     pass
 
+                    if (
+                        cls._narration_has_explicit_clock_time(narration)
+                        and not cls._action_requests_clock_time(action)
+                    ):
+                        _zork_log("CLOCK DRIFT RETRY", narration[:260])
+                        _clock_retry_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
+                            "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
+                            "Return final JSON (no tool_call).\n"
+                        )
+                        _clock_retry_resp = await gpt.turbo_completion(
+                            system_prompt,
+                            _clock_retry_prompt,
+                            temperature=0.75,
+                            max_tokens=2048,
+                        )
+                        if _clock_retry_resp:
+                            _clock_retry_resp = cls._clean_response(_clock_retry_resp)
+                            _clock_retry_json = cls._extract_json(_clock_retry_resp)
+                            if _clock_retry_json:
+                                try:
+                                    _clock_payload = cls._parse_json_lenient(
+                                        _clock_retry_json
+                                    )
+                                    _clock_narration = str(
+                                        _clock_payload.get("narration") or ""
+                                    ).strip()
+                                    if not _clock_narration:
+                                        _clock_narration = cls._fallback_narration_from_payload(
+                                            _clock_payload
+                                        )
+                                    if _clock_narration:
+                                        narration = _clock_narration
+                                    state_update = _clock_payload.get("state_update", {}) or {}
+                                    summary_update = _clock_payload.get("summary_update")
+                                    xp_awarded = _clock_payload.get("xp_awarded", 0) or 0
+                                    player_state_update = (
+                                        _clock_payload.get("player_state_update", {}) or {}
+                                    )
+                                    scene_image_prompt = _clock_payload.get("scene_image_prompt")
+                                    character_updates = _clock_payload.get("character_updates", {}) or {}
+                                    give_item = _clock_payload.get("give_item")
+                                    calendar_update = _clock_payload.get("calendar_update")
+                                    empty_response_repair_count += 1
+                                except Exception:
+                                    pass
+
+                    _planning_tools_used = bool(
+                        {"plot_plan", "chapter_plan", "consequence_log"}
+                        & set(used_tool_names)
+                    )
+                    if (
+                        not _planning_tools_used
+                        and cls._looks_like_major_narrative_beat(
+                            narration=narration,
+                            summary_update=summary_update,
+                            state_update=state_update
+                            if isinstance(state_update, dict)
+                            else {},
+                            character_updates=character_updates
+                            if isinstance(character_updates, dict)
+                            else {},
+                            calendar_update=calendar_update,
+                        )
+                    ):
+                        _planning_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "PLANNING_ENFORCEMENT:\n"
+                            "A major beat occurred. Before ending the turn, return ONLY one planning tool call JSON:\n"
+                            "- plot_plan OR consequence_log (chapter_plan optional in off-rails)\n"
+                            "No narration. No extra keys.\n"
+                        )
+                        _planning_resp = await gpt.turbo_completion(
+                            system_prompt,
+                            _planning_prompt,
+                            temperature=0.6,
+                            max_tokens=512,
+                        )
+                        if _planning_resp:
+                            _planning_resp = cls._clean_response(_planning_resp)
+                            _planning_json = cls._extract_json(_planning_resp)
+                            if _planning_json:
+                                try:
+                                    _planning_payload = cls._parse_json_lenient(
+                                        _planning_json
+                                    )
+                                    _planning_name = str(
+                                        _planning_payload.get("tool_call") or ""
+                                    ).strip()
+                                    if _planning_name in {
+                                        "plot_plan",
+                                        "chapter_plan",
+                                        "consequence_log",
+                                    }:
+                                        forced_planning_payload = _planning_payload
+                                        _zork_log(
+                                            "FORCED PLANNING TOOL",
+                                            json.dumps(
+                                                forced_planning_payload,
+                                                ensure_ascii=True,
+                                            ),
+                                        )
+                                except Exception:
+                                    pass
+
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
@@ -9432,6 +9674,51 @@ class ZorkEmulator:
                         action_text=action,
                         narration_text=raw_narration,
                     )
+                    if isinstance(forced_planning_payload, dict):
+                        _planning_tool_name = str(
+                            forced_planning_payload.get("tool_call") or ""
+                        ).strip()
+                        _current_turn_hint = int(turns[-1].id) if turns else 0
+                        if _planning_tool_name == "plot_plan":
+                            _plan_result = cls._apply_plot_plan_tool(
+                                campaign_state,
+                                forced_planning_payload,
+                                current_turn=_current_turn_hint,
+                            )
+                            _zork_log(
+                                "FORCED PLOT PLAN APPLIED",
+                                json.dumps(_plan_result, ensure_ascii=True),
+                            )
+                            cls._increment_auto_fix_counter(
+                                campaign_state, "forced_planning_tool"
+                            )
+                        elif _planning_tool_name == "chapter_plan":
+                            _plan_result = cls._apply_chapter_plan_tool(
+                                campaign_state,
+                                forced_planning_payload,
+                                current_turn=_current_turn_hint,
+                                on_rails=bool(campaign_state.get("on_rails", False)),
+                            )
+                            _zork_log(
+                                "FORCED CHAPTER PLAN APPLIED",
+                                json.dumps(_plan_result, ensure_ascii=True),
+                            )
+                            cls._increment_auto_fix_counter(
+                                campaign_state, "forced_planning_tool"
+                            )
+                        elif _planning_tool_name == "consequence_log":
+                            _cons_result = cls._apply_consequence_log_tool(
+                                campaign_state,
+                                forced_planning_payload,
+                                current_turn=_current_turn_hint,
+                            )
+                            _zork_log(
+                                "FORCED CONSEQUENCE LOG APPLIED",
+                                json.dumps(_cons_result, ensure_ascii=True),
+                            )
+                            cls._increment_auto_fix_counter(
+                                campaign_state, "forced_planning_tool"
+                            )
                     if auto_forced_memory_search:
                         cls._increment_auto_fix_counter(
                             campaign_state, "forced_memory_search"
@@ -9519,7 +9806,11 @@ class ZorkEmulator:
 
                     if calendar_update and isinstance(calendar_update, dict):
                         campaign_state = cls._apply_calendar_update(
-                            campaign_state, calendar_update
+                            campaign_state,
+                            calendar_update,
+                            resolution_context=(
+                                f"{action}\n{raw_narration}\n{summary_update or ''}"
+                            ),
                         )
                         campaign.state_json = cls._dump_json(campaign_state)
 
@@ -10097,7 +10388,11 @@ class ZorkEmulator:
 
                 if calendar_update and isinstance(calendar_update, dict):
                     campaign_state = cls._apply_calendar_update(
-                        campaign_state, calendar_update
+                        campaign_state,
+                        calendar_update,
+                        resolution_context=(
+                            f"{action}\n{narration}\n{summary_update or ''}"
+                        ),
                     )
                     campaign.state_json = cls._dump_json(campaign_state)
 
