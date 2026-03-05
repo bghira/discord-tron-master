@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import datetime
+import difflib
 import fnmatch
 import json
 import logging
@@ -171,6 +172,9 @@ class ZorkEmulator:
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
+    TIMER_REALTIME_SCALE = 0.2
+    TIMER_REALTIME_MIN_SECONDS = 5
+    TIMER_REALTIME_MAX_SECONDS = 120
     RESPONSE_STYLE_NOTE = (
         "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use classic Zork style. Minimal words. "
         "Advance one concrete beat only. No recap of unchanged facts. No literary prose, "
@@ -1249,6 +1253,135 @@ class ZorkEmulator:
         return bool(re.search(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", text))
 
     @classmethod
+    def _anti_echo_tokens(cls, text: object) -> List[str]:
+        cleaned = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not cleaned:
+            return []
+        raw_tokens = re.findall(r"[a-z0-9']+", cleaned)
+        stop = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "that",
+            "this",
+            "from",
+            "into",
+            "your",
+            "you",
+            "are",
+            "was",
+            "were",
+            "have",
+            "has",
+            "had",
+            "just",
+            "like",
+            "then",
+            "they",
+            "them",
+            "their",
+            "it's",
+            "its",
+            "not",
+            "but",
+            "too",
+            "very",
+            "i",
+            "im",
+            "i'm",
+            "me",
+            "my",
+            "we",
+            "our",
+            "us",
+        }
+        out: List[str] = []
+        for token in raw_tokens[:180]:
+            if len(token) <= 2:
+                continue
+            if token in stop:
+                continue
+            out.append(token)
+        return out
+
+    @classmethod
+    def _anti_echo_first_sentence(cls, narration_text: object) -> str:
+        text = str(narration_text or "").strip()
+        if not text:
+            return ""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        first = lines[0]
+        first = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0].strip()
+        return first[:280]
+
+    @classmethod
+    def _anti_echo_retry_decision(
+        cls, action_text: str, narration_text: str
+    ) -> Tuple[bool, str]:
+        if cls._is_ooc_action_text(action_text):
+            return False, "ooc"
+        action_tokens = cls._anti_echo_tokens(action_text)
+        if len(action_tokens) < 8:
+            return False, "short-action"
+        first_sentence = cls._anti_echo_first_sentence(narration_text)
+        sentence_tokens = cls._anti_echo_tokens(first_sentence)
+        if len(sentence_tokens) < 6:
+            return False, "short-sentence"
+
+        action_set = set(action_tokens)
+        sentence_set = set(sentence_tokens)
+        overlap = action_set & sentence_set
+        overlap_count = len(overlap)
+        overlap_ratio = overlap_count / max(1, len(sentence_set))
+        seq_ratio = difflib.SequenceMatcher(
+            None,
+            " ".join(action_tokens[:80]),
+            " ".join(sentence_tokens[:80]),
+        ).ratio()
+
+        strong = (
+            (overlap_ratio >= 0.62 and overlap_count >= 7)
+            or (seq_ratio >= 0.75 and len(sentence_tokens) >= 10)
+        )
+        if strong:
+            return True, (
+                f"stage1 overlap={overlap_ratio:.2f} seq={seq_ratio:.2f} "
+                f"count={overlap_count}"
+            )
+
+        borderline = (
+            (overlap_ratio >= 0.45 and overlap_count >= 5)
+            or (seq_ratio >= 0.62 and len(sentence_tokens) >= 8)
+        )
+        if not borderline:
+            return False, (
+                f"stage1-pass overlap={overlap_ratio:.2f} seq={seq_ratio:.2f} "
+                f"count={overlap_count}"
+            )
+
+        semantic = ZorkMemory.semantic_similarity(
+            " ".join(action_tokens[:90]),
+            " ".join(sentence_tokens[:90]),
+        )
+        if semantic is None:
+            return False, (
+                f"stage2-unavailable overlap={overlap_ratio:.2f} seq={seq_ratio:.2f} "
+                f"count={overlap_count}"
+            )
+        if semantic >= 0.86:
+            return True, (
+                f"stage2 semantic={semantic:.2f} overlap={overlap_ratio:.2f} "
+                f"seq={seq_ratio:.2f} count={overlap_count}"
+            )
+        return False, (
+            f"stage2-pass semantic={semantic:.2f} overlap={overlap_ratio:.2f} "
+            f"seq={seq_ratio:.2f} count={overlap_count}"
+        )
+
+    @classmethod
     def _speed_multiplier_from_state(cls, campaign_state: Dict[str, object]) -> float:
         raw = 1.0
         if isinstance(campaign_state, dict):
@@ -1260,6 +1393,19 @@ class ZorkEmulator:
         if value <= 0:
             return 1.0
         return max(0.1, min(10.0, value))
+
+    @classmethod
+    def _compress_realtime_timer_delay(cls, delay_seconds: object) -> int:
+        try:
+            raw = int(delay_seconds)
+        except (TypeError, ValueError):
+            raw = 60
+        raw = max(1, raw)
+        compressed = int(round(raw * float(cls.TIMER_REALTIME_SCALE)))
+        return max(
+            int(cls.TIMER_REALTIME_MIN_SECONDS),
+            min(int(cls.TIMER_REALTIME_MAX_SECONDS), compressed),
+        )
 
     @classmethod
     def _estimate_turn_time_advance_minutes(
@@ -8629,6 +8775,7 @@ class ZorkEmulator:
                             first_payload = None
                     auto_forced_memory_search = False
                     empty_response_repair_count = 0
+                    anti_echo_retry_count = 0
                     used_tool_names = set()
                     forced_planning_payload = None
 
@@ -9529,6 +9676,9 @@ class ZorkEmulator:
                             if _speed > 0:
                                 delay_seconds = int(delay_seconds / _speed)
                             delay_seconds = max(15, min(300, delay_seconds))
+                            delay_seconds = cls._compress_realtime_timer_delay(
+                                delay_seconds
+                            )
                             event_description = str(
                                 first_payload.get("event_description")
                                 or "Something happens."
@@ -9726,6 +9876,9 @@ class ZorkEmulator:
                             except (TypeError, ValueError):
                                 delay_seconds = 60
                             delay_seconds = max(30, min(300, delay_seconds))
+                            delay_seconds = cls._compress_realtime_timer_delay(
+                                delay_seconds
+                            )
                             event_description = str(
                                 first_payload.get("event_description")
                                 or "Something happens."
@@ -9841,6 +9994,9 @@ class ZorkEmulator:
                                     if _speed > 0:
                                         t_delay = int(t_delay / _speed)
                                     t_delay = max(15, min(300, t_delay))
+                                    t_delay = cls._compress_realtime_timer_delay(
+                                        t_delay
+                                    )
                                     t_event = str(inline_timer_event).strip()[:500]
                                     t_interruptible = bool(
                                         payload.get("set_timer_interruptible", True)
@@ -10139,6 +10295,58 @@ class ZorkEmulator:
                                 except Exception:
                                     pass
 
+                    _anti_echo_retry, _anti_echo_reason = cls._anti_echo_retry_decision(
+                        action,
+                        narration,
+                    )
+                    if _anti_echo_retry:
+                        _zork_log("ANTI-ECHO RETRY", _anti_echo_reason)
+                        _anti_echo_prompt = (
+                            f"{tool_augmented_prompt}\n"
+                            "OUTPUT_VALIDATION_FAILED: previous narration echoed/paraphrased player wording.\n"
+                            "Do NOT restate player phrasing. NPC first line must add new information, a decision, "
+                            "a demand, a consequence, or a direct question.\n"
+                            "Return final JSON (no tool_call).\n"
+                        )
+                        _anti_echo_resp = await gpt.turbo_completion(
+                            system_prompt,
+                            _anti_echo_prompt,
+                            temperature=0.75,
+                            max_tokens=2048,
+                        )
+                        if _anti_echo_resp:
+                            _anti_echo_resp = cls._clean_response(_anti_echo_resp)
+                            _anti_echo_json = cls._extract_json(_anti_echo_resp)
+                            if _anti_echo_json:
+                                try:
+                                    _anti_payload = cls._parse_json_lenient(
+                                        _anti_echo_json
+                                    )
+                                    _anti_narration = str(
+                                        _anti_payload.get("narration") or ""
+                                    ).strip()
+                                    if not _anti_narration:
+                                        _anti_narration = cls._fallback_narration_from_payload(
+                                            _anti_payload
+                                        )
+                                    if _anti_narration:
+                                        narration = _anti_narration
+                                    state_update = (
+                                        _anti_payload.get("state_update", {}) or {}
+                                    )
+                                    summary_update = _anti_payload.get("summary_update")
+                                    xp_awarded = _anti_payload.get("xp_awarded", 0) or 0
+                                    player_state_update = (
+                                        _anti_payload.get("player_state_update", {}) or {}
+                                    )
+                                    scene_image_prompt = _anti_payload.get("scene_image_prompt")
+                                    character_updates = _anti_payload.get("character_updates", {}) or {}
+                                    give_item = _anti_payload.get("give_item")
+                                    calendar_update = _anti_payload.get("calendar_update")
+                                    anti_echo_retry_count += 1
+                                except Exception:
+                                    pass
+
                     _planning_tools_used = bool(
                         {"plot_plan", "chapter_plan", "consequence_log"}
                         & set(used_tool_names)
@@ -10307,6 +10515,12 @@ class ZorkEmulator:
                             campaign_state,
                             "empty_response_repair_retry",
                             amount=empty_response_repair_count,
+                        )
+                    if anti_echo_retry_count > 0:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "anti_echo_retry",
+                            amount=anti_echo_retry_count,
                         )
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
@@ -10745,8 +10959,20 @@ class ZorkEmulator:
                         f"\u26a0\ufe0f *Timer expired — {event_description}*",
                     )
                 )
+        preferred_user_id = None
+        if timer_ctx is not None:
+            raw_user_id = timer_ctx.get("interrupt_user_id")
+            try:
+                preferred_user_id = int(raw_user_id) if raw_user_id is not None else None
+            except (TypeError, ValueError):
+                preferred_user_id = None
         try:
-            await cls._execute_timed_event(campaign_id, channel_id, event_description)
+            await cls._execute_timed_event(
+                campaign_id,
+                channel_id,
+                event_description,
+                preferred_user_id=preferred_user_id,
+            )
         except Exception:
             logger.exception(
                 "Zork timed event failed: campaign=%s event=%r",
@@ -10760,6 +10986,7 @@ class ZorkEmulator:
         campaign_id: int,
         channel_id: int,
         event_description: str,
+        preferred_user_id: Optional[int] = None,
     ):
         app = AppConfig.get_flask()
         if app is None:
@@ -10788,14 +11015,28 @@ class ZorkEmulator:
                         if age < 5:
                             return
 
-                # Find most recently active player for context.
-                active_player = (
-                    ZorkPlayer.query.filter_by(campaign_id=campaign_id)
-                    .order_by(ZorkPlayer.last_active.desc())
-                    .first()
-                )
+                # Prefer the originating player context for local/story-specific timers.
+                active_player = None
+                if preferred_user_id is not None:
+                    active_player = ZorkPlayer.query.filter_by(
+                        campaign_id=campaign_id,
+                        user_id=preferred_user_id,
+                    ).first()
+                if active_player is None:
+                    active_player = (
+                        ZorkPlayer.query.filter_by(campaign_id=campaign_id)
+                        .order_by(ZorkPlayer.last_active.desc())
+                        .first()
+                    )
                 if active_player is None:
                     return
+                _zork_log(
+                    f"TIMER TARGET campaign={campaign_id}",
+                    (
+                        f"preferred_user_id={preferred_user_id} "
+                        f"resolved_user_id={active_player.user_id}"
+                    ),
+                )
 
                 cls.increment_player_stat(
                     active_player, cls.PLAYER_STATS_TIMERS_MISSED_KEY
@@ -10914,6 +11155,15 @@ class ZorkEmulator:
                             "calendar_update": calendar_update,
                         }
                     ) or "The world shifts, but nothing clear emerges."
+                if (
+                    " ".join(str(narration or "").lower().split())
+                    == "the world shifts, but nothing clear emerges."
+                ):
+                    _zork_log(
+                        f"TIMED EVENT GENERIC FALLBACK campaign={campaign_id}",
+                        f"event={event_description!r} active_user_id={active_player.user_id}",
+                    )
+                    narration = str(event_description or "Something happens.").strip()
 
                 narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                 narration = cls._strip_inventory_from_narration(narration)

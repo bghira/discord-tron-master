@@ -119,6 +119,20 @@ class ZorkMemory:
         cls._conn_local.conn = conn
         return conn
 
+    @classmethod
+    def semantic_similarity(cls, text_a: str, text_b: str) -> Optional[float]:
+        """Return cosine similarity between two texts (None on embed failure)."""
+        try:
+            vec_a = _bytes_to_vector(_embed(str(text_a or "")))
+            vec_b = _bytes_to_vector(_embed(str(text_b or "")))
+            if vec_a.size == 0 or vec_b.size == 0:
+                return None
+            score = float(vec_a @ vec_b)
+            return max(-1.0, min(1.0, score))
+        except Exception:
+            logger.debug("Zork memory: semantic similarity unavailable", exc_info=True)
+            return None
+
     # ------------------------------------------------------------------
     # Store
     # ------------------------------------------------------------------
