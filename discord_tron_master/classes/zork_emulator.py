@@ -122,6 +122,8 @@ class ZorkEmulator:
     SMS_MAX_THREADS = 24
     SMS_MAX_MESSAGES_PER_THREAD = 40
     SMS_MAX_PREVIEW_CHARS = 120
+    SMS_READ_STATE_KEY = "_sms_read_state"
+    SMS_MESSAGE_SEQ_KEY = "_sms_message_seq"
     CALENDAR_REMINDER_STATE_KEY = "_calendar_reminder_state"
     AUTO_FIX_COUNTERS_KEY = "_auto_fix_counters"
     PLOT_THREADS_STATE_KEY = "_plot_threads"
@@ -152,6 +154,8 @@ class ZorkEmulator:
         MEMORY_SEARCH_USAGE_KEY,
         AUTO_FIX_COUNTERS_KEY,
         SMS_STATE_KEY,
+        SMS_READ_STATE_KEY,
+        SMS_MESSAGE_SEQ_KEY,
         PLOT_THREADS_STATE_KEY,
         CHAPTER_PLAN_STATE_KEY,
         CONSEQUENCE_STATE_KEY,
@@ -6389,6 +6393,7 @@ class ZorkEmulator:
                             max(0, cls._coerce_non_negative_int(msg.get("minute", 0), default=0)),
                         ),
                         "turn_id": cls._coerce_non_negative_int(msg.get("turn_id", 0), default=0),
+                        "seq": cls._coerce_non_negative_int(msg.get("seq", 0), default=0),
                     }
                 )
             threads[key] = {"label": label, "messages": messages}
@@ -6524,6 +6529,229 @@ class ZorkEmulator:
         return canonical_key, resolved_label, list(capped)
 
     @classmethod
+    def _sms_actor_key(cls, actor_id: object) -> str:
+        key = cls._sms_normalize_thread_key(f"actor-{actor_id}")
+        return key or "actor-unknown"
+
+    @classmethod
+    def _sms_player_aliases(
+        cls,
+        *,
+        actor_id: object,
+        player_state: Dict[str, object] | None,
+    ) -> set[str]:
+        aliases: set[str] = set()
+
+        def _add(raw: object) -> None:
+            text = str(raw or "").strip()
+            if not text:
+                return
+            norm = cls._sms_normalize_thread_key(text)
+            if norm:
+                aliases.add(norm)
+
+        actor_text = str(actor_id or "").strip()
+        _add(actor_text)
+        if actor_text:
+            _add(f"<@{actor_text}>")
+            _add(f"<@!{actor_text}>")
+            _add(f"player {actor_text}")
+        if isinstance(player_state, dict):
+            char_name = str(player_state.get("character_name") or "").strip()
+            _add(char_name)
+            for token in re.split(r"[\s\-]+", char_name):
+                if len(token) >= 3:
+                    _add(token)
+        return aliases
+
+    @classmethod
+    def _sms_read_state_from_campaign_state(
+        cls,
+        campaign_state: Dict[str, object],
+    ) -> Dict[str, Dict[str, object]]:
+        raw = campaign_state.get(cls.SMS_READ_STATE_KEY) if isinstance(campaign_state, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, Dict[str, object]] = {}
+        for raw_actor_key, raw_row in raw.items():
+            actor_key = cls._sms_normalize_thread_key(raw_actor_key)
+            if not actor_key or not isinstance(raw_row, dict):
+                continue
+            row_threads = raw_row.get("threads")
+            if not isinstance(row_threads, dict):
+                row_threads = {}
+            cleaned_threads: Dict[str, int] = {}
+            for raw_thread_key, raw_marker in row_threads.items():
+                thread_key = cls._sms_normalize_thread_key(raw_thread_key)
+                if not thread_key:
+                    continue
+                marker = cls._coerce_non_negative_int(raw_marker, default=0)
+                cleaned_threads[thread_key] = marker
+            out[actor_key] = {
+                "threads": cleaned_threads,
+                "last_notified_abs_hour": cls._coerce_non_negative_int(
+                    raw_row.get("last_notified_abs_hour", -1),
+                    default=-1,
+                ),
+            }
+        return out
+
+    @classmethod
+    def _sms_mark_threads_read(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        actor_id: object,
+        player_state: Dict[str, object] | None,
+        thread_markers: Dict[str, int],
+    ) -> bool:
+        if not isinstance(campaign_state, dict):
+            return False
+        if not isinstance(thread_markers, dict) or not thread_markers:
+            return False
+        actor_key = cls._sms_actor_key(actor_id)
+        state = cls._sms_read_state_from_campaign_state(campaign_state)
+        row = dict(state.get(actor_key) or {})
+        threads = row.get("threads")
+        if not isinstance(threads, dict):
+            threads = {}
+        changed = False
+        for raw_thread_key, raw_marker in thread_markers.items():
+            thread_key = cls._sms_normalize_thread_key(raw_thread_key)
+            if not thread_key:
+                continue
+            marker = cls._coerce_non_negative_int(raw_marker, default=0)
+            if marker <= 0:
+                continue
+            current = cls._coerce_non_negative_int(threads.get(thread_key, 0), default=0)
+            if marker > current:
+                threads[thread_key] = marker
+                changed = True
+        if not changed:
+            return False
+        row["threads"] = threads
+        state[actor_key] = row
+        campaign_state[cls.SMS_READ_STATE_KEY] = state
+        return True
+
+    @classmethod
+    def _sms_unread_summary_for_player(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        actor_id: object,
+        player_state: Dict[str, object] | None,
+    ) -> Dict[str, object]:
+        aliases = cls._sms_player_aliases(actor_id=actor_id, player_state=player_state)
+        if not aliases:
+            return {"messages": 0, "threads": 0, "labels": []}
+        actor_key = cls._sms_actor_key(actor_id)
+        read_state = cls._sms_read_state_from_campaign_state(campaign_state)
+        actor_row = read_state.get(actor_key) or {}
+        read_threads = actor_row.get("threads")
+        if not isinstance(read_threads, dict):
+            read_threads = {}
+        threads = cls._sms_threads_from_state(campaign_state)
+        unread_messages = 0
+        unread_threads = 0
+        labels: List[str] = []
+        for thread_key, row in threads.items():
+            if not isinstance(row, dict):
+                continue
+            messages = row.get("messages")
+            if not isinstance(messages, list):
+                continue
+            seen_marker = cls._coerce_non_negative_int(read_threads.get(thread_key, 0), default=0)
+            thread_unread = 0
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                to_norm = cls._sms_normalize_thread_key(msg.get("to"))
+                if not to_norm or to_norm not in aliases:
+                    continue
+                seq = cls._coerce_non_negative_int(msg.get("seq", 0), default=0)
+                turn_id = cls._coerce_non_negative_int(msg.get("turn_id", 0), default=0)
+                marker = seq if seq > 0 else turn_id
+                if marker > seen_marker:
+                    thread_unread += 1
+            if thread_unread <= 0:
+                continue
+            unread_messages += thread_unread
+            unread_threads += 1
+            label = str(row.get("label") or thread_key).strip()
+            if label:
+                labels.append(label[:40])
+        deduped_labels: List[str] = []
+        seen_labels: set[str] = set()
+        for label in labels:
+            key = cls._sms_normalize_thread_key(label)
+            if not key or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            deduped_labels.append(label)
+            if len(deduped_labels) >= 3:
+                break
+        return {
+            "messages": unread_messages,
+            "threads": unread_threads,
+            "labels": deduped_labels,
+            "last_notified_abs_hour": cls._coerce_non_negative_int(
+                actor_row.get("last_notified_abs_hour", -1),
+                default=-1,
+            ),
+        }
+
+    @classmethod
+    def _sms_unread_hourly_notification(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        actor_id: object,
+        player_state: Dict[str, object] | None,
+        game_time: Dict[str, int] | None,
+    ) -> Optional[str]:
+        if not isinstance(campaign_state, dict):
+            return None
+        summary = cls._sms_unread_summary_for_player(
+            campaign_state,
+            actor_id=actor_id,
+            player_state=player_state,
+        )
+        unread_messages = cls._coerce_non_negative_int(summary.get("messages", 0), default=0)
+        unread_threads = cls._coerce_non_negative_int(summary.get("threads", 0), default=0)
+        if unread_messages <= 0 or unread_threads <= 0:
+            return None
+        game_time_obj = game_time if isinstance(game_time, dict) else {}
+        day = max(1, cls._coerce_non_negative_int(game_time_obj.get("day", 1), default=1))
+        hour = min(
+            23,
+            max(0, cls._coerce_non_negative_int(game_time_obj.get("hour", 0), default=0)),
+        )
+        abs_hour = ((day - 1) * 24) + hour
+        actor_key = cls._sms_actor_key(actor_id)
+        read_state = cls._sms_read_state_from_campaign_state(campaign_state)
+        row = dict(read_state.get(actor_key) or {})
+        last_notified = cls._coerce_non_negative_int(
+            row.get("last_notified_abs_hour", -1),
+            default=-1,
+        )
+        if last_notified == abs_hour:
+            return None
+        row["last_notified_abs_hour"] = abs_hour
+        read_state[actor_key] = row
+        campaign_state[cls.SMS_READ_STATE_KEY] = read_state
+        labels = summary.get("labels") if isinstance(summary.get("labels"), list) else []
+        labels = [str(label).strip()[:40] for label in labels if str(label).strip()]
+        if labels:
+            suffix = f" ({', '.join(labels[:2])})"
+        else:
+            suffix = ""
+        return (
+            f"📨 Unread SMS: {unread_messages} message(s) in "
+            f"{unread_threads} thread(s){suffix}."
+        )
+
+    @classmethod
     def _extract_inline_sms_intent(
         cls,
         action: str,
@@ -6579,6 +6807,7 @@ class ZorkEmulator:
             "hour": min(23, max(0, cls._coerce_non_negative_int(game_time.get("hour", 0), default=0))),
             "minute": min(59, max(0, cls._coerce_non_negative_int(game_time.get("minute", 0), default=0))),
             "turn_id": max(0, int(turn_id or 0)),
+            "seq": 0,
         }
         if messages:
             last = messages[-1]
@@ -6597,6 +6826,10 @@ class ZorkEmulator:
                     threads[thread_key] = {"label": label, "messages": messages}
                     campaign_state[cls.SMS_STATE_KEY] = threads
                     return thread_key, label, dict(last)
+        next_seq = cls._coerce_non_negative_int(
+            campaign_state.get(cls.SMS_MESSAGE_SEQ_KEY, 0), default=0
+        ) + 1
+        entry["seq"] = max(1, next_seq)
         messages.append(entry)
         messages = messages[-cls.SMS_MAX_MESSAGES_PER_THREAD :]
         threads[thread_key] = {"label": label, "messages": messages}
@@ -6604,6 +6837,7 @@ class ZorkEmulator:
             oldest_key = next(iter(threads))
             threads.pop(oldest_key, None)
         campaign_state[cls.SMS_STATE_KEY] = threads
+        campaign_state[cls.SMS_MESSAGE_SEQ_KEY] = int(entry.get("seq", next_seq))
         return thread_key, label, entry
 
     @classmethod
@@ -8870,6 +9104,40 @@ class ZorkEmulator:
                             thread_key, thread_label, messages = cls._sms_read_thread(
                                 campaign_state_sms, thread=thread, limit=read_limit
                             )
+                            thread_markers: Dict[str, int] = {}
+                            if messages:
+                                for msg in messages:
+                                    if not isinstance(msg, dict):
+                                        continue
+                                    msg_thread = cls._sms_normalize_thread_key(
+                                        msg.get("thread") or thread_key or thread
+                                    )
+                                    if not msg_thread:
+                                        continue
+                                    seq = cls._coerce_non_negative_int(
+                                        msg.get("seq", 0), default=0
+                                    )
+                                    turn_id = cls._coerce_non_negative_int(
+                                        msg.get("turn_id", 0), default=0
+                                    )
+                                    marker = seq if seq > 0 else turn_id
+                                    if marker <= 0:
+                                        continue
+                                    prev_marker = cls._coerce_non_negative_int(
+                                        thread_markers.get(msg_thread, 0), default=0
+                                    )
+                                    if marker > prev_marker:
+                                        thread_markers[msg_thread] = marker
+                            if thread_markers:
+                                read_changed = cls._sms_mark_threads_read(
+                                    campaign_state_sms,
+                                    actor_id=ctx.author.id,
+                                    player_state=player_state,
+                                    thread_markers=thread_markers,
+                                )
+                                if read_changed:
+                                    campaign.state_json = cls._dump_json(campaign_state_sms)
+                                    campaign.updated = db.func.now()
                             if thread_key is None:
                                 tool_result_block = (
                                     f"SMS_READ_RESULT: thread not found for query '{thread or '(empty)'}'."
@@ -10106,6 +10374,18 @@ class ZorkEmulator:
                         narration = f"{narration}\n\n{inventory_line}"
                     else:
                         narration = inventory_line
+
+                    sms_notice = cls._sms_unread_hourly_notification(
+                        campaign_state,
+                        actor_id=ctx.author.id,
+                        player_state=player_state,
+                        game_time=post_turn_game_time,
+                    )
+                    if sms_notice:
+                        narration = f"{narration}\n\n{sms_notice}"
+                        cls._increment_auto_fix_counter(
+                            campaign_state, "sms_unread_notice"
+                        )
 
                     if timer_scheduled_delay is not None:
                         expiry_ts = int(time.time()) + timer_scheduled_delay
