@@ -5295,6 +5295,198 @@ class ZorkEmulator:
                 out[resolved] = None
         return out
 
+    @classmethod
+    def _character_delete_requested(cls, fields: object) -> bool:
+        return bool(
+            fields is None
+            or (
+                isinstance(fields, str)
+                and fields.strip().lower() in {"delete", "remove", "null"}
+            )
+            or (
+                isinstance(fields, dict)
+                and bool(
+                    fields.get("remove")
+                    or fields.get("delete")
+                    or fields.get("_delete")
+                    or fields.get("deleted")
+                )
+            )
+        )
+
+    @classmethod
+    def _character_delete_allowed(
+        cls,
+        *,
+        raw_slug: str,
+        fields: object,
+        existing_row: Optional[Dict[str, object]],
+        context_text: str,
+    ) -> bool:
+        context = " ".join(str(context_text or "").lower().split())
+        if not context:
+            return False
+        if isinstance(fields, dict) and str(fields.get("deceased_reason") or "").strip():
+            return True
+
+        remove_cues = (
+            "remove from roster",
+            "roster remove",
+            "remove character",
+            "delete character",
+            "drop character",
+            "purge duplicate",
+            "duplicate",
+            "cleanup roster",
+            "roster cleanup",
+            "retcon",
+            "written out",
+            "no longer in story",
+        )
+        death_cues = (
+            "dead",
+            "dies",
+            "died",
+            "killed",
+            "murdered",
+            "executed",
+            "corpse",
+            "funeral",
+            "deceased",
+        )
+        has_delete_intent = any(cue in context for cue in remove_cues) or any(
+            cue in context for cue in death_cues
+        )
+        if not has_delete_intent:
+            return False
+
+        aliases: List[str] = []
+        slug_alias = re.sub(r"[^a-z0-9]+", " ", str(raw_slug or "").lower()).strip()
+        if slug_alias:
+            aliases.append(slug_alias)
+        if isinstance(existing_row, dict):
+            name_alias = re.sub(
+                r"[^a-z0-9]+", " ",
+                str(existing_row.get("name") or "").lower(),
+            ).strip()
+            if name_alias:
+                aliases.append(name_alias)
+        for alias in aliases:
+            if alias and alias in context:
+                return True
+            tokens = [t for t in alias.split() if len(t) >= 4]
+            if any(token in context for token in tokens):
+                return True
+        return False
+
+    @classmethod
+    def _sanitize_character_removals(
+        cls,
+        existing_chars: Dict[str, dict],
+        updates: object,
+        *,
+        resolution_context: str = "",
+        campaign_state: Optional[Dict[str, object]] = None,
+        counter_key: str = "character_remove_blocked",
+    ) -> Dict[str, object]:
+        if not isinstance(updates, dict):
+            return {}
+        if not isinstance(existing_chars, dict):
+            return dict(updates)
+
+        context = " ".join(str(resolution_context or "").lower().split())
+        bulk_cleanup_cues = (
+            "duplicate",
+            "roster cleanup",
+            "cleanup roster",
+            "roster correction",
+            "purge",
+            "mass remove",
+            "bulk remove",
+        )
+        allow_bulk = any(cue in context for cue in bulk_cleanup_cues)
+
+        delete_rows: List[Tuple[str, str, Optional[Dict[str, object]], object]] = []
+        for raw_slug, fields in updates.items():
+            if not cls._character_delete_requested(fields):
+                continue
+            raw_slug_text = str(raw_slug or "").strip()
+            resolved = cls._resolve_existing_character_slug(existing_chars, raw_slug_text)
+            target_slug = resolved or raw_slug_text
+            existing_row = existing_chars.get(target_slug)
+            delete_rows.append((raw_slug_text, target_slug, existing_row, fields))
+
+        blocked_raw_keys: set[str] = set()
+        if delete_rows and len(delete_rows) > 1 and not allow_bulk:
+            blocked_raw_keys.update(raw for raw, _target, _row, _fields in delete_rows)
+        else:
+            for raw_key, target_slug, existing_row, fields in delete_rows:
+                if not cls._character_delete_allowed(
+                    raw_slug=target_slug or raw_key,
+                    fields=fields,
+                    existing_row=existing_row if isinstance(existing_row, dict) else None,
+                    context_text=context,
+                ):
+                    blocked_raw_keys.add(raw_key)
+
+        if not blocked_raw_keys:
+            return dict(updates)
+
+        sanitized = {
+            k: v
+            for k, v in updates.items()
+            if str(k or "").strip() not in blocked_raw_keys
+        }
+        if isinstance(campaign_state, dict):
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                counter_key,
+                amount=len(blocked_raw_keys),
+            )
+        _zork_log(
+            "CHARACTER REMOVE BLOCKED",
+            (
+                f"blocked={sorted(blocked_raw_keys)} "
+                f"context={context[:220]}"
+            ),
+        )
+        return sanitized
+
+    @classmethod
+    def _guard_state_null_character_prunes(
+        cls,
+        state_update: object,
+        existing_chars: Dict[str, dict],
+        *,
+        resolution_context: str = "",
+        campaign_state: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        if not isinstance(state_update, dict):
+            return {}
+        if not isinstance(existing_chars, dict):
+            return dict(state_update)
+        candidate_deletes: Dict[str, object] = {}
+        for raw_key, value in state_update.items():
+            if value is not None:
+                continue
+            resolved = cls._resolve_existing_character_slug(existing_chars, raw_key)
+            if resolved:
+                candidate_deletes[str(raw_key)] = None
+        if not candidate_deletes:
+            return dict(state_update)
+        allowed_deletes = cls._sanitize_character_removals(
+            existing_chars,
+            candidate_deletes,
+            resolution_context=resolution_context,
+            campaign_state=campaign_state,
+            counter_key="state_character_prune_blocked",
+        )
+        out = dict(state_update)
+        for raw_key in candidate_deletes.keys():
+            if raw_key not in allowed_deletes:
+                out.pop(raw_key, None)
+        return out
+
     @staticmethod
     def _calendar_resolve_fire_point(
         current_day: int,
@@ -10021,6 +10213,16 @@ class ZorkEmulator:
                     )
                     state_update = cls._scrub_inventory_from_state(state_update)
                     existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
+                    resolution_context = (
+                        f"{action}\n{raw_narration}\n{summary_update or ''}"
+                    )
+                    campaign_state = cls.get_campaign_state(campaign)
+                    state_update = cls._guard_state_null_character_prunes(
+                        state_update,
+                        existing_chars_for_state_nulls,
+                        resolution_context=resolution_context,
+                        campaign_state=campaign_state,
+                    )
                     state_null_character_updates = cls._character_updates_from_state_nulls(
                         state_update,
                         existing_chars_for_state_nulls,
@@ -10031,7 +10233,13 @@ class ZorkEmulator:
                             merged_character_updates.update(character_updates)
                         character_updates = merged_character_updates
 
-                    campaign_state = cls.get_campaign_state(campaign)
+                    if isinstance(character_updates, dict) and character_updates:
+                        character_updates = cls._sanitize_character_removals(
+                            existing_chars_for_state_nulls,
+                            character_updates,
+                            resolution_context=resolution_context,
+                            campaign_state=campaign_state,
+                        )
                     pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     campaign_state = cls._apply_state_update(
                         campaign_state, state_update
@@ -10712,6 +10920,16 @@ class ZorkEmulator:
                 )
                 state_update = cls._scrub_inventory_from_state(state_update)
                 existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
+                resolution_context = (
+                    f"{action}\n{narration}\n{summary_update or ''}"
+                )
+                campaign_state = cls.get_campaign_state(campaign)
+                state_update = cls._guard_state_null_character_prunes(
+                    state_update,
+                    existing_chars_for_state_nulls,
+                    resolution_context=resolution_context,
+                    campaign_state=campaign_state,
+                )
                 state_null_character_updates = cls._character_updates_from_state_nulls(
                     state_update,
                     existing_chars_for_state_nulls,
@@ -10722,7 +10940,13 @@ class ZorkEmulator:
                         merged_character_updates.update(character_updates)
                     character_updates = merged_character_updates
 
-                campaign_state = cls.get_campaign_state(campaign)
+                if isinstance(character_updates, dict) and character_updates:
+                    character_updates = cls._sanitize_character_removals(
+                        existing_chars_for_state_nulls,
+                        character_updates,
+                        resolution_context=resolution_context,
+                        campaign_state=campaign_state,
+                    )
                 pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
                 campaign_state = cls._ensure_game_time_progress(
@@ -10770,9 +10994,7 @@ class ZorkEmulator:
                     campaign_state = cls._apply_calendar_update(
                         campaign_state,
                         calendar_update,
-                        resolution_context=(
-                            f"{action}\n{narration}\n{summary_update or ''}"
-                        ),
+                        resolution_context=resolution_context,
                     )
                     campaign.state_json = cls._dump_json(campaign_state)
 
