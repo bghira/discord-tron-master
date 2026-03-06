@@ -1151,6 +1151,10 @@ class ZorkEmulator:
             if bot_user is None and hasattr(ctx, "bot") and ctx.bot is not None:
                 bot_user = ctx.bot.user
             if bot_user is None:
+                discord_wrapper = DiscordBot.get_instance()
+                if discord_wrapper is not None and getattr(discord_wrapper, "bot", None) is not None:
+                    bot_user = discord_wrapper.bot.user
+            if bot_user is None:
                 return
             await message.remove_reaction(cls.PROCESSING_EMOJI, bot_user)
         except Exception:
