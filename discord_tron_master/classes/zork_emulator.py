@@ -85,6 +85,7 @@ class ZorkEmulator:
     PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
     ATTACHMENT_MAX_BYTES = 500_000
+    TURN_ATTACHMENT_INLINE_BYTES = 10_000
     ATTACHMENT_CHUNK_TOKENS = 50_000      # minimum tokens per chunk
     ATTACHMENT_MODEL_CTX_TOKENS = 200_000 # GLM-5 context window
     ATTACHMENT_PROMPT_OVERHEAD_TOKENS = 6_000  # reserve for system + user + IMDB + storyline JSON
@@ -93,6 +94,11 @@ class ZorkEmulator:
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_MIN_SETUP_CHUNKS = 1
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
+    TURN_ATTACHMENT_SUMMARY_INSTRUCTIONS = (
+        "Summarise this uploaded text for a single game turn. Preserve names, quoted phrases, "
+        "lyrics, instructions, factual details, and any wording the GM may need to reference. "
+        "Treat it as temporary context for one reply, not permanent canon."
+    )
     SETUP_GENRE_TEMPLATES = {
         "upbeat": "Warm and optimistic — good things happen to people who try.",
         "rom-com": "Romantic comedy — charm, miscommunication, and a satisfying payoff.",
@@ -3983,6 +3989,8 @@ class ZorkEmulator:
         ctx_message,
         channel=None,
         summary_instructions: Optional[str] = None,
+        show_progress: bool = True,
+        allow_single_chunk_passthrough: bool = True,
     ) -> str:
         """Chunk, summarise in parallel, condense to budget. Returns summary.
         *channel* overrides ctx_message.channel for progress messages.
@@ -4012,7 +4020,11 @@ class ZorkEmulator:
             return ""
 
         # If single chunk within budget, return as-is
-        if len(chunks) == 1 and glm_token_count(chunks[0]) <= budget_tokens:
+        if (
+            allow_single_chunk_passthrough
+            and len(chunks) == 1
+            and glm_token_count(chunks[0]) <= budget_tokens
+        ):
             return chunks[0]
 
         total = len(chunks)
@@ -4021,9 +4033,11 @@ class ZorkEmulator:
             f"text_len={len(text)} total_tokens={total_tokens} "
             f"chunk_char_target={chunk_char_target} total_chunks={total}",
         )
-        status_msg = await progress_channel.send(
-            f"Summarising uploaded file... [0/{total}]"
-        )
+        status_msg = None
+        if show_progress:
+            status_msg = await progress_channel.send(
+                f"Summarising uploaded file... [0/{total}]"
+            )
 
         # Step 2 — parallel summarise
         # Scale max_tokens with chunk size so larger chunks get more summary room
@@ -4073,12 +4087,13 @@ class ZorkEmulator:
             results = await asyncio.gather(*tasks)
             summaries.extend(results)
             processed += len(batch)
-            try:
-                await status_msg.edit(
-                    content=f"Summarising uploaded file... [{processed}/{total}]"
-                )
-            except Exception:
-                pass
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(
+                        content=f"Summarising uploaded file... [{processed}/{total}]"
+                    )
+                except Exception:
+                    pass
 
         # Filter empty summaries
         summaries = [s for s in summaries if s]
@@ -4090,19 +4105,20 @@ class ZorkEmulator:
                     "ATTACHMENT SUMMARY FALLBACK",
                     f"text_len={len(text)} fallback_chars={len(fallback)}",
                 )
-            try:
-                if fallback:
-                    await status_msg.edit(
-                        content="Summary model failed — using direct source excerpts fallback."
-                    )
-                else:
-                    await status_msg.edit(
-                        content="Summary failed — continuing without attachment."
-                    )
-                await asyncio.sleep(5)
-                await status_msg.delete()
-            except Exception:
-                pass
+            if status_msg is not None:
+                try:
+                    if fallback:
+                        await status_msg.edit(
+                            content="Summary model failed — using direct source excerpts fallback."
+                        )
+                    else:
+                        await status_msg.edit(
+                            content="Summary failed — continuing without attachment."
+                        )
+                    await asyncio.sleep(5)
+                    await status_msg.delete()
+                except Exception:
+                    pass
             return fallback
 
         # Step 3 — check total token length
@@ -4113,15 +4129,16 @@ class ZorkEmulator:
                 "ATTACHMENT SUMMARY DONE",
                 f"tokens={joined_tokens} chars={len(joined)} (within budget)",
             )
-            try:
-                file_kb = len(text) // 1024
-                await status_msg.edit(
-                    content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
-                )
-                await asyncio.sleep(5)
-                await status_msg.delete()
-            except Exception:
-                pass
+            if status_msg is not None:
+                try:
+                    file_kb = len(text) // 1024
+                    await status_msg.edit(
+                        content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
+                    )
+                    await asyncio.sleep(5)
+                    await status_msg.delete()
+                except Exception:
+                    pass
             return joined
 
         # Step 4 — condensation pass (token-aware)
@@ -4144,12 +4161,13 @@ class ZorkEmulator:
         if to_condense:
             condense_total = len(to_condense)
             condense_done = 0
-            try:
-                await status_msg.edit(
-                    content=f"Condensing summaries... [0/{condense_total}]"
-                )
-            except Exception:
-                pass
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(
+                        content=f"Condensing summaries... [0/{condense_total}]"
+                    )
+                except Exception:
+                    pass
 
             async def _condense(idx: int, summary_text: str) -> Tuple[int, str]:
                 condense_system = (
@@ -4183,12 +4201,13 @@ class ZorkEmulator:
                     if condensed:
                         summaries[idx] = condensed
                 condense_done += len(batch)
-                try:
-                    await status_msg.edit(
-                        content=f"Condensing summaries... [{condense_done}/{condense_total}]"
-                    )
-                except Exception:
-                    pass
+                if status_msg is not None:
+                    try:
+                        await status_msg.edit(
+                            content=f"Condensing summaries... [{condense_done}/{condense_total}]"
+                        )
+                    except Exception:
+                        pass
 
         joined = "\n\n".join(summaries)
         joined_tokens = glm_token_count(joined)
@@ -4206,17 +4225,69 @@ class ZorkEmulator:
             f"tokens={joined_tokens} chars={len(joined)} chunks={total} "
             f"condensed={len(to_condense) if to_condense else 0}",
         )
-        try:
-            file_kb = len(text) // 1024
-            await status_msg.edit(
-                content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
-            )
-            await asyncio.sleep(5)
-            await status_msg.delete()
-        except Exception:
-            pass
+        if status_msg is not None:
+            try:
+                file_kb = len(text) // 1024
+                await status_msg.edit(
+                    content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
+                )
+                await asyncio.sleep(5)
+                await status_msg.delete()
+            except Exception:
+                pass
 
         return joined
+
+    @classmethod
+    async def _build_turn_attachment_context(cls, ctx) -> Optional[str]:
+        attachment_infos = await cls._extract_attachment_texts_from_message(ctx)
+        if not attachment_infos:
+            return None
+
+        blocks: List[str] = []
+        for attachment, attachment_text in attachment_infos:
+            if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
+                logger.warning("Turn attachment skipped: %s", attachment_text)
+                continue
+            text = str(attachment_text or "").strip()
+            if not text:
+                continue
+
+            filename = str(getattr(attachment, "filename", "") or "attachment.txt").strip()
+            attachment_size = getattr(attachment, "size", None)
+            if not isinstance(attachment_size, int) or attachment_size <= 0:
+                attachment_size = len(text.encode("utf-8", errors="ignore"))
+
+            mode = "raw"
+            payload = text
+            if attachment_size > cls.TURN_ATTACHMENT_INLINE_BYTES:
+                mode = "summary"
+                payload = await cls._summarise_long_text(
+                    text,
+                    ctx,
+                    summary_instructions=cls.TURN_ATTACHMENT_SUMMARY_INSTRUCTIONS,
+                    show_progress=False,
+                    allow_single_chunk_passthrough=False,
+                )
+                payload = str(payload or "").strip()
+                if not payload:
+                    continue
+
+            blocks.append(
+                "\n".join(
+                    [
+                        f"FILE: {filename}",
+                        f"MODE: {mode}",
+                        "SCOPE: ephemeral turn-only reference; do not treat as permanent canon or store it as memory unless the player explicitly asks to establish it in-world.",
+                        "CONTENT:",
+                        payload,
+                    ]
+                ).strip()
+            )
+
+        if not blocks:
+            return None
+        return "\n\n---\n\n".join(blocks).strip()
 
     @classmethod
     def _extract_attachment_label(cls, message, fallback: str = "source-material") -> str:
@@ -9292,6 +9363,7 @@ class ZorkEmulator:
         turns: List[ZorkTurn],
         party_snapshot: Optional[List[Dict[str, object]]] = None,
         is_new_player: bool = False,
+        turn_attachment_context: Optional[str] = None,
     ) -> Tuple[str, str]:
         summary = cls._strip_inventory_mentions(campaign.summary or "")
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
@@ -9530,6 +9602,8 @@ class ZorkEmulator:
             f"{_response_style_note}\n"
             f"{_action_label}: {action}\n"
         )
+        if turn_attachment_context:
+            user_prompt += f"TURN_ATTACHMENT_CONTEXT:\n{turn_attachment_context}\n"
         system_prompt = cls.SYSTEM_PROMPT
         if guardrails_enabled:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
@@ -10146,6 +10220,9 @@ class ZorkEmulator:
                             )
 
                     turns = cls.get_recent_turns(campaign.id)
+                    turn_attachment_context = await cls._build_turn_attachment_context(
+                        ctx
+                    )
                     party_snapshot = cls._build_party_snapshot_for_prompt(
                         campaign, player, player_state
                     )
@@ -10156,6 +10233,7 @@ class ZorkEmulator:
                         turns,
                         party_snapshot=party_snapshot,
                         is_new_player=is_new_player,
+                        turn_attachment_context=turn_attachment_context,
                     )
                     memory_lookup_enabled = (
                         "memory_lookup_enabled: true" in user_prompt.lower()
