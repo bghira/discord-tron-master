@@ -7,6 +7,7 @@ scrolled out of the recent-turns context window.
 
 import logging
 import os
+import re
 import sqlite3
 import struct
 import threading
@@ -22,6 +23,7 @@ _model = None
 _model_lock = threading.Lock()
 _EMBED_DIM = 384
 _MAX_INPUT_CHARS = 512
+_SOURCE_SENTENCE_MAX_CHARS = 1200
 
 
 def _get_model():
@@ -380,6 +382,60 @@ class ZorkMemory:
         return key[:80] or "source-material"
 
     @classmethod
+    def _split_source_sentence_fragments(cls, text: str) -> List[str]:
+        clean = " ".join(str(text or "").strip().split())
+        if not clean:
+            return []
+        fragments = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean) if s.strip()]
+        if not fragments:
+            fragments = [clean]
+        out: List[str] = []
+        for fragment in fragments:
+            if len(fragment) <= _SOURCE_SENTENCE_MAX_CHARS:
+                out.append(fragment)
+                continue
+            words = fragment.split()
+            current: List[str] = []
+            current_len = 0
+            for word in words:
+                wlen = len(word) + (1 if current else 0)
+                if current and current_len + wlen > _SOURCE_SENTENCE_MAX_CHARS:
+                    out.append(" ".join(current).strip())
+                    current = [word]
+                    current_len = len(word)
+                else:
+                    current.append(word)
+                    current_len += wlen
+            if current:
+                out.append(" ".join(current).strip())
+        return [s for s in out if s]
+
+    @classmethod
+    def source_material_units_from_chunks(cls, chunks: List[str]) -> List[str]:
+        """Convert source-material chunks into sentence-level searchable units."""
+        units: List[str] = []
+        for chunk in chunks or []:
+            raw = str(chunk or "").strip()
+            if not raw:
+                continue
+            # Respect paragraph boundaries first, then split each paragraph to sentences.
+            paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
+            if not paragraphs:
+                paragraphs = [raw]
+            for para in paragraphs:
+                units.extend(cls._split_source_sentence_fragments(para))
+
+        deduped: List[str] = []
+        seen = set()
+        for unit in units:
+            key = " ".join(unit.lower().split())
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(unit[:8000])
+        return deduped
+
+    @classmethod
     def source_material_count(cls, campaign_id: int) -> int:
         try:
             conn = cls._get_conn()
@@ -458,6 +514,9 @@ class ZorkMemory:
             ]
             if not clean_chunks:
                 return 0, document_key
+            sentence_units = cls.source_material_units_from_chunks(clean_chunks)
+            if not sentence_units:
+                return 0, document_key
 
             conn = cls._get_conn()
             if replace_document:
@@ -468,7 +527,7 @@ class ZorkMemory:
                     """,
                     (campaign_id, document_key),
                 )
-            for idx, chunk_text in enumerate(clean_chunks, start=1):
+            for idx, chunk_text in enumerate(sentence_units, start=1):
                 conn.execute(
                     """
                     INSERT INTO source_material_chunks
@@ -485,7 +544,7 @@ class ZorkMemory:
                     ),
                 )
             conn.commit()
-            return len(clean_chunks), document_key
+            return len(sentence_units), document_key
         except Exception:
             logger.exception(
                 "Zork memory: store_source_material_chunks failed for campaign %s",

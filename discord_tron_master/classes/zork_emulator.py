@@ -398,6 +398,30 @@ class ZorkEmulator:
         "- Do not create new key items, exits, NPCs, or mechanics just to satisfy a request.\n"
         "- Use the provided RAILS_CONTEXT as hard constraints.\n"
     )
+    MEMORY_LOOKUP_MIN_SUMMARY_CHARS = MAX_SUMMARY_CHARS
+    MEMORY_TOOL_DISABLED_PROMPT = (
+        "\nEARLY-CAMPAIGN MEMORY MODE:\n"
+        "- Long-term memory lookup tools are disabled for this turn because WORLD_SUMMARY is still within context budget and no source corpus requires retrieval.\n"
+        "- Do NOT call memory_search, memory_terms, memory_turn, or memory_store.\n"
+        "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, and RECENT_TURNS directly.\n"
+    )
+    SMS_TOOL_PROMPT = (
+        "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
+        "- List SMS threads:\n"
+        '{"tool_call": "sms_list", "wildcard": "*"}\n'
+        "- Read one thread:\n"
+        '{"tool_call": "sms_read", "thread": "saul", "limit": 20}\n'
+        "- Write/send an SMS entry:\n"
+        '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
+        "For NPC replies, immediately call sms_write again with from/to swapped:\n"
+        '{"tool_call": "sms_write", "thread": "saul", "from": "Saul", "to": "Dale", "message": "On my way."}\n'
+        "- Schedule a delayed incoming SMS (hidden until delivered, always uninterruptible):\n"
+        '{"tool_call": "sms_schedule", "thread": "saul", "from": "Saul", "to": "Dale", "message": "Traffic. 10 min.", "delay_seconds": 120}\n'
+        "sms_schedule is invisible to players at scheduling time. Do NOT narrate the delayed SMS as already received in the current response.\n"
+        "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
+        "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
+        "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
+    )
     MEMORY_TOOL_PROMPT = (
         "\nYou have a memory_search tool. To use it, return ONLY:\n"
         '{"tool_call": "memory_search", "queries": ["query1", "query2", ...]}\n'
@@ -426,8 +450,8 @@ class ZorkEmulator:
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
         "A category can contain multiple memories.\n"
         "When category is provided in memory_search, curated memories in that category are vector searched.\n"
-        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as well. "
-        "Use memory_search with category 'source' to query canon chunks before narrating key plot facts:\n"
+        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as sentence-level snippets. "
+        "Use memory_search with category 'source' to query canon snippets before narrating key plot facts:\n"
         '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
         "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
@@ -1090,6 +1114,18 @@ class ZorkEmulator:
     @staticmethod
     def _is_ooc_action_text(action_text: object) -> bool:
         return bool(re.match(r"\s*\[OOC\b", str(action_text or ""), re.IGNORECASE))
+
+    @classmethod
+    def _memory_lookup_enabled_for_prompt(
+        cls,
+        summary_text: object,
+        *,
+        source_material_available: bool = False,
+    ) -> bool:
+        if source_material_available:
+            return True
+        summary_len = len(str(summary_text or "").strip())
+        return summary_len >= cls.MEMORY_LOOKUP_MIN_SUMMARY_CHARS
 
     @classmethod
     def _increment_auto_fix_counter(
@@ -3205,6 +3241,9 @@ class ZorkEmulator:
         chunks, total_tokens, _, _, _ = cls._chunk_text_by_tokens(raw_text)
         if not chunks:
             return False, "Attachment has no usable text."
+        sentence_units = ZorkMemory.source_material_units_from_chunks(chunks)
+        if not sentence_units:
+            return False, "Attachment has no usable sentence snippets."
 
         resolved_label = " ".join(str(label or "").strip().split())[:120]
         if not resolved_label:
@@ -3216,7 +3255,7 @@ class ZorkEmulator:
             try:
                 status_msg = await progress_channel.send(
                     f"Ingesting source material `{resolved_label}`... "
-                    f"({len(chunks)} chunks, ~{total_tokens} tokens)"
+                    f"({len(sentence_units)} sentence snippet(s), ~{total_tokens} tokens)"
                 )
             except Exception:
                 status_msg = None
@@ -3250,8 +3289,8 @@ class ZorkEmulator:
 
         result_msg = (
             f"Source material stored: `{resolved_label}` as key `{document_key}` "
-            f"({stored_count} chunks, ~{total_tokens} tokens). "
-            f"Campaign source corpus now has {total_chunk_count} chunk(s) across {len(docs)} document(s)."
+            f"({stored_count} sentence snippet(s), ~{total_tokens} tokens). "
+            f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
         if status_msg is not None:
             try:
@@ -8151,6 +8190,10 @@ class ZorkEmulator:
             campaign.id
         )
         _source_payload = cls._source_material_prompt_payload(campaign.id)
+        _memory_lookup_enabled = cls._memory_lookup_enabled_for_prompt(
+            summary,
+            source_material_available=bool(_source_payload.get("available")),
+        )
         _active_plot_threads = cls._plot_threads_for_prompt(state, limit=10)
         _active_chapters = cls._chapters_for_prompt(
             state, active_only=True, limit=8
@@ -8191,10 +8234,12 @@ class ZorkEmulator:
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
+            f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
         )
         if _source_payload.get("available"):
             user_prompt += (
                 f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
+                f"SOURCE_MATERIAL_SNIPPET_COUNT: {_source_payload.get('chunk_count')}\n"
                 f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
             )
         if _active_plot_threads:
@@ -8234,7 +8279,11 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
         if on_rails:
             system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
+        if _memory_lookup_enabled:
+            system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
+        else:
+            system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_DISABLED_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.SMS_TOOL_PROMPT}"
         if state.get("timed_events_enabled", True):
             system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
         if story_context:
@@ -8850,6 +8899,9 @@ class ZorkEmulator:
                         party_snapshot=party_snapshot,
                         is_new_player=is_new_player,
                     )
+                    memory_lookup_enabled = (
+                        "memory_lookup_enabled: true" in user_prompt.lower()
+                    )
                     if timer_interrupt_context:
                         user_prompt = (
                             f"{user_prompt}\n"
@@ -8903,6 +8955,7 @@ class ZorkEmulator:
                     max_tool_chain_steps = 4
                     if (
                         not (first_payload and cls._is_tool_call(first_payload))
+                        and memory_lookup_enabled
                         and cls._should_force_auto_memory_search(action)
                     ):
                         forced_queries = cls._derive_auto_memory_queries(
@@ -8967,6 +9020,46 @@ class ZorkEmulator:
                             continue
                         if tool_signature:
                             seen_tool_signatures.add(tool_signature)
+
+                        if (
+                            not memory_lookup_enabled
+                            and tool_name
+                            in {
+                                "memory_search",
+                                "memory_terms",
+                                "memory_turn",
+                                "memory_store",
+                            }
+                        ):
+                            tool_result_block = (
+                                "MEMORY_TOOLS_DISABLED: Long-term memory lookup is currently disabled for this turn "
+                                "(early campaign context is still within prompt budget). "
+                                "Do NOT call memory_* tools; continue with direct context or use non-memory tools."
+                            )
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("MEMORY TOOL DISABLED AUGMENTED RESPONSE", response)
+                            json_text_tc = cls._extract_json(response)
+                            if not json_text_tc:
+                                first_payload = None
+                                break
+                            try:
+                                first_payload = cls._parse_json_lenient(json_text_tc)
+                            except Exception:
+                                first_payload = None
+                                break
+                            continue
 
                         if tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
@@ -9073,7 +9166,7 @@ class ZorkEmulator:
                                             query,
                                             campaign.id,
                                             document_key=source_scope_key,
-                                            top_k=5 if source_scope else 3,
+                                            top_k=10 if source_scope else 6,
                                         )
                                         for (
                                             source_doc_key,
@@ -9084,10 +9177,20 @@ class ZorkEmulator:
                                         ) in source_hits:
                                             if source_score < 0.40:
                                                 continue
+                                            source_text = " ".join(
+                                                str(source_chunk_text or "").split()
+                                            ).strip()
+                                            if len(source_text) > 1200:
+                                                source_text = (
+                                                    source_text[:1200]
+                                                    .rsplit(" ", 1)[0]
+                                                    .strip()
+                                                    + "..."
+                                                )
                                             source_lines.append(
                                                 "- [source "
-                                                f"{source_doc_label} ({source_doc_key}) chunk {source_chunk_index}, "
-                                                f"relevance {source_score:.2f}]: {source_chunk_text[:320]}"
+                                                f"{source_doc_label} ({source_doc_key}) snippet {source_chunk_index}, "
+                                                f"relevance {source_score:.2f}]: {source_text}"
                                             )
                                     if recall_lines or manual_lines or source_lines:
                                         lines = []
@@ -9134,7 +9237,7 @@ class ZorkEmulator:
                                 source_index_lines = [
                                     (
                                         "SOURCE_MATERIAL_INDEX: "
-                                        f"{len(source_docs)} document(s), {source_total_chunks} total chunk(s)."
+                                        f"{len(source_docs)} document(s), {source_total_chunks} total snippet(s)."
                                     )
                                 ]
                                 for row in source_docs[:5]:
@@ -9142,7 +9245,7 @@ class ZorkEmulator:
                                         "- "
                                         f"key='{row.get('document_key')}' "
                                         f"label='{row.get('document_label')}' "
-                                        f"chunks={row.get('chunk_count')}"
+                                        f"snippets={row.get('chunk_count')}"
                                     )
                                 tool_result_block = (
                                     f"{tool_result_block}\n"
@@ -9166,7 +9269,7 @@ class ZorkEmulator:
                             if has_source_material:
                                 tool_result_block = (
                                     f"{tool_result_block}"
-                                    "- To query indexed source-canon chunks (faithful adaptation):\n"
+                                    "- To query indexed source-canon snippets (faithful adaptation):\n"
                                     '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
                                     "- To scope one source document only:\n"
                                     '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
