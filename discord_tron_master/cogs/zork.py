@@ -978,17 +978,22 @@ class Zork(commands.Cog):
                 for att in ctx.message.attachments
             )
             with app.app_context():
-                channel, _ = ZorkEmulator.enable_channel(
-                    ctx.guild.id, ctx.channel.id, ctx.author.id
-                )
                 campaign_name = parsed_name or f"thread-{ctx.channel.id}"
-                campaign, _, _ = ZorkEmulator.set_active_campaign(
-                    channel,
-                    ctx.guild.id,
-                    campaign_name,
-                    ctx.author.id,
-                    enforce_activity_window=False,
+                channel = ZorkEmulator.get_or_create_channel(
+                    ctx.guild.id, ctx.channel.id
                 )
+                if requested_name:
+                    campaign = ZorkEmulator.create_campaign(
+                        ctx.guild.id, campaign_name, ctx.author.id
+                    )
+                    channel.active_campaign_id = campaign.id
+                    channel.enabled = True
+                    channel.updated = db.func.now()
+                    db.session.commit()
+                else:
+                    channel, campaign = ZorkEmulator.enable_channel(
+                        ctx.guild.id, ctx.channel.id, ctx.author.id
+                    )
                 campaign_state = ZorkEmulator.get_campaign_state(campaign)
                 att_summary = None
                 if has_txt_attachment:
@@ -998,8 +1003,9 @@ class Zork(commands.Cog):
                         channel=ctx.channel,
                         summary_instructions=summary_instructions,
                     )
-                    if campaign_state.get("setup_phase") or campaign_state.get(
-                        "default_persona"
+                    if not requested_name and (
+                        campaign_state.get("setup_phase")
+                        or campaign_state.get("default_persona")
                     ):
                         campaign.state_json = "{}"
                         campaign.summary = ""
@@ -1046,19 +1052,21 @@ class Zork(commands.Cog):
             return
 
         with app.app_context():
-            channel, _ = ZorkEmulator.enable_channel(
-                ctx.guild.id, thread.id, ctx.author.id
+            channel = ZorkEmulator.get_or_create_channel(
+                ctx.guild.id, thread.id
             )
             campaign_name = (parsed_name or thread.name or f"thread-{thread.id}").strip()
             if not campaign_name:
                 campaign_name = f"thread-{thread.id}"
-            campaign, _, _ = ZorkEmulator.set_active_campaign(
-                channel,
+            campaign = ZorkEmulator.create_campaign(
                 ctx.guild.id,
                 campaign_name,
                 ctx.author.id,
-                enforce_activity_window=False,
             )
+            channel.active_campaign_id = campaign.id
+            channel.enabled = True
+            channel.updated = db.func.now()
+            db.session.commit()
             att_summary = None
             if any(
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
@@ -1183,7 +1191,9 @@ class Zork(commands.Cog):
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
 
-        if not ok and "No `.txt` attachment found." in message:
+        message_text = str(message or "")
+
+        if not ok and "No `.txt` attachment found." in message_text:
             prefix = self._prefix()
             await ctx.send(
                 "Attach a `.txt` file to ingest source material.\n"
@@ -1192,7 +1202,7 @@ class Zork(commands.Cog):
                 f"or `{prefix}zork source-material --clear`."
             )
             return
-        await ctx.send(message)
+        await ctx.send(message_text or "No source-material changes were made.")
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):

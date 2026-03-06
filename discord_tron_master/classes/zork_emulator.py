@@ -6097,6 +6097,22 @@ class ZorkEmulator:
         return campaign
 
     @classmethod
+    def create_campaign(
+        cls, guild_id: int, name: str, created_by: int
+    ) -> ZorkCampaign:
+        normalized = cls._normalize_campaign_name(name)
+        campaign = ZorkCampaign(
+            guild_id=guild_id,
+            name=normalized,
+            created_by=created_by,
+            summary="",
+            state_json="{}",
+        )
+        db.session.add(campaign)
+        db.session.commit()
+        return campaign
+
+    @classmethod
     def enable_channel(
         cls, guild_id: int, channel_id: int, user_id: int
     ) -> Tuple[ZorkChannel, ZorkCampaign]:
