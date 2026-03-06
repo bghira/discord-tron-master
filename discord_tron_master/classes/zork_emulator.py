@@ -454,6 +454,8 @@ class ZorkEmulator:
         "Use memory_search with category 'source' to query canon snippets before narrating key plot facts:\n"
         '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
         "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
+        "For centered source context windows, memory_search also supports optional before_lines/after_lines "
+        "(defaults: 5/5, yielding up to 11 snippets centered on the best hit).\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -9073,6 +9075,20 @@ class ZorkEmulator:
                                 for q in raw_queries
                                 if str(q).strip()
                             ]
+                            try:
+                                source_before_lines = int(
+                                    first_payload.get("before_lines", 5)
+                                )
+                            except (TypeError, ValueError):
+                                source_before_lines = 5
+                            try:
+                                source_after_lines = int(
+                                    first_payload.get("after_lines", 5)
+                                )
+                            except (TypeError, ValueError):
+                                source_after_lines = 5
+                            source_before_lines = max(0, min(50, source_before_lines))
+                            source_after_lines = max(0, min(50, source_after_lines))
                             category_scope = " ".join(
                                 str(first_payload.get("category") or "").strip().lower().split()
                             )
@@ -9167,6 +9183,8 @@ class ZorkEmulator:
                                             campaign.id,
                                             document_key=source_scope_key,
                                             top_k=10 if source_scope else 6,
+                                            before_lines=source_before_lines,
+                                            after_lines=source_after_lines,
                                         )
                                         for (
                                             source_doc_key,
@@ -9177,12 +9195,19 @@ class ZorkEmulator:
                                         ) in source_hits:
                                             if source_score < 0.40:
                                                 continue
-                                            source_text = " ".join(
-                                                str(source_chunk_text or "").split()
-                                            ).strip()
-                                            if len(source_text) > 1200:
+                                            source_text_lines = [
+                                                line.strip()
+                                                for line in str(source_chunk_text or "").splitlines()
+                                                if line.strip()
+                                            ]
+                                            source_text = (
+                                                "\n    ".join(source_text_lines)
+                                                if source_text_lines
+                                                else str(source_chunk_text or "").strip()
+                                            )
+                                            if len(source_text) > 4000:
                                                 source_text = (
-                                                    source_text[:1200]
+                                                    source_text[:4000]
                                                     .rsplit(" ", 1)[0]
                                                     .strip()
                                                     + "..."
@@ -9190,7 +9215,7 @@ class ZorkEmulator:
                                             source_lines.append(
                                                 "- [source "
                                                 f"{source_doc_label} ({source_doc_key}) snippet {source_chunk_index}, "
-                                                f"relevance {source_score:.2f}]: {source_text}"
+                                                f"relevance {source_score:.2f}]:\n    {source_text}"
                                             )
                                     if recall_lines or manual_lines or source_lines:
                                         lines = []
@@ -9269,10 +9294,12 @@ class ZorkEmulator:
                             if has_source_material:
                                 tool_result_block = (
                                     f"{tool_result_block}"
-                                    "- To query indexed source-canon snippets (faithful adaptation):\n"
-                                    '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
-                                    "- To scope one source document only:\n"
-                                    '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
+                                "- To query indexed source-canon snippets (faithful adaptation):\n"
+                                '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
+                                "- To scope one source document only:\n"
+                                '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
+                                "- To request centered source context windows (defaults: before_lines=5, after_lines=5):\n"
+                                '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
                                 )
                             if roster_hints:
                                 hint_lines = []

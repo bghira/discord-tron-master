@@ -560,6 +560,8 @@ class ZorkMemory:
         *,
         document_key: Optional[str] = None,
         top_k: int = 5,
+        before_lines: int = 5,
+        after_lines: int = 5,
     ) -> List[Tuple[str, str, int, str, float]]:
         """Vector-search source material chunks.
 
@@ -570,6 +572,8 @@ class ZorkMemory:
         try:
             query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
+            before_n = max(0, min(50, int(before_lines)))
+            after_n = max(0, min(50, int(after_lines)))
             key = str(document_key or "").strip()
             if key:
                 rows = conn.execute(
@@ -592,21 +596,56 @@ class ZorkMemory:
             if not rows:
                 return []
 
+            by_doc: dict[str, dict[int, str]] = {}
             scored: List[Tuple[str, str, int, str, float]] = []
             for row_key, row_label, row_chunk_idx, row_chunk_text, row_blob in rows:
+                doc_key = str(row_key or "")
+                chunk_idx = int(row_chunk_idx or 0)
+                chunk_text = str(row_chunk_text or "")
+                if chunk_idx > 0 and chunk_text:
+                    by_doc.setdefault(doc_key, {})[chunk_idx] = chunk_text
                 vec = _bytes_to_vector(row_blob)
                 score = float(np.dot(query_vec, vec))
                 scored.append(
                     (
-                        str(row_key or ""),
+                        doc_key,
                         str(row_label or ""),
-                        int(row_chunk_idx or 0),
-                        str(row_chunk_text or ""),
+                        chunk_idx,
+                        chunk_text,
                         score,
                     )
                 )
             scored.sort(key=lambda t: t[4], reverse=True)
-            return scored[: max(1, int(top_k))]
+            selected = scored[: max(1, int(top_k))]
+            expanded: List[Tuple[str, str, int, str, float]] = []
+            for doc_key, doc_label, center_idx, center_text, score in selected:
+                doc_chunks = by_doc.get(doc_key, {})
+                if center_idx <= 0:
+                    expanded.append((doc_key, doc_label, center_idx, center_text, score))
+                    continue
+                start_idx = max(1, center_idx - before_n)
+                end_idx = center_idx + after_n
+                window_parts: list[str] = []
+                for idx in range(start_idx, end_idx + 1):
+                    part = str(doc_chunks.get(idx) or "").strip()
+                    if not part:
+                        continue
+                    if idx == center_idx:
+                        window_parts.append(f">> {part}")
+                    else:
+                        window_parts.append(part)
+                if not window_parts:
+                    window_parts = [center_text]
+                expanded.append(
+                    (
+                        doc_key,
+                        doc_label,
+                        center_idx,
+                        "\n".join(window_parts),
+                        score,
+                    )
+                )
+            return expanded
         except Exception:
             logger.exception(
                 "Zork memory: search_source_material failed for campaign %s",
