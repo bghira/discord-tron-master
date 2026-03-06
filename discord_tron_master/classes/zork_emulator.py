@@ -199,9 +199,11 @@ class ZorkEmulator:
         "- reasoning: string (first key in final turn JSON; concise internal grounding for this turn: what evidence/context you used, which actors are involved, and why the chosen outcome follows)\n"
         "- narration: string (what the player sees)\n"
         "- state_update: object (world state patches; set a key to null to remove it when no longer relevant. "
-        "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale keys every turn by setting them to null. "
-        "Remove: completed/concluded events, expired countdowns/ETAs, booleans for past events that no longer affect gameplay, "
-        "and any scene-specific state from scenes the player has left. Only keep state that is CURRENTLY ACTIVE and relevant.\n"
+        "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale WORLD_STATE keys every turn by setting them to null. "
+        "This cleanup rule applies to transient world-state only (events, countdowns, one-off flags, scene-local state) — "
+        "NOT to WORLD_CHARACTERS roster entries. "
+        "Remove from state_update: completed/concluded events, expired countdowns/ETAs, booleans for past events that no longer affect gameplay, "
+        "and scene-specific state from scenes the player has left. Only keep state that is CURRENTLY ACTIVE and relevant.\n"
         "STRUCTURE REQUIREMENT: State keys MUST be organized as nested objects keyed by the concept, entity, or character being tracked. "
         "NEVER use flat underscore-joined keys like 'guard_captain_mood' or 'throne_room_door_locked'. "
         "Instead, nest them: {\"guard_captain\": {\"mood\": \"suspicious\"}, \"throne_room\": {\"door_locked\": true}}. "
@@ -241,6 +243,9 @@ class ZorkEmulator:
         "Use it to track disclosures, secrets, and dynamic shifts.\n"
         "To remove a character from the roster, set that character slug to null in character_updates "
         "or set it to {'remove': true}. "
+        "Do NOT remove characters just because they are off-scene, quiet, or not recently mentioned. "
+        "Roster removal is only for explicit player/admin cleanup requests, confirmed duplicate merges, death/permanent departure, or true invalid entries. "
+        "Prefer updating location/current_status over deleting the character.\n"
         "Set deceased_reason to a string when a character dies. "
         "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.)\n\n"
         "Rules:\n"
@@ -5555,66 +5560,9 @@ class ZorkEmulator:
     ) -> Dict[str, object]:
         if not isinstance(updates, dict):
             return {}
-        if not isinstance(existing_chars, dict):
-            return dict(updates)
-
-        context = " ".join(str(resolution_context or "").lower().split())
-        bulk_cleanup_cues = (
-            "duplicate",
-            "roster cleanup",
-            "cleanup roster",
-            "roster correction",
-            "purge",
-            "mass remove",
-            "bulk remove",
-        )
-        allow_bulk = any(cue in context for cue in bulk_cleanup_cues)
-
-        delete_rows: List[Tuple[str, str, Optional[Dict[str, object]], object]] = []
-        for raw_slug, fields in updates.items():
-            if not cls._character_delete_requested(fields):
-                continue
-            raw_slug_text = str(raw_slug or "").strip()
-            resolved = cls._resolve_existing_character_slug(existing_chars, raw_slug_text)
-            target_slug = resolved or raw_slug_text
-            existing_row = existing_chars.get(target_slug)
-            delete_rows.append((raw_slug_text, target_slug, existing_row, fields))
-
-        blocked_raw_keys: set[str] = set()
-        if delete_rows and len(delete_rows) > 1 and not allow_bulk:
-            blocked_raw_keys.update(raw for raw, _target, _row, _fields in delete_rows)
-        else:
-            for raw_key, target_slug, existing_row, fields in delete_rows:
-                if not cls._character_delete_allowed(
-                    raw_slug=target_slug or raw_key,
-                    fields=fields,
-                    existing_row=existing_row if isinstance(existing_row, dict) else None,
-                    context_text=context,
-                ):
-                    blocked_raw_keys.add(raw_key)
-
-        if not blocked_raw_keys:
-            return dict(updates)
-
-        sanitized = {
-            k: v
-            for k, v in updates.items()
-            if str(k or "").strip() not in blocked_raw_keys
-        }
-        if isinstance(campaign_state, dict):
-            cls._increment_auto_fix_counter(
-                campaign_state,
-                counter_key,
-                amount=len(blocked_raw_keys),
-            )
-        _zork_log(
-            "CHARACTER REMOVE BLOCKED",
-            (
-                f"blocked={sorted(blocked_raw_keys)} "
-                f"context={context[:220]}"
-            ),
-        )
-        return sanitized
+        # Character deletion is now fully model-controlled (reasoning + structured updates).
+        # Keep this hook for compatibility, but do not block removals.
+        return dict(updates)
 
     @classmethod
     def _guard_state_null_character_prunes(
