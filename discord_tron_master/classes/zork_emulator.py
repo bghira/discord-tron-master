@@ -92,20 +92,31 @@ class ZorkEmulator:
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_MIN_SETUP_CHUNKS = 1
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
-    SETUP_GENRE_TEMPLATES = (
-        "upbeat",
-        "rom-com",
-        "chick-flick",
-        "woke-culture-piece",
-        "spaghetti-western",
-        "psychedelic",
-        "buddy-comedy",
-        "absurd",
-        "detective-novel",
-        "dreamlike-fantasy",
-    )
+    SETUP_GENRE_TEMPLATES = {
+        "upbeat": "Warm and optimistic — good things happen to people who try.",
+        "rom-com": "Romantic comedy — charm, miscommunication, and a satisfying payoff.",
+        "horror": "Dread, tension, and things that should not be.",
+        "noir": "Cynical narration, moral grey areas, rain-slicked streets.",
+        "thriller": "High stakes, ticking clocks, and dangerous people.",
+        "spaghetti-western": "Dusty standoffs, laconic antiheroes, Morricone energy.",
+        "psychedelic": "Reality is negotiable. Expect the unexpected.",
+        "buddy-comedy": "Two clashing personalities, one shared problem.",
+        "absurd": "Logic is optional. Commit to the bit.",
+        "detective-novel": "Clues, red herrings, and a mystery that rewards attention.",
+        "epic-fantasy": "Grand quests, ancient powers, and a world worth saving.",
+        "sci-fi": "Technology, exploration, and questions about what it means to be human.",
+        "dreamlike-fantasy": "Surreal, poetic, and just slightly impossible.",
+    } 
     SOURCE_MATERIAL_CATEGORY = "source"
     SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
+    SOURCE_MATERIAL_FORMAT_STORY = "story"
+    SOURCE_MATERIAL_FORMAT_RULEBOOK = "rulebook"
+    SOURCE_MATERIAL_FORMAT_GENERIC = "generic"
+    SOURCE_MATERIAL_MODE_MAP = {
+        SOURCE_MATERIAL_FORMAT_RULEBOOK: "rulebook",
+        SOURCE_MATERIAL_FORMAT_STORY: "story",
+        SOURCE_MATERIAL_FORMAT_GENERIC: "generic",
+    }
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     SCENE_IMAGE_PRESERVE_PREFIX = (
@@ -222,7 +233,8 @@ class ZorkEmulator:
             "Demand strong grounding. Enforce constraints, resources, and consequences; failed or risky actions should fail or cost something when unsupported."
         ),
         "impossible": (
-            "Strict mode. Player freedom is minimal: movement/travel must use currently listed exits. If an action is not explicitly supported by present exits/objects/state, reject it and ask for a valid action."
+            "The world is unforgiving and nothing is free. Resources are scarce, NPCs are self-interested, and mistakes have lasting consequences. "
+            "Movement/travel must use currently listed exits. If an action is not supported by present exits/objects/state, it fails — narrate the failure and let the player try something else."
         ),
     }
 
@@ -308,7 +320,8 @@ class ZorkEmulator:
         "- Keep diction plain and direct; prioritize immediate consequences and available choices.\n"
         "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
-        "- When SOURCE_MATERIAL_DOCS is present, treat it as canon and use memory_search with category 'source' before asserting key plot facts.\n"
+        "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
+        "- Use source payload to bias queries: rulebook docs are fact lists, story docs are narrative scenes, generic docs are mixed/loose notes.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
         "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
@@ -350,6 +363,9 @@ class ZorkEmulator:
         "  * If CAMPAIGN references a known movie/book/show, use the MAIN CHARACTER/PROTAGONIST's canonical name.\n"
         "  * Otherwise, create an appropriate name for this setting.\n"
         "  Set it in player_state_update.character_name.\n"
+        "- GM-RULE-NAMES: for newly created original characters, avoid generic AI-default names. "
+        "Do not default to names like Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, or River unless source canon explicitly requires them. "
+        "Prefer distinctive, specific names with personality.\n"
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
@@ -406,6 +422,13 @@ class ZorkEmulator:
         "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
         "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
         "- Most human interactions are not foreplay. NPCs should behave like people with their own priorities unless the scene has organically built to intimacy through player and NPC choices.\n"
+        "- GM ETHOS — BE ON THE PLAYER'S SIDE:\n"
+        "  * Your job is to make the player feel clever, not stupid. Reward creative or unexpected actions with interesting outcomes, even partial ones.\n"
+        "  * When a player tries something the rules don't cover, find the most fun plausible interpretation rather than the most restrictive one.\n"
+        "  * Surprises should feel like discoveries, not punishments. The world reacts to the player — it doesn't lie in wait for them.\n"
+        "  * Make the world feel alive: NPCs have routines, places change between visits, minor choices ripple forward.\n"
+        "  * Pacing is a gift. Know when to linger on a moment and when to cut to the next beat. Not every action needs a full scene.\n"
+        "  * The best turns leave the player wanting to type their next move immediately.\n"
         "- Tone lock: match narration to WORLD_STATE.tone. Player humor is allowed, but ambient world/NPC behavior should remain tonally consistent unless the story explicitly shifts tone.\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
@@ -471,13 +494,17 @@ class ZorkEmulator:
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
         "A category can contain multiple memories.\n"
         "When category is provided in memory_search, curated memories in that category are vector searched.\n"
-        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as newline-level snippets. "
-        "Use memory_search with category 'source' to query canon snippets before narrating key plot facts:\n"
+        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed as format-specific retrieval chunks:\n"
+        "- rulebook: compact fact units (typically `KEY: value` lines)\n"
+        "- story: paragraph-shaped scene/outline snippets\n"
+        "- generic: broader chunk units preserved for mixed notes/dumps\n"
+        "Use memory_search with category 'source' to query canon chunks before narrating key plot facts:\n"
         '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
         "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
-        "By default source search returns only the single best matching snippet. "
-        "For expanded context windows, memory_search supports optional before_lines/after_lines "
-        "(defaults: 0/0; set ranges only when needed).\n"
+        "Use 2-4 concise queries and keep results targeted.\n"
+        "By default source scope returns the highest-similarity snippets. "
+        "For additional context around a hit, set before_lines/after_lines\n"
+        "(defaults: 0/0; keep ranges small, e.g. 3-8).\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -2115,12 +2142,11 @@ class ZorkEmulator:
     ) -> str:
         """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
         gpt = GPT()
-        has_source_material = bool(str(attachment_summary or "").strip())
         effective_use_imdb = (
-            bool(use_imdb) if isinstance(use_imdb, bool) else (not has_source_material)
+            bool(use_imdb) if isinstance(use_imdb, bool) else False
         )
 
-        # IMDB usage is controlled by explicit flag or source-first default.
+        # IMDB usage is explicit opt-in via --imdb.
         if not effective_use_imdb:
             imdb_results = []
             imdb_text = ""
@@ -2207,6 +2233,7 @@ class ZorkEmulator:
             "work_description": work_desc,
             "imdb_results": (imdb_results or []) if effective_use_imdb else [],
             "use_imdb": effective_use_imdb,
+            "imdb_opt_in_explicit": bool(use_imdb is True),
         }
         if attachment_summary:
             setup_data["attachment_summary"] = attachment_summary
@@ -2318,12 +2345,12 @@ class ZorkEmulator:
 
     @classmethod
     def _setup_genre_prompt(cls) -> str:
-        lines = ["Choose a genre direction before I generate variants:\n"]
-        for idx, genre in enumerate(cls.SETUP_GENRE_TEMPLATES, 1):
-            lines.append(f"{idx}. **{genre}**")
+        lines = ["What kind of story do you want to play?\n"]
+        for idx, (genre, desc) in enumerate(cls.SETUP_GENRE_TEMPLATES.items(), 1):
+            lines.append(f"{idx}. **{genre}** — {desc}")
         lines.append(
-            "\nReply with a number or exact genre name.\n"
-            "For custom direction, reply `custom: <your genre description>`."
+            "\nReply with a number, genre name, or describe your own "
+            "direction with `custom: <your idea>`."
         )
         return "\n".join(lines)
 
@@ -2335,12 +2362,14 @@ class ZorkEmulator:
         if not raw:
             return None, "Please choose a genre."
 
+        genre_keys = list(cls.SETUP_GENRE_TEMPLATES.keys())
+
         if raw.isdigit():
             idx = int(raw)
-            if 1 <= idx <= len(cls.SETUP_GENRE_TEMPLATES):
-                genre = cls.SETUP_GENRE_TEMPLATES[idx - 1]
+            if 1 <= idx <= len(genre_keys):
+                genre = genre_keys[idx - 1]
                 return {"kind": "template", "value": genre}, None
-            return None, f"Please choose a number between 1 and {len(cls.SETUP_GENRE_TEMPLATES)}."
+            return None, f"Please choose a number between 1 and {len(genre_keys)}."
 
         lowered = raw.lower().strip()
         if lowered.startswith("custom:") or lowered.startswith("other:"):
@@ -2401,16 +2430,14 @@ class ZorkEmulator:
                 setup_data["work_description"] = ""
         else:
             # User is providing a correction — IMDB search + re-classify
-            has_source_material = bool(
-                str(setup_data.get("attachment_summary") or "").strip()
-                or str(setup_data.get("source_material_document_key") or "").strip()
-            )
             use_imdb_cfg = setup_data.get("use_imdb")
             use_imdb_effective = (
                 bool(use_imdb_cfg)
                 if isinstance(use_imdb_cfg, bool)
-                else (not has_source_material)
+                else False
             )
+            if not bool(setup_data.get("imdb_opt_in_explicit")):
+                use_imdb_effective = False
             imdb_results = cls._imdb_search(content) if use_imdb_effective else []
             imdb_text = cls._format_imdb_results(imdb_results)
             _zork_log(
@@ -2576,6 +2603,8 @@ class ZorkEmulator:
         system_prompt = (
             "You are a creative game designer who builds interactive text-adventure campaigns.\n"
             "All characters in the game are adults (18+), regardless of source material ages.\n"
+            "For non-canonical/original characters, choose distinctive specific names; avoid generic defaults "
+            "(Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, River) unless source canon requires them.\n"
             "Return ONLY valid JSON with a single key 'variants' containing an array of 2-3 objects.\n"
             "Each object must have:\n"
             '- "id": string (e.g. "variant-1")\n'
@@ -2859,6 +2888,8 @@ class ZorkEmulator:
         finalize_system = (
             "You are a world-builder for interactive text-adventure campaigns.\n"
             "All characters in the game are adults (18+), regardless of source material ages.\n"
+            "For non-canonical/original characters, choose distinctive specific names; avoid generic defaults "
+            "(Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, River) unless source canon requires them.\n"
             "Return ONLY valid JSON with these keys:\n"
             '- "characters": object keyed by slug-id (lowercase-hyphenated). Each character has: '
             "name, personality, background, appearance, location, current_status, allegiance, relationship.\n"
@@ -3413,6 +3444,142 @@ class ZorkEmulator:
         return str(fallback or "source-material").strip()[:120] or "source-material"
 
     @classmethod
+    def _normalize_source_material_format(cls, raw_format: str) -> str:
+        normalized = str(raw_format or "").strip().lower()
+        normalized = re.sub(r"[^a-z0-9\s-]", "", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized in {"rulebook", "rule-book", "rule_book", "factbook", "rule"}:
+            return cls.SOURCE_MATERIAL_FORMAT_RULEBOOK
+        if normalized in {
+            "story",
+            "scripted",
+            "story-scripted",
+            "story mode",
+            "script",
+            "scripted story",
+            "narrative",
+        }:
+            return cls.SOURCE_MATERIAL_FORMAT_STORY
+        if normalized in {
+            "generic",
+            "other",
+            "dumps",
+            "dump",
+            "notes",
+            "unknown",
+        }:
+            return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        if (
+            "rulebook" in normalized
+            or "open set" in normalized
+            or "open-set" in normalized
+            or "openset" in normalized
+        ):
+            return cls.SOURCE_MATERIAL_FORMAT_RULEBOOK
+        if "script" in normalized or "story" in normalized:
+            return cls.SOURCE_MATERIAL_FORMAT_STORY
+        if "generic" in normalized or "dump" in normalized:
+            return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+
+    @classmethod
+    def _source_material_format_heuristic(cls, sample: str) -> str:
+        sample_text = str(sample or "").strip()
+        lines = [line.strip() for line in str(sample or "").splitlines() if line.strip()]
+        if not lines:
+            return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+
+        # Heuristic rulebook detection:
+        # lines like KEY: value with short key-like prefixes.
+        rulebook_lines = 0
+        for line in lines[:80]:
+            if ":" not in line:
+                continue
+            key = line.split(":", 1)[0].strip()
+            if not key or len(key) > 140:
+                continue
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-\s]*", key):
+                rulebook_lines += 1
+
+        if len(lines) >= 4 and rulebook_lines >= max(2, len(lines) * 0.45):
+            return cls.SOURCE_MATERIAL_FORMAT_RULEBOOK
+
+        # Heuristic story detection from paragraph-style prose.
+        if "\n\n" in sample_text:
+            return cls.SOURCE_MATERIAL_FORMAT_STORY
+
+        if len(sample_text.split()) >= 140 and any(len(line) > 120 for line in lines):
+            return cls.SOURCE_MATERIAL_FORMAT_STORY
+
+        return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+
+    @classmethod
+    def _source_material_storage_mode(cls, source_format: str) -> str:
+        return cls.SOURCE_MATERIAL_MODE_MAP.get(
+            cls._normalize_source_material_format(source_format),
+            cls.SOURCE_MATERIAL_MODE_MAP[cls.SOURCE_MATERIAL_FORMAT_GENERIC],
+        )
+
+    @classmethod
+    async def _classify_source_material_format(cls, sample_text: str) -> str:
+        sample = str(sample_text or "").strip()
+        if not sample:
+            return cls.SOURCE_MATERIAL_FORMAT_GENERIC
+
+        gpt = GPT()
+        sample_preview = sample[:4000]
+        system_prompt = (
+            "Classify the attached source material into exactly one of three categories.\n"
+            "Valid values: story, rulebook, generic.\n"
+            "story = scripted narrative, prose, scenes, dialogue, or outline text.\n"
+            'rulebook = open-set fact list where each fact is usually one line in "KEY: fact" form.\n'
+            "generic = everything else (notes, dumps, mixed structure, etc.).\n"
+            'Return ONLY JSON: {"source_material_format": "story|rulebook|generic"}.\n'
+            "Do not include markdown, explanation, or extra keys."
+        )
+        user_prompt = (
+            "Classify this sample from an uploaded source text.\n"
+            "Sample:\n"
+            f"{sample_preview}\n"
+            "Return only one JSON key `source_material_format`."
+        )
+        response = None
+        cleaned = ""
+        parsed = {}
+        try:
+            response = await gpt.turbo_completion(
+                system_prompt,
+                user_prompt,
+                temperature=0.2,
+                max_tokens=120,
+            )
+            cleaned = cls._clean_response(response or "")
+            json_text = cls._extract_json(cleaned)
+            if json_text:
+                parsed = cls._parse_json_lenient(json_text)
+        except Exception as e:
+            logger.warning(f"Source material classification failed (LLM parse): {e}")
+
+        if not isinstance(parsed, dict):
+            parsed = {}
+
+        if not parsed:
+            return cls._source_material_format_heuristic(sample)
+
+        resolved_format = cls._normalize_source_material_format(
+            str(
+                parsed.get("source_material_format")
+                or parsed.get("format")
+                or parsed.get("type")
+                or ""
+            )
+        )
+        if resolved_format:
+            return resolved_format
+
+        return cls._source_material_format_heuristic(sample)
+
+    @classmethod
     async def ingest_source_material_attachment(
         cls,
         campaign: ZorkCampaign,
@@ -3430,9 +3597,15 @@ class ZorkEmulator:
         chunks, total_tokens, _, _, _ = cls._chunk_text_by_tokens(raw_text)
         if not chunks:
             return False, "Attachment has no usable text."
-        sentence_units = ZorkMemory.source_material_units_from_chunks(chunks)
-        if not sentence_units:
-            return False, "Attachment has no usable source snippets."
+
+        classification_chunk = chunks[0] if chunks else raw_text[:4000]
+        source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        try:
+            source_format = await cls._classify_source_material_format(classification_chunk)
+        except Exception as e:
+            logger.warning(f"Source material classification crashed; defaulting generic: {e}")
+            source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        source_mode = cls._source_material_storage_mode(source_format)
 
         resolved_label = " ".join(str(label or "").strip().split())[:120]
         if not resolved_label:
@@ -3443,17 +3616,29 @@ class ZorkEmulator:
         if progress_channel is not None:
             try:
                 status_msg = await progress_channel.send(
-                    f"Ingesting source material `{resolved_label}`... "
-                    f"({len(sentence_units)} snippet(s), ~{total_tokens} tokens)"
+                    "Classifying source material format... "
+                    f"`{resolved_label}` (document has ~{total_tokens} tokens)"
                 )
             except Exception:
                 status_msg = None
+
+        if status_msg is not None:
+            try:
+                await status_msg.edit(
+                    content=(
+                        f"Detected source material format `{source_format}` for "
+                        f"`{resolved_label}`. Ingesting now..."
+                    )
+                )
+            except Exception:
+                pass
 
         stored_count, document_key = await asyncio.to_thread(
             ZorkMemory.store_source_material_chunks,
             campaign.id,
             document_label=resolved_label,
             chunks=chunks,
+            source_mode=source_mode,
             replace_document=True,
         )
         docs = await asyncio.to_thread(
@@ -3478,7 +3663,7 @@ class ZorkEmulator:
 
         result_msg = (
             f"Source material stored: `{resolved_label}` as key `{document_key}` "
-            f"({stored_count} snippet(s), ~{total_tokens} tokens). "
+            f"({stored_count} snippet(s), {source_format} format, ~{total_tokens} tokens). "
             f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
         if status_msg is not None:
@@ -3504,11 +3689,15 @@ class ZorkEmulator:
             except (TypeError, ValueError):
                 chunk_count = 0
             total_chunk_count += chunk_count
+            source_format = cls._source_material_format_heuristic(
+                str(row.get("sample_chunk") or "")
+            )
             compact_docs.append(
                 {
                     "document_key": str(row.get("document_key") or ""),
                     "document_label": str(row.get("document_label") or ""),
                     "chunk_count": chunk_count,
+                    "format": source_format,
                 }
             )
         return {
@@ -8429,7 +8618,6 @@ class ZorkEmulator:
         if _source_payload.get("available"):
             user_prompt += (
                 f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
-                f"SOURCE_MATERIAL_SNIPPET_COUNT: {_source_payload.get('chunk_count')}\n"
                 f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
             )
         if _active_plot_threads:
@@ -9454,10 +9642,14 @@ class ZorkEmulator:
                                     )
                                 ]
                                 for row in source_docs[:5]:
+                                    source_format = cls._source_material_format_heuristic(
+                                        str(row.get("sample_chunk") or "")
+                                    )
                                     source_index_lines.append(
                                         "- "
                                         f"key='{row.get('document_key')}' "
                                         f"label='{row.get('document_label')}' "
+                                        f"format='{source_format}' "
                                         f"snippets={row.get('chunk_count')}"
                                     )
                                 tool_result_block = (
@@ -9486,7 +9678,7 @@ class ZorkEmulator:
                                 '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
                                 "- To scope one source document only:\n"
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
-                                "- To request expanded source context windows (default is single snippet, before_lines=0, after_lines=0):\n"
+                                "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
                                 )
                             if roster_hints:

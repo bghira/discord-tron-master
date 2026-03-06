@@ -411,24 +411,73 @@ class ZorkMemory:
         return [s for s in out if s]
 
     @classmethod
-    def source_material_units_from_chunks(cls, chunks: List[str]) -> List[str]:
-        """Convert source-material chunks into newline-level searchable units."""
-        units: List[str] = []
-        for chunk in chunks or []:
-            raw = str(chunk or "")
-            if not raw.strip():
-                continue
-            units.extend(cls._split_source_line_fragments(raw))
+    def _normalize_source_unit_mode(cls, mode: str) -> str:
+        """Normalize source-material chunking mode names."""
+        mode_clean = str(mode or "line").strip().lower()
+        if mode_clean in ("story", "paragraph", "paragraphs", "scene"):
+            return "story"
+        if mode_clean in ("rulebook", "line", "lines"):
+            return "rulebook"
+        if mode_clean in ("generic", "chunk", "chunked", "dump"):
+            return "generic"
+        return "line"
 
+    @classmethod
+    def _dedupe_source_units(cls, units: List[str]) -> List[str]:
         deduped: List[str] = []
         seen = set()
         for unit in units:
-            key = " ".join(unit.lower().split())
+            key = " ".join(str(unit or "").lower().split())
             if not key or key in seen:
                 continue
             seen.add(key)
-            deduped.append(unit[:8000])
+            deduped.append(str(unit).strip()[:8000])
         return deduped
+
+    @classmethod
+    def source_material_units_from_chunks(cls, chunks: List[str]) -> List[str]:
+        return cls.source_material_units_from_chunks_with_mode(chunks, mode="line")
+
+    @classmethod
+    def source_material_units_from_chunks_with_mode(
+        cls, chunks: List[str], *, mode: str = "line"
+    ) -> List[str]:
+        """Convert source-material chunks into source lookup units.
+
+        Supported modes:
+        - line (default): one unit per non-empty line.
+        - story: split each chunk into paragraph units.
+        - generic: preserve chunk boundaries.
+        """
+        source_mode = cls._normalize_source_unit_mode(mode)
+        units: List[str] = []
+        for chunk in chunks or []:
+            raw = str(chunk or "").strip()
+            if not raw.strip():
+                continue
+            if source_mode == "rulebook":
+                for line in raw.splitlines():
+                    line_clean = line.strip()
+                    if line_clean:
+                        units.append(line_clean)
+                continue
+            if source_mode == "story":
+                paragraphs = [line.strip() for line in raw.split("\n\n") if line.strip()]
+                if not paragraphs:
+                    paragraphs = [raw]
+                for paragraph in paragraphs:
+                    paragraph_unit = " ".join(paragraph.split())
+                    if paragraph_unit:
+                        units.extend(cls._split_source_line_fragments(paragraph_unit))
+                continue
+
+            # generic mode: keep chunk ordering as a fallback dump-like store,
+            # while preserving chunk boundaries and truncating to max unit size.
+            compact = " ".join(raw.split())
+            if compact:
+                units.extend(cls._split_source_line_fragments(compact))
+
+        return cls._dedupe_source_units(units)
 
     @classmethod
     def source_material_count(cls, campaign_id: int) -> int:
@@ -471,12 +520,27 @@ class ZorkMemory:
             ).fetchall()
             out: List[Dict[str, object]] = []
             for document_key, document_label, count, last_at in rows:
+                sample_chunk = ""
+                if document_key:
+                    sample_row = conn.execute(
+                        """
+                        SELECT chunk_text
+                        FROM source_material_chunks
+                        WHERE campaign_id = ? AND document_key = ?
+                        ORDER BY chunk_index ASC
+                        LIMIT 1
+                        """,
+                        (campaign_id, document_key),
+                    ).fetchone()
+                    if sample_row and sample_row[0]:
+                        sample_chunk = str(sample_row[0])
                 out.append(
                     {
                         "document_key": str(document_key or ""),
                         "document_label": str(document_label or ""),
                         "chunk_count": int(count or 0),
                         "last_at": str(last_at or ""),
+                        "sample_chunk": sample_chunk,
                     }
                 )
             return out
@@ -494,6 +558,7 @@ class ZorkMemory:
         *,
         document_label: str,
         chunks: List[str],
+        source_mode: str = "line",
         replace_document: bool = True,
     ) -> Tuple[int, str]:
         """Store source-material chunks for a campaign and return (stored_count, document_key)."""
@@ -502,6 +567,7 @@ class ZorkMemory:
             if not label:
                 label = "source-material"
             document_key = cls._normalize_source_document_key(label)
+            mode = cls._normalize_source_unit_mode(source_mode)
             clean_chunks = [
                 str(chunk or "").strip()[:8000]
                 for chunk in (chunks or [])
@@ -509,7 +575,9 @@ class ZorkMemory:
             ]
             if not clean_chunks:
                 return 0, document_key
-            sentence_units = cls.source_material_units_from_chunks(clean_chunks)
+            sentence_units = cls.source_material_units_from_chunks_with_mode(
+                clean_chunks, mode=mode
+            )
             if not sentence_units:
                 return 0, document_key
 
