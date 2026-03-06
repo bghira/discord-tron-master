@@ -539,7 +539,7 @@ class ZorkEmulator:
         '  {"tool_call": "source_browse", "document_key": "my-rulebook", "wildcard": "weapon*"}\n'
         "- Browse all source documents at once (omit document_key):\n"
         '  {"tool_call": "source_browse"}\n'
-        "source_browse returns a compact key index on the first unfiltered pass, up to 60 by default "
+        "source_browse returns a compact key index on the first unfiltered pass, up to 255 by default "
         "(adjustable via 'limit'). With a specific wildcard it returns the matching raw KEY: value lines.\n"
         "STRATEGY: for a rulebook you have not seen before, call source_browse with no wildcard first to see what keys exist, "
         "then use source_browse with a wildcard or memory_search with category 'source:<document_key>' for detail.\n"
@@ -2748,11 +2748,11 @@ class ZorkEmulator:
                 wildcard_meta = f"wildcard={wildcard!r}"
                 if not wildcard_provided:
                     wildcard_meta = "wildcard=(omitted)"
-                limit = 60
-                try:
-                    limit = max(1, min(120, int(payload.get("limit") or 60)))
-                except (TypeError, ValueError):
-                    pass
+                    limit = 255
+                    try:
+                        limit = max(1, min(255, int(payload.get("limit") or 255)))
+                    except (TypeError, ValueError):
+                        pass
                 lines = ZorkMemory.browse_source_keys(
                     campaign.id,
                     document_key=doc_key or None,
@@ -4435,6 +4435,30 @@ class ZorkEmulator:
             result_msg = (
                 f"Source material format for `{resolved_label}` is `{source_format}`. "
                 "It will not be indexed as source chunks and will be used as setup prompt text."
+            )
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(content=result_msg)
+                    await asyncio.sleep(3)
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            return True, result_msg
+
+        duplicate_doc = await asyncio.to_thread(
+            ZorkMemory.find_duplicate_source_material_document,
+            campaign.id,
+            chunks=chunks,
+            source_mode=source_mode,
+        )
+        if duplicate_doc:
+            existing_key = str(duplicate_doc.get("document_key") or "").strip() or "unknown"
+            existing_label = str(duplicate_doc.get("document_label") or "").strip() or existing_key
+            existing_count = int(duplicate_doc.get("chunk_count") or 0)
+            result_msg = (
+                f"Source material skipped: `{resolved_label}` matches existing document "
+                f"`{existing_label}` as key `{existing_key}` ({existing_count} snippet(s), "
+                f"{source_format} format)."
             )
             if status_msg is not None:
                 try:
@@ -10718,9 +10742,9 @@ class ZorkEmulator:
                             wildcard_meta = f"wildcard={browse_wildcard!r}"
                             if not browse_wildcard_specified:
                                 wildcard_meta = "wildcard=(omitted)"
-                            browse_limit = 60
+                            browse_limit = 255
                             try:
-                                browse_limit = max(1, min(120, int(first_payload.get("limit") or 60)))
+                                browse_limit = max(1, min(255, int(first_payload.get("limit") or 255)))
                             except (TypeError, ValueError):
                                 pass
                             lines = ZorkMemory.browse_source_keys(

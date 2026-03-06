@@ -87,6 +87,36 @@ class Zork(commands.Cog):
                 summary_instructions = None
         return parsed_name, use_imdb, summary_instructions
 
+    def _parse_source_material_options(
+        self, raw: str | None
+    ) -> tuple[str, str | None]:
+        if not raw:
+            return "ingest", None
+        try:
+            tokens = shlex.split(raw)
+        except ValueError:
+            tokens = str(raw).split()
+        if not tokens:
+            return "ingest", None
+
+        label_tokens: list[str] = []
+        i = 0
+        while i < len(tokens):
+            token = str(tokens[i] or "")
+            low = token.lower()
+            if low == "--clear":
+                return "clear", None
+            if low.startswith("--remove="):
+                value = token.split("=", 1)[1].strip() or None
+                return "remove", value
+            if low == "--remove":
+                value = str(tokens[i + 1] or "").strip() if i + 1 < len(tokens) else ""
+                return "remove", value or None
+            label_tokens.append(token)
+            i += 1
+        label = " ".join(label_tokens).strip() or None
+        return "ingest", label
+
     def _should_ignore_message(self, message) -> bool:
         if message.author.bot:
             return True
@@ -497,6 +527,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork thread [name] [--imdb|--no-imdb] [--summary-instructions \"...\"]` create a dedicated Zork thread/campaign for yourself (`--imdb` is opt-in)\n"
             f"- `{prefix}zork source-material [label]` ingest attached `.txt` as campaign canon memory; "
             "format is auto-detected as story/rulebook/generic.\n"
+            f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
+            f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
@@ -1071,6 +1103,63 @@ class Zork(commands.Cog):
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
+        operation, parsed_value = self._parse_source_material_options(label)
+
+        if operation == "clear":
+            with app.app_context():
+                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                removed_rows = ZorkMemory.clear_source_material_documents(campaign.id)
+            if not docs:
+                await ctx.send("No source-material documents are stored for this campaign.")
+                return
+            await ctx.send(
+                f"Cleared {len(docs)} source-material document(s) "
+                f"({removed_rows} stored snippet row(s)) from `{campaign.name}`."
+            )
+            return
+
+        if operation == "remove":
+            requested = str(parsed_value or "").strip()
+            if not requested:
+                prefix = self._prefix()
+                await ctx.send(
+                    f"Usage: `{prefix}zork source-material --remove <document-key>`"
+                )
+                return
+            with app.app_context():
+                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                requested_norm = ZorkMemory._normalize_source_document_key(requested)
+                match = None
+                for row in docs:
+                    row_key = str(row.get("document_key") or "").strip()
+                    row_label = " ".join(
+                        str(row.get("document_label") or "").strip().split()
+                    )
+                    if requested in {row_key, row_label} or requested_norm == row_key:
+                        match = row
+                        break
+                if not match:
+                    await ctx.send(
+                        "Source-material document not found. "
+                        f"Requested `{requested}`."
+                    )
+                    return
+                row_key = str(match.get("document_key") or "").strip()
+                row_label = str(match.get("document_label") or "").strip() or row_key
+                removed_rows = ZorkMemory.delete_source_material_document(
+                    campaign.id,
+                    row_key,
+                )
+            if removed_rows <= 0:
+                await ctx.send(
+                    f"Could not remove source-material document `{row_key}`."
+                )
+                return
+            await ctx.send(
+                f"Removed source-material document `{row_label}` "
+                f"(key `{row_key}`, {removed_rows} stored snippet row(s))."
+            )
+            return
 
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
         try:
@@ -1098,7 +1187,9 @@ class Zork(commands.Cog):
             prefix = self._prefix()
             await ctx.send(
                 "Attach a `.txt` file to ingest source material.\n"
-                f"Usage: `{prefix}zork source-material [label]`"
+                f"Usage: `{prefix}zork source-material [label]`\n"
+                f"Or manage stored docs with `{prefix}zork source-material --remove <document-key>` "
+                f"or `{prefix}zork source-material --clear`."
             )
             return
         await ctx.send(message)

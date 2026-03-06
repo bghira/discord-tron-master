@@ -11,6 +11,7 @@ import re
 import sqlite3
 import struct
 import threading
+import hashlib
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,137 @@ class ZorkMemory:
             return []
 
     @classmethod
+    def get_source_material_document_units(
+        cls,
+        campaign_id: int,
+        document_key: str,
+    ) -> List[str]:
+        try:
+            key = str(document_key or "").strip()
+            if not key:
+                return []
+            conn = cls._get_conn()
+            rows = conn.execute(
+                """
+                SELECT chunk_text
+                FROM source_material_chunks
+                WHERE campaign_id = ? AND document_key = ?
+                ORDER BY chunk_index ASC
+                """,
+                (campaign_id, key),
+            ).fetchall()
+            return [
+                str(row[0] or "").strip()
+                for row in rows
+                if str(row[0] or "").strip()
+            ]
+        except Exception:
+            logger.exception(
+                "Zork memory: get_source_material_document_units failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return []
+
+    @classmethod
+    def _source_units_signature(cls, units: List[str]) -> str:
+        normalized = "\n".join(
+            " ".join(str(unit or "").strip().lower().split())
+            for unit in units
+            if str(unit or "").strip()
+        )
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def find_duplicate_source_material_document(
+        cls,
+        campaign_id: int,
+        *,
+        chunks: List[str],
+        source_mode: str = "line",
+    ) -> Optional[Dict[str, object]]:
+        try:
+            candidate_units = cls.source_material_units_from_chunks_with_mode(
+                chunks,
+                mode=source_mode,
+            )
+            if not candidate_units:
+                return None
+            candidate_sig = cls._source_units_signature(candidate_units)
+            for row in cls.list_source_material_documents(campaign_id, limit=200):
+                document_key = str(row.get("document_key") or "").strip()
+                if not document_key:
+                    continue
+                existing_units = cls.get_source_material_document_units(
+                    campaign_id,
+                    document_key,
+                )
+                if not existing_units:
+                    continue
+                if cls._source_units_signature(existing_units) != candidate_sig:
+                    continue
+                return {
+                    "document_key": document_key,
+                    "document_label": str(row.get("document_label") or ""),
+                    "chunk_count": int(row.get("chunk_count") or 0),
+                }
+            return None
+        except Exception:
+            logger.exception(
+                "Zork memory: find_duplicate_source_material_document failed for campaign %s",
+                campaign_id,
+            )
+            return None
+
+    @classmethod
+    def delete_source_material_document(
+        cls,
+        campaign_id: int,
+        document_key: str,
+    ) -> int:
+        try:
+            key = str(document_key or "").strip()
+            if not key:
+                return 0
+            conn = cls._get_conn()
+            cur = conn.execute(
+                """
+                DELETE FROM source_material_chunks
+                WHERE campaign_id = ? AND document_key = ?
+                """,
+                (campaign_id, key),
+            )
+            conn.commit()
+            return int(getattr(cur, "rowcount", 0) or 0)
+        except Exception:
+            logger.exception(
+                "Zork memory: delete_source_material_document failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return 0
+
+    @classmethod
+    def clear_source_material_documents(cls, campaign_id: int) -> int:
+        try:
+            conn = cls._get_conn()
+            cur = conn.execute(
+                """
+                DELETE FROM source_material_chunks
+                WHERE campaign_id = ?
+                """,
+                (campaign_id,),
+            )
+            conn.commit()
+            return int(getattr(cur, "rowcount", 0) or 0)
+        except Exception:
+            logger.exception(
+                "Zork memory: clear_source_material_documents failed for campaign %s",
+                campaign_id,
+            )
+            return 0
+
+    @classmethod
     def store_source_material_chunks(
         cls,
         campaign_id: int,
@@ -729,7 +861,7 @@ class ZorkMemory:
         *,
         document_key: Optional[str] = None,
         wildcard: str = "%",
-        limit: int = 60,
+        limit: int = 255,
     ) -> List[str]:
         """Return a compact source index or matching raw source lines.
 
