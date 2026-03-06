@@ -404,7 +404,8 @@ class ZorkEmulator:
     MEMORY_LOOKUP_MIN_SUMMARY_CHARS = MAX_SUMMARY_CHARS
     MEMORY_TOOL_DISABLED_PROMPT = (
         "\nEARLY-CAMPAIGN MEMORY MODE:\n"
-        "- Long-term memory lookup tools are disabled for this turn because WORLD_SUMMARY is still within context budget and no source corpus requires retrieval.\n"
+        "- Long-term memory lookup tools are disabled for this turn because WORLD_SUMMARY is still within context budget.\n"
+        "- Source-material memory search should only be enabled when the current player action explicitly asks for canon recall/details.\n"
         "- Do NOT call memory_search, memory_terms, memory_turn, or memory_store.\n"
         "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, and RECENT_TURNS directly.\n"
     )
@@ -1122,16 +1123,45 @@ class ZorkEmulator:
         return bool(re.match(r"\s*\[OOC\b", str(action_text or ""), re.IGNORECASE))
 
     @classmethod
+    def _source_lookup_requested_by_action(cls, action_text: object) -> bool:
+        if cls._is_ooc_action_text(action_text):
+            return False
+        text = " ".join(str(action_text or "").strip().lower().split())
+        if not text:
+            return False
+        intent_markers = (
+            "remember",
+            "recall",
+            "what happened",
+            "previously",
+            "backstory",
+            "history",
+            "who is",
+            "what is",
+            "according to",
+            "from the book",
+            "from source",
+            "source material",
+            "canon",
+            "lore",
+            "look up",
+        )
+        return any(marker in text for marker in intent_markers)
+
+    @classmethod
     def _memory_lookup_enabled_for_prompt(
         cls,
         summary_text: object,
         *,
         source_material_available: bool = False,
+        action_text: object = None,
     ) -> bool:
-        if source_material_available:
-            return True
         summary_len = len(str(summary_text or "").strip())
-        return summary_len >= cls.MEMORY_LOOKUP_MIN_SUMMARY_CHARS
+        if summary_len >= cls.MEMORY_LOOKUP_MIN_SUMMARY_CHARS:
+            return True
+        if source_material_available and cls._source_lookup_requested_by_action(action_text):
+            return True
+        return False
 
     @classmethod
     def _increment_auto_fix_counter(
@@ -2062,10 +2092,15 @@ class ZorkEmulator:
     ) -> str:
         """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
         gpt = GPT()
+        has_source_material = bool(str(attachment_summary or "").strip())
 
-        # Search IMDB first to give the LLM concrete data.
-        imdb_results = cls._imdb_search(raw_name)
-        imdb_text = cls._format_imdb_results(imdb_results)
+        # Source material takes precedence over IMDB during setup classification.
+        if has_source_material:
+            imdb_results = []
+            imdb_text = ""
+        else:
+            imdb_results = cls._imdb_search(raw_name)
+            imdb_text = cls._format_imdb_results(imdb_results)
         _zork_log(
             f"SETUP CLASSIFY campaign={campaign.id}",
             f"raw_name={raw_name!r}\nIMDB results:\n{imdb_text or '(none)'}"
@@ -2120,7 +2155,7 @@ class ZorkEmulator:
         suggested = result.get("suggested_title") or raw_name
 
         # If LLM missed it but IMDB found results, promote the top hit.
-        if not is_known and imdb_results:
+        if not has_source_material and not is_known and imdb_results:
             top = imdb_results[0]
             # Enrich with synopsis for a better description
             cls._imdb_enrich_results([top], max_enrich=1)
@@ -2144,7 +2179,7 @@ class ZorkEmulator:
             "is_known_work": is_known,
             "work_type": work_type,
             "work_description": work_desc,
-            "imdb_results": imdb_results or [],
+            "imdb_results": (imdb_results or []) if not has_source_material else [],
         }
         if attachment_summary:
             setup_data["attachment_summary"] = attachment_summary
@@ -2290,7 +2325,11 @@ class ZorkEmulator:
                 setup_data["work_description"] = ""
         else:
             # User is providing a correction — IMDB search + re-classify
-            imdb_results = cls._imdb_search(content)
+            has_source_material = bool(
+                str(setup_data.get("attachment_summary") or "").strip()
+                or str(setup_data.get("source_material_document_key") or "").strip()
+            )
+            imdb_results = [] if has_source_material else cls._imdb_search(content)
             imdb_text = cls._format_imdb_results(imdb_results)
             _zork_log(
                 f"SETUP RE-CLASSIFY campaign={campaign.id}",
@@ -2338,7 +2377,12 @@ class ZorkEmulator:
             setup_data["raw_name"] = suggested
 
             # If LLM still missed it but IMDB found results, promote top hit.
-            if not setup_data["is_known_work"] and imdb_results and not novel_intent:
+            if (
+                not has_source_material
+                and not setup_data["is_known_work"]
+                and imdb_results
+                and not novel_intent
+            ):
                 top = imdb_results[0]
                 setup_data["is_known_work"] = True
                 setup_data["raw_name"] = top["title"]
@@ -2351,7 +2395,7 @@ class ZorkEmulator:
 
             # Filter to confirmed match only
             confirmed_name = setup_data.get("raw_name", "").lower()
-            if imdb_results and confirmed_name:
+            if (not has_source_material) and imdb_results and confirmed_name:
                 best = None
                 for r in imdb_results:
                     if (
@@ -2363,6 +2407,8 @@ class ZorkEmulator:
                 setup_data["imdb_results"] = [best] if best else [imdb_results[0]]
             else:
                 setup_data["imdb_results"] = imdb_results or []
+            if has_source_material:
+                setup_data["imdb_results"] = []
             # Enrich with synopsis
             if setup_data.get("imdb_results"):
                 cls._imdb_enrich_results(setup_data["imdb_results"], max_enrich=1)
@@ -8199,6 +8245,7 @@ class ZorkEmulator:
         _memory_lookup_enabled = cls._memory_lookup_enabled_for_prompt(
             summary,
             source_material_available=bool(_source_payload.get("available")),
+            action_text=action,
         )
         _active_plot_threads = cls._plot_threads_for_prompt(state, limit=10)
         _active_chapters = cls._chapters_for_prompt(
