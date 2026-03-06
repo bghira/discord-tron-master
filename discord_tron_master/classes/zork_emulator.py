@@ -149,6 +149,7 @@ class ZorkEmulator:
         "setup_phase",
         "setup_data",
         "speed_multiplier",
+        "difficulty",
         "game_time",
         "calendar",
         CALENDAR_REMINDER_STATE_KEY,
@@ -187,6 +188,31 @@ class ZorkEmulator:
         "if that NPC plausibly knows in this scene (direct evidence, prior established knowledge, or in-scene disclosure). "
         "Do not leak off-screen NPC communications into current NPC dialogue unless continuity clearly supports it.]"
     )
+    DIFFICULTY_LEVELS = (
+        "story",
+        "easy",
+        "medium",
+        "normal",
+        "hard",
+        "impossible",
+    )
+    DIFFICULTY_NOTES = {
+        "story": (
+            "Dream mode. Be maximally generous: default to success, soften or skip failure states, and keep progress flowing even after weak or vague actions."
+        ),
+        "easy": (
+            "Be forgiving and player-favoring. Allow broad creative actions, use mild consequences, and offer helpful affordances when actions are underspecified."
+        ),
+        "medium": (
+            "Balanced challenge with lenient interpretation. Require plausible actions, but provide recovery paths and partial successes frequently."
+        ),
+        "hard": (
+            "Demand strong grounding. Enforce constraints, resources, and consequences; failed or risky actions should fail or cost something when unsupported."
+        ),
+        "impossible": (
+            "Strict mode. Player freedom is minimal: movement/travel must use currently listed exits. If an action is not explicitly supported by present exits/objects/state, reject it and ask for a valid action."
+        ),
+    }
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
@@ -7663,6 +7689,54 @@ class ZorkEmulator:
         return True
 
     @classmethod
+    def normalize_difficulty(cls, value: object) -> str:
+        text = " ".join(str(value or "").strip().lower().split())
+        if text in cls.DIFFICULTY_LEVELS:
+            return text
+        aliases = {
+            "default": "normal",
+            "std": "normal",
+            "story mode": "story",
+            "easy mode": "easy",
+            "medium mode": "medium",
+            "normal mode": "normal",
+            "hard mode": "hard",
+            "impossible mode": "impossible",
+        }
+        return aliases.get(text, "normal")
+
+    @classmethod
+    def get_difficulty(cls, campaign: Optional[ZorkCampaign]) -> str:
+        if campaign is None:
+            return "normal"
+        campaign_state = cls.get_campaign_state(campaign)
+        return cls.normalize_difficulty(campaign_state.get("difficulty", "normal"))
+
+    @classmethod
+    def set_difficulty(
+        cls, campaign: Optional[ZorkCampaign], difficulty: str
+    ) -> bool:
+        if campaign is None:
+            return False
+        normalized = cls.normalize_difficulty(difficulty)
+        campaign_state = cls.get_campaign_state(campaign)
+        campaign_state["difficulty"] = normalized
+        campaign.state_json = cls._dump_json(campaign_state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return True
+
+    @classmethod
+    def _difficulty_response_note(cls, difficulty: object) -> str:
+        normalized = cls.normalize_difficulty(difficulty)
+        note = cls.DIFFICULTY_NOTES.get(normalized)
+        if not note:
+            return ""
+        return (
+            f"[SYSTEM NOTE: FOR THIS RESPONSE ONLY: difficulty={normalized}. {note}]"
+        )
+
+    @classmethod
     def cancel_pending_timer(cls, campaign_id: int) -> Optional[dict]:
         """Cancel a pending timer and return its context dict (or None)."""
         ctx_dict = cls._pending_timers.pop(campaign_id, None)
@@ -7989,6 +8063,11 @@ class ZorkEmulator:
 
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
+        _difficulty = cls.normalize_difficulty(state.get("difficulty", "normal"))
+        _difficulty_note = cls._difficulty_response_note(_difficulty)
+        _response_style_note = cls.RESPONSE_STYLE_NOTE
+        if _difficulty_note:
+            _response_style_note = f"{_response_style_note}\n{_difficulty_note}"
         _calendar_state_before = json.dumps(
             state.get("calendar") or [],
             ensure_ascii=True,
@@ -8058,6 +8137,7 @@ class ZorkEmulator:
             f"WORLD_STATE: {cls._dump_json(model_state)}\n"
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
+            f"DIFFICULTY: {_difficulty}\n"
             f"ATTENTION_WINDOW_SECONDS: {cls.ATTENTION_WINDOW_SECONDS}\n"
             f"CURRENTLY_ATTENTIVE_PLAYERS: {cls._dump_json(_currently_attentive)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
@@ -8098,7 +8178,7 @@ class ZorkEmulator:
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
             f"RECENT_TURNS:\n{recent_text}\n"
-            f"{cls.RESPONSE_STYLE_NOTE}\n"
+            f"{_response_style_note}\n"
             f"{_action_label}: {action}\n"
         )
         system_prompt = cls.SYSTEM_PROMPT

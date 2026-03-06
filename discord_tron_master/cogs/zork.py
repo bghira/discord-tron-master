@@ -364,6 +364,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork on-rails enable|disable` lock/unlock story to the chapter outline\n"
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
             f"- `{prefix}zork speed [value]` view or set game speed multiplier (0.1–10.0, creator/admin only)\n"
+            f"- `{prefix}zork difficulty [story|easy|medium|normal|hard|impossible]` view or set difficulty template (creator/admin only)\n"
             f"- `{prefix}zork roster` view the NPC character roster with portraits\n"
             f"- `{prefix}zork roster <name> portrait` regenerate portrait for a character\n"
             f"- `{prefix}zork avatar <prompt|accept|decline>` generate/accept/decline your character avatar\n"
@@ -1233,6 +1234,60 @@ class Zork(commands.Cog):
                 return
             ZorkEmulator.set_speed_multiplier(campaign, multiplier)
             await ctx.send(f"Speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`.")
+
+    @zork.command(name="difficulty")
+    async def zork_difficulty(self, ctx, *, value: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+            levels = ", ".join(f"`{v}`" for v in ZorkEmulator.DIFFICULTY_LEVELS)
+            if value is None:
+                current = ZorkEmulator.get_difficulty(campaign)
+                await ctx.send(
+                    f"Current difficulty: `{current}` for campaign `{campaign.name}`.\n"
+                    f"Available: {levels}\n"
+                    f"Use `{self._prefix()}zork difficulty <level>` to change."
+                )
+                return
+
+            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+                await ctx.send(
+                    "Only the campaign creator or an Image Admin can change the difficulty."
+                )
+                return
+
+            normalized = ZorkEmulator.normalize_difficulty(value)
+            raw = " ".join(str(value or "").strip().lower().split())
+            if normalized == "normal" and raw not in {"normal", "default", "std", "normal mode"}:
+                await ctx.send(
+                    f"Unknown difficulty `{value}`. Available: {levels}"
+                )
+                return
+
+            ZorkEmulator.set_difficulty(campaign, normalized)
+            if normalized == "normal":
+                await ctx.send(
+                    f"Difficulty set to `{normalized}` for campaign `{campaign.name}`. "
+                    "No extra difficulty instruction is applied."
+                )
+            else:
+                await ctx.send(
+                    f"Difficulty set to `{normalized}` for campaign `{campaign.name}`."
+                )
 
     @zork.command(name="roster")
     async def zork_roster(self, ctx, *, args: str = None):
