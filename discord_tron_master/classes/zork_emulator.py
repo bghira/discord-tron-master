@@ -298,6 +298,7 @@ class ZorkEmulator:
         "- summary_update: string (one or two sentences of lasting changes)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
+        '- story_progression: object (optional; on-rails intent hint only. Keys: "advance" (bool), "target" ("hold"|"next-scene"|"next-chapter"), "reason" (short string). Use this when a subplot beat or scene outcome should push the main outlined story forward and you are not setting explicit state_update.current_chapter/current_scene.)\n'
         "- scene_image_prompt: string (optional; include whenever the visible scene changes in a meaningful way: entering a room, newly visible characters/objects, reveals, or strong visual shifts)\n"
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
@@ -4905,6 +4906,62 @@ class ZorkEmulator:
 
         Returns None if no story_outline exists (freeform campaigns unaffected).
         """
+        if not bool(campaign_state.get("on_rails", False)):
+            active_chapters = cls._chapters_for_prompt(
+                campaign_state,
+                active_only=True,
+                limit=4,
+            )
+            if active_chapters:
+                def _chapter_scene_label(value: object) -> str:
+                    text = str(value or "").strip()
+                    if not text:
+                        return "Untitled"
+                    text = text.replace("_", "-")
+                    parts = [part for part in text.split("-") if part]
+                    if not parts:
+                        return "Untitled"
+                    return " ".join(part.capitalize() for part in parts)[:120]
+
+                current = active_chapters[0]
+                lines: List[str] = []
+                lines.append(f"CURRENT CHAPTER: {current.get('title', 'Untitled')}")
+                lines.append(f"  Summary: {current.get('summary', '')}")
+                scenes = current.get("scenes") or []
+                current_scene_slug = str(current.get("current_scene") or "").strip()
+                if isinstance(scenes, list):
+                    for i, scene in enumerate(scenes):
+                        scene_slug = str(scene or "").strip()
+                        marker = (
+                            " >>> CURRENT SCENE <<<"
+                            if scene_slug and scene_slug == current_scene_slug
+                            else ""
+                        )
+                        lines.append(
+                            f"  Scene {i + 1}: {_chapter_scene_label(scene_slug)}{marker}"
+                        )
+                if len(active_chapters) > 1:
+                    lines.append("")
+                    for idx, row in enumerate(active_chapters[1:4], start=1):
+                        label = "NEXT CHAPTER" if idx == 1 else f"UPCOMING CHAPTER {idx}"
+                        lines.append(f"{label}: {row.get('title', 'Untitled')}")
+                        summary = str(row.get("summary") or "").strip()
+                        if summary:
+                            lines.append(f"  Preview: {summary[:320]}")
+                        row_scenes = row.get("scenes") or []
+                        if isinstance(row_scenes, list) and row_scenes:
+                            preview_titles = [
+                                _chapter_scene_label(scene)
+                                for scene in row_scenes[:3]
+                                if str(scene or "").strip()
+                            ]
+                            if preview_titles:
+                                lines.append(f"  Early scenes: {', '.join(preview_titles)}")
+                        lines.append("")
+                while lines and not lines[-1]:
+                    lines.pop()
+                return "\n".join(lines) if lines else None
+
         outline = campaign_state.get("story_outline")
         if not isinstance(outline, dict):
             return None
@@ -5083,6 +5140,94 @@ class ZorkEmulator:
             new_sc = 0
             if isinstance(current_entry, dict):
                 current_entry["completed"] = True
+        else:
+            return False
+
+        campaign_state["current_chapter"] = new_ch
+        campaign_state["current_scene"] = new_sc
+        return True
+
+    @classmethod
+    def _normalize_story_progression(cls, value: object) -> Optional[Dict[str, object]]:
+        if not isinstance(value, dict):
+            return None
+        target = " ".join(str(value.get("target") or "").strip().lower().split())
+        target = target.replace("_", "-")
+        allowed_targets = {"hold", "next-scene", "next-chapter"}
+        if target not in allowed_targets:
+            target = "hold"
+        advance_raw = value.get("advance")
+        if isinstance(advance_raw, bool):
+            advance = advance_raw
+        else:
+            advance_text = " ".join(str(advance_raw or "").strip().lower().split())
+            advance = advance_text in {"1", "true", "yes", "y", "advance"}
+        if target == "hold":
+            advance = False
+        reason = " ".join(str(value.get("reason") or "").strip().split())[:300]
+        return {
+            "advance": advance,
+            "target": target,
+            "reason": reason,
+        }
+
+    @classmethod
+    def _apply_story_progression_hint(
+        cls,
+        campaign_state: Dict[str, object],
+        story_progression: Optional[Dict[str, object]],
+        state_update: Dict[str, object],
+    ) -> bool:
+        if not bool(campaign_state.get("on_rails", False)):
+            return False
+        if not isinstance(state_update, dict):
+            return False
+        if "current_chapter" in state_update or "current_scene" in state_update:
+            return False
+        if not isinstance(story_progression, dict):
+            return False
+        if not bool(story_progression.get("advance")):
+            return False
+
+        outline = campaign_state.get("story_outline")
+        if not isinstance(outline, dict):
+            return False
+        chapters = outline.get("chapters")
+        if not isinstance(chapters, list) or not chapters:
+            return False
+
+        old_ch = cls._coerce_non_negative_int(
+            campaign_state.get("current_chapter", 0), default=0
+        )
+        old_sc = cls._coerce_non_negative_int(
+            campaign_state.get("current_scene", 0), default=0
+        )
+        old_ch = min(old_ch, len(chapters) - 1)
+        current_entry = chapters[old_ch] if 0 <= old_ch < len(chapters) else {}
+        scenes = current_entry.get("scenes")
+        if not isinstance(scenes, list):
+            scenes = []
+
+        target = str(story_progression.get("target") or "hold")
+        new_ch = old_ch
+        new_sc = old_sc
+        if target == "next-chapter":
+            if old_ch + 1 >= len(chapters):
+                return False
+            new_ch = old_ch + 1
+            new_sc = 0
+            if isinstance(current_entry, dict):
+                current_entry["completed"] = True
+        elif target == "next-scene":
+            if scenes and old_sc + 1 < len(scenes):
+                new_sc = old_sc + 1
+            elif old_ch + 1 < len(chapters):
+                new_ch = old_ch + 1
+                new_sc = 0
+                if isinstance(current_entry, dict):
+                    current_entry["completed"] = True
+            else:
+                return False
         else:
             return False
 
@@ -11794,6 +11939,7 @@ class ZorkEmulator:
                     summary_update = None
                     xp_awarded = 0
                     player_state_update = {}
+                    story_progression = None
                     scene_image_prompt = None
                     character_updates = {}
                     give_item = None
@@ -11824,6 +11970,9 @@ class ZorkEmulator:
                             xp_awarded = payload.get("xp_awarded", 0) or 0
                             player_state_update = (
                                 payload.get("player_state_update", {}) or {}
+                            )
+                            story_progression = cls._normalize_story_progression(
+                                payload.get("story_progression")
                             )
                             scene_image_prompt = payload.get("scene_image_prompt")
                             character_updates = (
@@ -11947,6 +12096,9 @@ class ZorkEmulator:
                                         player_state_update = (
                                             payload.get("player_state_update", {}) or {}
                                         )
+                                        story_progression = cls._normalize_story_progression(
+                                            payload.get("story_progression")
+                                        )
                                         scene_image_prompt = payload.get(
                                             "scene_image_prompt"
                                         )
@@ -12025,6 +12177,9 @@ class ZorkEmulator:
                                         summary_update = _rp.get("summary_update")
                                         xp_awarded = _rp.get("xp_awarded", 0) or 0
                                         player_state_update = _rp.get("player_state_update", {}) or {}
+                                        story_progression = cls._normalize_story_progression(
+                                            _rp.get("story_progression")
+                                        )
                                         scene_image_prompt = _rp.get("scene_image_prompt")
                                         character_updates = _rp.get("character_updates", {}) or {}
                                         give_item = _rp.get("give_item")
@@ -12108,6 +12263,9 @@ class ZorkEmulator:
                                         _repair_payload.get("player_state_update", {})
                                         or {}
                                     )
+                                    story_progression = cls._normalize_story_progression(
+                                        _repair_payload.get("story_progression")
+                                    )
                                     scene_image_prompt = _repair_payload.get(
                                         "scene_image_prompt"
                                     )
@@ -12170,6 +12328,9 @@ class ZorkEmulator:
                                     player_state_update = (
                                         _clock_payload.get("player_state_update", {}) or {}
                                     )
+                                    story_progression = cls._normalize_story_progression(
+                                        _clock_payload.get("story_progression")
+                                    )
                                     scene_image_prompt = _clock_payload.get("scene_image_prompt")
                                     character_updates = _clock_payload.get("character_updates", {}) or {}
                                     give_item = _clock_payload.get("give_item")
@@ -12225,6 +12386,9 @@ class ZorkEmulator:
                                     xp_awarded = _anti_payload.get("xp_awarded", 0) or 0
                                     player_state_update = (
                                         _anti_payload.get("player_state_update", {}) or {}
+                                    )
+                                    story_progression = cls._normalize_story_progression(
+                                        _anti_payload.get("story_progression")
                                     )
                                     scene_image_prompt = _anti_payload.get("scene_image_prompt")
                                     character_updates = _anti_payload.get("character_updates", {}) or {}
@@ -12302,6 +12466,7 @@ class ZorkEmulator:
                         f"--- NARRATION ---\n{narration}\n\n"
                         f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
                         f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
+                        f"--- STORY PROGRESSION ---\n{json.dumps(story_progression, indent=2)}\n\n"
                         f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
                         f"--- XP AWARDED ---\n{xp_awarded}\n"
                         f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
@@ -12413,33 +12578,10 @@ class ZorkEmulator:
                     campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
-                    # Chapter/scene advancement from state_update
-                    auto_story_advanced = cls._auto_advance_on_rails_story_context(
-                        campaign_state,
-                        action_text=action,
-                        narration=raw_narration,
-                        summary_update=summary_update,
-                        state_update=state_update if isinstance(state_update, dict) else {},
-                        player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
-                        character_updates=character_updates if isinstance(character_updates, dict) else {},
-                        calendar_update=calendar_update,
-                    )
-                    if auto_story_advanced:
-                        _zork_log(
-                            "AUTO STORY ADVANCE",
-                            json.dumps(
-                                {
-                                    "current_chapter": campaign_state.get("current_chapter"),
-                                    "current_scene": campaign_state.get("current_scene"),
-                                    "action": str(action or "")[:160],
-                                },
-                                ensure_ascii=True,
-                            ),
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state, "auto_story_advance"
-                        )
-
+                    # Chapter/scene advancement precedence:
+                    # 1. explicit state_update.current_* from model
+                    # 2. model story_progression hint
+                    # 3. harness auto-advance fallback
                     story_outline = campaign_state.get("story_outline")
                     if isinstance(story_outline, dict):
                         chapters = story_outline.get("chapters", [])
@@ -12483,6 +12625,55 @@ class ZorkEmulator:
                         state_update.pop("current_chapter", None)
                         state_update.pop("current_scene", None)
                         campaign.state_json = cls._dump_json(campaign_state)
+
+                    story_progressed = cls._apply_story_progression_hint(
+                        campaign_state,
+                        story_progression,
+                        state_update if isinstance(state_update, dict) else {},
+                    )
+                    if story_progressed:
+                        _zork_log(
+                            "STORY PROGRESSION APPLIED",
+                            json.dumps(
+                                {
+                                    "current_chapter": campaign_state.get("current_chapter"),
+                                    "current_scene": campaign_state.get("current_scene"),
+                                    "story_progression": story_progression,
+                                },
+                                ensure_ascii=True,
+                            ),
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state, "story_progression_hint"
+                        )
+
+                    auto_story_advanced = False
+                    if not story_progressed:
+                        auto_story_advanced = cls._auto_advance_on_rails_story_context(
+                            campaign_state,
+                            action_text=action,
+                            narration=raw_narration,
+                            summary_update=summary_update,
+                            state_update=state_update if isinstance(state_update, dict) else {},
+                            player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
+                            character_updates=character_updates if isinstance(character_updates, dict) else {},
+                            calendar_update=calendar_update,
+                        )
+                    if auto_story_advanced:
+                        _zork_log(
+                            "AUTO STORY ADVANCE",
+                            json.dumps(
+                                {
+                                    "current_chapter": campaign_state.get("current_chapter"),
+                                    "current_scene": campaign_state.get("current_scene"),
+                                    "action": str(action or "")[:160],
+                                },
+                                ensure_ascii=True,
+                            ),
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state, "auto_story_advance"
+                        )
 
                     _on_rails = bool(campaign_state.get("on_rails", False))
                     if character_updates and isinstance(character_updates, dict):
