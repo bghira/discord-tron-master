@@ -90,7 +90,7 @@ class ZorkEmulator:
     ATTACHMENT_PROMPT_OVERHEAD_TOKENS = 6_000  # reserve for system + user + IMDB + storyline JSON
     ATTACHMENT_RESPONSE_RESERVE_TOKENS = 4_000 # max_tokens used by finalize response
     ATTACHMENT_MAX_PARALLEL = 4
-    ATTACHMENT_MIN_SETUP_CHUNKS = 4
+    ATTACHMENT_MIN_SETUP_CHUNKS = 1
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
     SOURCE_MATERIAL_CATEGORY = "source"
     SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
@@ -2438,13 +2438,9 @@ class ZorkEmulator:
         if isinstance(att_text, str) and att_text.startswith("ERROR:"):
             await ctx.channel.send(att_text.replace("ERROR:", "", 1))
         elif att_text:
-            short_msg = cls._attachment_setup_length_error(att_text)
-            if short_msg:
-                await ctx.channel.send(short_msg)
-            else:
-                summary = await cls._summarise_long_text(att_text, ctx)
-                if summary:
-                    setup_data["attachment_summary"] = summary
+            summary = await cls._summarise_long_text(att_text, ctx)
+            if summary:
+                setup_data["attachment_summary"] = summary
 
         # Generate storyline variants
         variants_msg = await cls._setup_generate_storyline_variants(
@@ -3002,16 +2998,8 @@ class ZorkEmulator:
 
     @classmethod
     def _attachment_setup_length_error(cls, text: str) -> Optional[str]:
-        chunk_count = cls._estimate_attachment_chunk_count(text)
-        if chunk_count >= cls.ATTACHMENT_MIN_SETUP_CHUNKS:
-            return None
-        token_count = glm_token_count(str(text or ""))
-        min_tokens = cls.ATTACHMENT_CHUNK_TOKENS * cls.ATTACHMENT_MIN_SETUP_CHUNKS
-        return (
-            "Uploaded text is too short for setup ingestion "
-            f"({chunk_count}/{cls.ATTACHMENT_MIN_SETUP_CHUNKS} chunks, ~{token_count} tokens). "
-            f"Please upload a longer `.txt` file (about {min_tokens}+ tokens / {cls.ATTACHMENT_MIN_SETUP_CHUNKS}+ sections)."
-        )
+        # Short setup attachments are accepted; no minimum chunk threshold.
+        return None
 
     @classmethod
     def _attachment_fallback_summary(cls, text: str) -> str:
