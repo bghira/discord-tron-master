@@ -172,12 +172,15 @@ class Zork(commands.Cog):
         *,
         channel,
         summary_instructions: str | None = None,
+        default_label: str | None = None,
     ) -> tuple[str | None, str | None]:
         attachment_infos = await ZorkEmulator._extract_attachment_texts_from_message(
             ctx.message
         )
         if not attachment_infos:
             return None, None
+
+        fallback_label = str(default_label or "source-material").strip() or "source-material"
 
         summary_parts: list[str] = []
         ingest_messages: list[str] = []
@@ -202,7 +205,7 @@ class Zork(commands.Cog):
 
             attachment_label = ZorkEmulator._extract_attachment_label(
                 [attachment],
-                fallback="source-material",
+                fallback=fallback_label,
             )
 
             if source_format == ZorkEmulator.SOURCE_MATERIAL_FORMAT_GENERIC:
@@ -1071,12 +1074,22 @@ class Zork(commands.Cog):
 
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
         try:
-            ok, message = await ZorkEmulator.ingest_source_material_attachment(
+            summary, message = await self._prepare_thread_source_material(
+                ctx,
                 campaign,
-                ctx.message,
-                label=label,
                 channel=ctx.channel,
+                default_label=label,
+                summary_instructions=None,
             )
+            ok = True
+            if summary is None and (
+                message is None or "No `.txt` attachment found." in str(message)
+            ):
+                ok = False
+            if ok and summary and not message:
+                message = summary
+            elif ok and message and summary:
+                message = f"{summary}\n\n{message}"
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)

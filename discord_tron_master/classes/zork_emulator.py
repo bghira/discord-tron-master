@@ -2732,7 +2732,17 @@ class ZorkEmulator:
 
             if tool_name == "source_browse":
                 doc_key = str(payload.get("document_key") or "").strip()[:120]
-                wildcard = str(payload.get("wildcard") or "%").strip()[:120]
+                wildcard_raw = payload.get("wildcard")
+                wildcard = (
+                    str(wildcard_raw).strip()[:120]
+                    if wildcard_raw is not None
+                    else ""
+                )
+                wildcard_provided = bool(wildcard)
+                wildcard = wildcard or "%"
+                wildcard_meta = f"wildcard={wildcard!r}"
+                if not wildcard_provided:
+                    wildcard_meta = "wildcard=(omitted)"
                 limit = 60
                 try:
                     limit = max(1, min(120, int(payload.get("limit") or 60)))
@@ -2748,7 +2758,7 @@ class ZorkEmulator:
                     tool_result = (
                         f"SOURCE_BROWSE_RESULT "
                         f"(document_key={doc_key or '*'!r}, "
-                        f"wildcard={wildcard!r}, "
+                        f"{wildcard_meta}, "
                         f"showing {len(lines)}):\n"
                         + "\n".join(lines)
                     )
@@ -2756,7 +2766,7 @@ class ZorkEmulator:
                     tool_result = (
                         f"SOURCE_BROWSE_RESULT "
                         f"(document_key={doc_key or '*'!r}, "
-                        f"wildcard={wildcard!r}): no entries found"
+                        f"{wildcard_meta}): no entries found"
                     )
 
             elif tool_name == "memory_search":
@@ -2882,25 +2892,42 @@ class ZorkEmulator:
         source_payload = cls._source_material_prompt_payload(campaign.id)
         source_index_hint = ""
         if source_payload.get("available"):
+            docs = source_payload.get("docs") or []
+            doc_formats = {
+                str(doc.get("format") or "generic").strip().lower() for doc in docs
+            }
+            has_rulebook = "rulebook" in doc_formats
             doc_lines = []
-            for doc in source_payload.get("docs") or []:
+            for doc in docs:
                 doc_lines.append(
                     f"  - document_key='{doc.get('document_key')}' "
                     f"label='{doc.get('document_label')}' "
                     f"format='{doc.get('format')}' "
                     f"snippets={doc.get('chunk_count')}"
                 )
+            browse_instruction = (
+                "  Start by enumerating source keys so you know what is available:"
+                "\n  {\"tool_call\": \"source_browse\"}\n"
+                "  Then query only what you need with memory_search.\n"
+            )
+            if has_rulebook:
+                browse_instruction = (
+                    "  Mandatory first step (before any semantic search):"
+                    "\n  {\"tool_call\": \"source_browse\"}\n"
+                    "  (omit wildcard/document filters on this first pass to list all keys).\n"
+                )
             source_index_hint = (
                 "\nSOURCE_MATERIAL_INDEX: "
-                f"{source_payload.get('document_count')} document(s), "
-                f"{source_payload.get('chunk_count')} total snippet(s).\n"
+                + f"{source_payload.get('document_count')} document(s), "
+                + f"{source_payload.get('chunk_count')} total snippet(s).\n"
                 + "\n".join(doc_lines)
                 + "\nIMPORTANT: Before generating variants, browse the source material to understand "
-                "characters, locations, tone, and rules. Start by listing all keys:\n"
-                '  {"tool_call": "source_browse"}\n'
-                "Then drill into specific entries with:\n"
+                "characters, locations, tone, and rules.\n"
+                + browse_instruction
+                + "Then drill into specific entries with:\n"
                 '  {"tool_call": "memory_search", "category": "source", "queries": ["keyword"]}\n'
                 "Only return your final variants JSON after you have reviewed the source material.\n"
+                "If any source document is rulebook-formatted, do not skip source_browse for keys.\n"
             )
 
         name_tool_instructions = (
@@ -2913,24 +2940,42 @@ class ZorkEmulator:
         )
         source_tool_instructions = name_tool_instructions
         if source_payload.get("available"):
-            source_tool_instructions = (
-                "\nYou have tools to inspect ingested source material before generating your response.\n"
-                "To list all entries in a source document:\n"
-                '  {"tool_call": "source_browse", "document_key": "doc-key"}\n'
-                "To list all entries across all documents:\n"
-                '  {"tool_call": "source_browse"}\n'
-                "To filter entries by wildcard:\n"
-                '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
-                "To semantic-search source material:\n"
-                '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
-                "To generate culturally-appropriate character names:\n"
-                '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
-                "To call a tool, return ONLY the JSON tool_call object (no other keys). "
-                "You will receive the results and can call more tools or return your final response.\n"
-                "ALWAYS browse source material before generating variants — "
-                "the summary alone may not capture all characters, rules, or locations.\n"
-                "Use name_generate for ALL new original characters instead of inventing names.\n"
+            has_only_generic = all(
+                str(doc.get("format") or "generic").strip().lower() == "generic"
+                for doc in docs
             )
+            if has_only_generic:
+                source_tool_instructions = (
+                    "\nYou have tools for source-material exploration, but this source material "
+                    "is currently classified as generic and already summarized in attachment text.\n"
+                    "Only call source tools when you need exact wording beyond the summary:\n"
+                    '  {"tool_call": "memory_search", "category": "source", "queries": ["keyword"]}\n'
+                    "To generate culturally-appropriate character names:\n"
+                    '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
+                    "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+                    "You will receive the results and can call more tools or return your final response.\n"
+                    "Use name_generate for ALL new original characters instead of inventing names.\n"
+                )
+            else:
+                source_tool_instructions = (
+                    "\nYou have tools to inspect ingested source material before generating your response.\n"
+                    "MANDATORY: first, enumerate keys before semantic search:\n"
+                    '  {"tool_call": "source_browse"}\n'
+                    "(omit wildcard on first pass; do not filter yet).\n"
+                    "If you need one document only:\n"
+                    '  {"tool_call": "source_browse", "document_key": "doc-key"}\n'
+                    "After browsing, drill into specifics:\n"
+                    '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                    "To filter entries by wildcard only after initial listing:\n"
+                    '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
+                    "To generate culturally-appropriate character names:\n"
+                    '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
+                    "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+                    "You will receive the results and can call more tools or return your final response.\n"
+                    "ALWAYS browse source material before generating variants — "
+                    "the summary alone may not capture all characters, rules, or locations.\n"
+                    "Use name_generate for ALL new original characters instead of inventing names.\n"
+                )
 
         system_prompt = (
             "You are a creative game designer who builds interactive text-adventure campaigns.\n"
@@ -10356,9 +10401,17 @@ class ZorkEmulator:
                                 or first_payload.get("document")
                                 or ""
                             ).strip()[:120]
-                            browse_wildcard = str(
-                                first_payload.get("wildcard") or "%"
-                            ).strip()[:120]
+                            browse_wildcard_raw = first_payload.get("wildcard")
+                            browse_wildcard = (
+                                str(browse_wildcard_raw).strip()[:120]
+                                if browse_wildcard_raw is not None
+                                else ""
+                            )
+                            browse_wildcard_specified = bool(browse_wildcard)
+                            browse_wildcard = browse_wildcard or "%"
+                            wildcard_meta = f"wildcard={browse_wildcard!r}"
+                            if not browse_wildcard_specified:
+                                wildcard_meta = "wildcard=(omitted)"
                             browse_limit = 60
                             try:
                                 browse_limit = max(1, min(120, int(first_payload.get("limit") or 60)))
@@ -10374,7 +10427,7 @@ class ZorkEmulator:
                                 tool_result_block = (
                                     f"SOURCE_BROWSE_RESULT "
                                     f"(document_key={browse_doc_key or '*'!r}, "
-                                    f"wildcard={browse_wildcard!r}, "
+                                    f"{wildcard_meta}, "
                                     f"showing {len(lines)}):\n"
                                     + "\n".join(lines)
                                 )
@@ -10382,7 +10435,7 @@ class ZorkEmulator:
                                 tool_result_block = (
                                     f"SOURCE_BROWSE_RESULT "
                                     f"(document_key={browse_doc_key or '*'!r}, "
-                                    f"wildcard={browse_wildcard!r}): no entries found"
+                                    f"{wildcard_meta}): no entries found"
                                 )
                             _zork_log("SOURCE BROWSE BLOCK", tool_result_block)
                             tool_augmented_prompt = (
