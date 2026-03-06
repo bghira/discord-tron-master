@@ -2127,6 +2127,10 @@ class ZorkEmulator:
                 f"Is this correct? Reply **yes** to confirm, or tell me what it actually is "
                 f"(e.g. 'it's a movie called ...')."
             )
+        if attachment_summary:
+            msg += (
+                "\n\nAttached source text was loaded and will be used during setup generation."
+            )
         return msg
 
     @classmethod
@@ -2836,6 +2840,10 @@ class ZorkEmulator:
         """Return raw text from first .txt attachment, error string, or None."""
         attachments = getattr(message, "attachments", None)
         if not attachments:
+            # Support command contexts where attachments live on ctx.message.
+            inner_message = getattr(message, "message", None)
+            attachments = getattr(inner_message, "attachments", None)
+        if not attachments:
             return None
         txt_att = None
         for att in attachments:
@@ -2852,15 +2860,15 @@ class ZorkEmulator:
             raw = await txt_att.read()
         except Exception as e:
             logger.warning(f"Attachment read failed: {e}")
-            return None
+            return "ERROR:Could not read attached `.txt` file. Please re-upload and try again."
         if not raw:
-            return None
+            return "ERROR:Attached `.txt` file is empty."
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = raw.decode("latin-1")
         text = text.strip()
-        return text if text else None
+        return text if text else "ERROR:Attached `.txt` file is empty."
 
     ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
 
@@ -2915,6 +2923,33 @@ class ZorkEmulator:
             f"({chunk_count}/{cls.ATTACHMENT_MIN_SETUP_CHUNKS} chunks, ~{token_count} tokens). "
             f"Please upload a longer `.txt` file (about {min_tokens}+ tokens / {cls.ATTACHMENT_MIN_SETUP_CHUNKS}+ sections)."
         )
+
+    @classmethod
+    def _attachment_fallback_summary(cls, text: str) -> str:
+        """Deterministic setup fallback when all model chunk summaries fail."""
+        clean = str(text or "").strip()
+        if not clean:
+            return ""
+        chunks, _, _, _, _ = cls._chunk_text_by_tokens(
+            clean,
+            min_chunk_tokens=cls.ATTACHMENT_CHUNK_TOKENS,
+            max_chunks=6,
+        )
+        if not chunks:
+            return ""
+        selected = chunks[:6]
+        lines: List[str] = [
+            "Fallback extraction from uploaded source text (automated summary failed):"
+        ]
+        for idx, chunk in enumerate(selected, start=1):
+            snippet = " ".join(str(chunk or "").split())
+            if len(snippet) > 1200:
+                snippet = snippet[:1200].rsplit(" ", 1)[0].strip() + "..."
+            lines.append(f"[Excerpt {idx}/{len(selected)}] {snippet}")
+        result = "\n\n".join(lines).strip()
+        if len(result) > 9000:
+            result = result[:9000].rsplit(" ", 1)[0].strip() + "..."
+        return result
 
     @classmethod
     async def _summarise_long_text(cls, text: str, ctx_message, channel=None) -> str:
@@ -3008,13 +3043,26 @@ class ZorkEmulator:
         summaries = [s for s in summaries if s]
         if not summaries:
             logger.error("All chunk summaries failed")
+            fallback = cls._attachment_fallback_summary(text)
+            if fallback:
+                _zork_log(
+                    "ATTACHMENT SUMMARY FALLBACK",
+                    f"text_len={len(text)} fallback_chars={len(fallback)}",
+                )
             try:
-                await status_msg.edit(content="Summary failed — continuing without attachment.")
+                if fallback:
+                    await status_msg.edit(
+                        content="Summary model failed — using direct source excerpts fallback."
+                    )
+                else:
+                    await status_msg.edit(
+                        content="Summary failed — continuing without attachment."
+                    )
                 await asyncio.sleep(5)
                 await status_msg.delete()
             except Exception:
                 pass
-            return ""
+            return fallback
 
         # Step 3 — check total token length
         joined = "\n\n".join(summaries)
