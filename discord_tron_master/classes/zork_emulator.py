@@ -536,9 +536,10 @@ class ZorkEmulator:
         '  {"tool_call": "source_browse", "document_key": "my-rulebook", "wildcard": "weapon*"}\n'
         "- Browse all source documents at once (omit document_key):\n"
         '  {"tool_call": "source_browse"}\n'
-        "source_browse returns the raw KEY: value lines, up to 60 by default (adjustable via 'limit').\n"
+        "source_browse returns a compact key index on the first unfiltered pass, up to 60 by default "
+        "(adjustable via 'limit'). With a specific wildcard it returns the matching raw KEY: value lines.\n"
         "STRATEGY: for a rulebook you have not seen before, call source_browse with no wildcard first to see what keys exist, "
-        "then use memory_search with category 'source:<document_key>' for semantic detail on specific entries.\n"
+        "then use source_browse with a wildcard or memory_search with category 'source:<document_key>' for detail.\n"
         "\nNAME GENERATION — name_generate tool:\n"
         "When introducing a new NPC, use name_generate to get real culturally-appropriate names instead of inventing them.\n"
         "- Generate names filtered by cultural origin:\n"
@@ -3963,6 +3964,9 @@ class ZorkEmulator:
                 continue
             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-\s]*", key):
                 rulebook_lines += 1
+
+        if len(lines) == 1 and rulebook_lines == 1:
+            return cls.SOURCE_MATERIAL_FORMAT_RULEBOOK
 
         if len(lines) >= 4 and rulebook_lines >= max(2, len(lines) * 0.45):
             return cls.SOURCE_MATERIAL_FORMAT_RULEBOOK

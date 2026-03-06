@@ -522,18 +522,23 @@ class ZorkMemory:
             for document_key, document_label, count, last_at in rows:
                 sample_chunk = ""
                 if document_key:
-                    sample_row = conn.execute(
+                    sample_rows = conn.execute(
                         """
                         SELECT chunk_text
                         FROM source_material_chunks
                         WHERE campaign_id = ? AND document_key = ?
                         ORDER BY chunk_index ASC
-                        LIMIT 1
+                        LIMIT 6
                         """,
                         (campaign_id, document_key),
-                    ).fetchone()
-                    if sample_row and sample_row[0]:
-                        sample_chunk = str(sample_row[0])
+                    ).fetchall()
+                    sample_parts = [
+                        str(sample_row[0] or "").strip()
+                        for sample_row in sample_rows
+                        if str(sample_row[0] or "").strip()
+                    ]
+                    if sample_parts:
+                        sample_chunk = "\n".join(sample_parts)
                 out.append(
                     {
                         "document_key": str(document_key or ""),
@@ -726,12 +731,12 @@ class ZorkMemory:
         wildcard: str = "%",
         limit: int = 60,
     ) -> List[str]:
-        """Return chunk_text lines from rulebook-format source material.
+        """Return a compact source index or matching raw source lines.
 
-        Useful for browsing KEY: value entries.  *wildcard* filters via
-        SQL LIKE against chunk_text (``*`` is converted to ``%``).
-        When *wildcard* is empty or ``*`` / ``%``, all lines are returned
-        up to *limit*.
+        When *wildcard* is omitted / broad (``*`` or ``%``), return a compact
+        key listing so the model can see the document taxonomy without burning
+        context on full fact bodies. When *wildcard* is specific, return the
+        raw matching source lines.
         """
         try:
             conn = cls._get_conn()
@@ -740,11 +745,12 @@ class ZorkMemory:
                 pattern = "%"
             else:
                 pattern = pattern.replace("*", "%")
+            broad_browse = pattern in {"%", "%%"}
             key = str(document_key or "").strip()
             if key:
                 rows = conn.execute(
                     """
-                    SELECT chunk_text
+                    SELECT document_key, chunk_text
                     FROM source_material_chunks
                     WHERE campaign_id = ? AND document_key = ?
                       AND chunk_text LIKE ? ESCAPE '\\'
@@ -756,7 +762,7 @@ class ZorkMemory:
             else:
                 rows = conn.execute(
                     """
-                    SELECT chunk_text
+                    SELECT document_key, chunk_text
                     FROM source_material_chunks
                     WHERE campaign_id = ?
                       AND chunk_text LIKE ? ESCAPE '\\'
@@ -765,7 +771,31 @@ class ZorkMemory:
                     """,
                     (campaign_id, pattern, max(1, int(limit))),
                 ).fetchall()
-            return [str(r[0] or "").strip() for r in rows if str(r[0] or "").strip()]
+            cleaned_rows = []
+            for row_doc_key, row_chunk_text in rows:
+                chunk_text = str(row_chunk_text or "").strip()
+                if not chunk_text:
+                    continue
+                cleaned_rows.append((str(row_doc_key or "").strip(), chunk_text))
+            if not broad_browse:
+                return [chunk_text for _, chunk_text in cleaned_rows]
+
+            compact: List[str] = []
+            seen = set()
+            for row_doc_key, chunk_text in cleaned_rows:
+                key_text = chunk_text
+                if ":" in chunk_text:
+                    key_text = chunk_text.split(":", 1)[0].strip() or chunk_text
+                if key:
+                    line = key_text
+                else:
+                    line = f"{row_doc_key}: {key_text}" if row_doc_key else key_text
+                normalized = " ".join(line.lower().split())
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                compact.append(line)
+            return compact
         except Exception:
             logger.exception(
                 "Zork memory: browse_source_keys failed for campaign %s",
