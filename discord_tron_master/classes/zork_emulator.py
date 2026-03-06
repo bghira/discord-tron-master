@@ -321,7 +321,7 @@ class ZorkEmulator:
         "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
         "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
-        "- Use source payload to bias queries: rulebook docs are fact lists, story docs are narrative scenes, generic docs are mixed/loose notes.\n"
+        "- Use source payload to bias queries: rulebook docs are key-snippet indexes (browse with source_browse first), story docs are narrative scenes, generic docs are mixed/loose notes.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
         "- Use player_state_update.room_title for a short location title (e.g. 'Penthouse Suite, Escala') whenever location changes.\n"
@@ -505,6 +505,17 @@ class ZorkEmulator:
         "By default source scope returns the highest-similarity snippets. "
         "For additional context around a hit, set before_lines/after_lines\n"
         "(defaults: 0/0; keep ranges small, e.g. 3-8).\n"
+        "\nRULEBOOK BROWSING — source_browse tool:\n"
+        "Rulebook-format documents are key-snippet indexes. Use source_browse to list entries before drilling into specifics.\n"
+        "- List ALL keys in a rulebook document (default when you have no specific lead):\n"
+        '  {"tool_call": "source_browse", "document_key": "my-rulebook"}\n'
+        "- Filter keys by wildcard (when you know what you are looking for):\n"
+        '  {"tool_call": "source_browse", "document_key": "my-rulebook", "wildcard": "weapon*"}\n'
+        "- Browse all source documents at once (omit document_key):\n"
+        '  {"tool_call": "source_browse"}\n'
+        "source_browse returns the raw KEY: value lines, up to 60 by default (adjustable via 'limit').\n"
+        "STRATEGY: for a rulebook you have not seen before, call source_browse with no wildcard first to see what keys exist, "
+        "then use memory_search with category 'source:<document_key>' for semantic detail on specific entries.\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -2590,21 +2601,206 @@ class ZorkEmulator:
         return variants_msg
 
     @classmethod
+    async def _setup_tool_loop(
+        cls,
+        system_prompt: str,
+        user_prompt: str,
+        campaign,
+        *,
+        temperature: float = 0.8,
+        max_tokens: int = 3000,
+        max_tool_steps: int = 6,
+    ) -> str:
+        """Run a lightweight tool loop for setup LLM calls.
+
+        Supports ``source_browse`` and ``memory_search`` (source-scoped)
+        so the model can inspect ingested source material before producing
+        its final JSON response.  Returns the raw final response string.
+        """
+        gpt = GPT()
+        augmented_prompt = user_prompt
+
+        for _step in range(max_tool_steps + 1):
+            response = await gpt.turbo_completion(
+                system_prompt,
+                augmented_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if not response:
+                return "{}"
+            response = cls._clean_response(response)
+            json_text = cls._extract_json(response)
+            if not json_text:
+                return response
+            try:
+                payload = cls._parse_json_lenient(json_text)
+            except Exception:
+                return response
+            if not cls._is_tool_call(payload):
+                return response
+
+            tool_name = str(payload.get("tool_call") or "").strip()
+            tool_result = ""
+
+            if tool_name == "source_browse":
+                doc_key = str(payload.get("document_key") or "").strip()[:120]
+                wildcard = str(payload.get("wildcard") or "%").strip()[:120]
+                limit = 60
+                try:
+                    limit = max(1, min(120, int(payload.get("limit") or 60)))
+                except (TypeError, ValueError):
+                    pass
+                lines = ZorkMemory.browse_source_keys(
+                    campaign.id,
+                    document_key=doc_key or None,
+                    wildcard=wildcard,
+                    limit=limit,
+                )
+                if lines:
+                    tool_result = (
+                        f"SOURCE_BROWSE_RESULT "
+                        f"(document_key={doc_key or '*'!r}, "
+                        f"wildcard={wildcard!r}, "
+                        f"showing {len(lines)}):\n"
+                        + "\n".join(lines)
+                    )
+                else:
+                    tool_result = (
+                        f"SOURCE_BROWSE_RESULT "
+                        f"(document_key={doc_key or '*'!r}, "
+                        f"wildcard={wildcard!r}): no entries found"
+                    )
+
+            elif tool_name == "memory_search":
+                raw_queries = payload.get("queries") or []
+                if not raw_queries:
+                    legacy = str(payload.get("query") or "").strip()
+                    if legacy:
+                        raw_queries = [legacy]
+                queries = [
+                    str(q).strip()[:200]
+                    for q in (raw_queries if isinstance(raw_queries, list) else [raw_queries])
+                    if str(q or "").strip()
+                ][:6]
+                category = str(payload.get("category") or "source").strip()
+                if not category.startswith("source"):
+                    category = "source"
+                doc_key_scope = None
+                if category.startswith("source:"):
+                    doc_key_scope = category.split(":", 1)[1].strip() or None
+                before_lines = 0
+                after_lines = 0
+                try:
+                    before_lines = max(0, min(10, int(payload.get("before_lines") or 0)))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    after_lines = max(0, min(10, int(payload.get("after_lines") or 0)))
+                except (TypeError, ValueError):
+                    pass
+                hits = []
+                for q in queries:
+                    results = ZorkMemory.search_source_material(
+                        q,
+                        campaign.id,
+                        document_key=doc_key_scope,
+                        top_k=5,
+                        before_lines=before_lines,
+                        after_lines=after_lines,
+                    )
+                    for doc_k, doc_l, idx, text, score in results:
+                        if score >= 0.35:
+                            hits.append(f"[{doc_k}#{idx} score={score:.2f}] {text}")
+                if hits:
+                    tool_result = (
+                        "SOURCE_SEARCH_RESULT:\n" + "\n".join(hits[:20])
+                    )
+                else:
+                    tool_result = "SOURCE_SEARCH_RESULT: no relevant hits"
+
+            else:
+                tool_result = (
+                    f"UNKNOWN_TOOL: '{tool_name}' is not available during setup. "
+                    "Available tools: source_browse, memory_search (category 'source'). "
+                    "Return your final JSON now."
+                )
+
+            _zork_log(
+                f"SETUP TOOL LOOP step={_step} tool={tool_name}",
+                tool_result[:2000],
+            )
+            augmented_prompt = f"{augmented_prompt}\n{tool_result}\n"
+
+        # Exhausted steps — force final response.
+        augmented_prompt = (
+            f"{augmented_prompt}\n"
+            "TOOL_CHAIN_LIMIT: Stop calling tools. Return your final JSON now.\n"
+        )
+        response = await gpt.turbo_completion(
+            system_prompt, augmented_prompt, temperature=temperature, max_tokens=max_tokens
+        )
+        return cls._clean_response(response or "{}")
+
+    @classmethod
     async def _setup_generate_storyline_variants(
         cls, campaign, setup_data, user_guidance: str = None
     ) -> str:
         """LLM generates 2-3 storyline variants, returns formatted message."""
-        gpt = GPT()
         is_known = setup_data.get("is_known_work", False)
         raw_name = setup_data.get("raw_name", "unknown")
         work_desc = setup_data.get("work_description", "")
         work_type = setup_data.get("work_type", "work")
+
+        # Build source material index hint if docs are available.
+        source_payload = cls._source_material_prompt_payload(campaign.id)
+        source_index_hint = ""
+        if source_payload.get("available"):
+            doc_lines = []
+            for doc in source_payload.get("docs") or []:
+                doc_lines.append(
+                    f"  - document_key='{doc.get('document_key')}' "
+                    f"label='{doc.get('document_label')}' "
+                    f"format='{doc.get('format')}' "
+                    f"snippets={doc.get('chunk_count')}"
+                )
+            source_index_hint = (
+                "\nSOURCE_MATERIAL_INDEX: "
+                f"{source_payload.get('document_count')} document(s), "
+                f"{source_payload.get('chunk_count')} total snippet(s).\n"
+                + "\n".join(doc_lines)
+                + "\nIMPORTANT: Before generating variants, browse the source material to understand "
+                "characters, locations, tone, and rules. Start by listing all keys:\n"
+                '  {"tool_call": "source_browse"}\n'
+                "Then drill into specific entries with:\n"
+                '  {"tool_call": "memory_search", "category": "source", "queries": ["keyword"]}\n'
+                "Only return your final variants JSON after you have reviewed the source material.\n"
+            )
+
+        source_tool_instructions = ""
+        if source_payload.get("available"):
+            source_tool_instructions = (
+                "\nYou have tools to inspect ingested source material before generating your response.\n"
+                "To list all entries in a source document:\n"
+                '  {"tool_call": "source_browse", "document_key": "doc-key"}\n'
+                "To list all entries across all documents:\n"
+                '  {"tool_call": "source_browse"}\n'
+                "To filter entries by wildcard:\n"
+                '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
+                "To semantic-search source material:\n"
+                '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+                "You will receive the results and can call more tools or return your final response.\n"
+                "ALWAYS browse source material before generating variants — "
+                "the summary alone may not capture all characters, rules, or locations.\n"
+            )
 
         system_prompt = (
             "You are a creative game designer who builds interactive text-adventure campaigns.\n"
             "All characters in the game are adults (18+), regardless of source material ages.\n"
             "For non-canonical/original characters, choose distinctive specific names; avoid generic defaults "
             "(Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, River) unless source canon requires them.\n"
+            f"{source_tool_instructions}"
             "Return ONLY valid JSON with a single key 'variants' containing an array of 2-3 objects.\n"
             "Each object must have:\n"
             '- "id": string (e.g. "variant-1")\n'
@@ -2663,6 +2859,7 @@ class ZorkEmulator:
                 f"Description: {work_desc}\n"
                 f"{imdb_context}"
                 f"{attachment_context}"
+                f"{source_index_hint}"
                 f"{genre_context}"
                 f"{guidance_context}\n"
                 f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
@@ -2675,6 +2872,7 @@ class ZorkEmulator:
                 f"Generate 2-3 storyline variants for an original text-adventure campaign "
                 f"called '{raw_name}'.\n"
                 f"{attachment_context}"
+                f"{source_index_hint}"
                 f"{genre_context}"
                 f"{guidance_context}"
                 f"Each variant should have a different tone, central conflict, or protagonist archetype. "
@@ -2691,18 +2889,20 @@ class ZorkEmulator:
             try:
                 cur_prompt = user_prompt
                 if attempt == 1:
-                    # Retry must preserve all original context (including source material).
                     cur_prompt = (
                         f"{user_prompt}\n\n"
                         "FORMAT REPAIR: Your previous response was invalid or incomplete JSON. "
                         "Return ONLY one valid JSON object with key 'variants' and no trailing text."
                     )
                     _zork_log(f"SETUP VARIANT RETRY campaign={campaign.id}", cur_prompt)
-                response = await gpt.turbo_completion(
-                    system_prompt, cur_prompt, temperature=0.8, max_tokens=3000
+                response = await cls._setup_tool_loop(
+                    system_prompt,
+                    cur_prompt,
+                    campaign,
+                    temperature=0.8,
+                    max_tokens=3000,
                 )
                 _zork_log("SETUP VARIANT RAW RESPONSE", response or "(empty)")
-                response = cls._clean_response(response or "{}")
                 json_text = cls._extract_json(response)
                 result = cls._parse_json_lenient(json_text) if json_text else {}
                 if isinstance(result.get("variants"), list) and result["variants"]:
@@ -2856,7 +3056,6 @@ class ZorkEmulator:
     @classmethod
     async def _setup_finalize(cls, campaign, state, setup_data, user_id: int = None) -> str:
         """LLM generates the full world. Populates characters, outline, summary, etc."""
-        gpt = GPT()
         variants = setup_data.get("storyline_variants", [])
         chosen_id = setup_data.get("chosen_variant_id", "variant-1")
         chosen = None
@@ -2885,11 +3084,55 @@ class ZorkEmulator:
         else:
             on_rails = bool(novel_prefs.get("on_rails", False))
 
+        # Build source material index hint if docs are available.
+        source_payload = cls._source_material_prompt_payload(campaign.id)
+        source_index_hint = ""
+        if source_payload.get("available"):
+            doc_lines = []
+            for doc in source_payload.get("docs") or []:
+                doc_lines.append(
+                    f"  - document_key='{doc.get('document_key')}' "
+                    f"label='{doc.get('document_label')}' "
+                    f"format='{doc.get('format')}' "
+                    f"snippets={doc.get('chunk_count')}"
+                )
+            source_index_hint = (
+                "\nSOURCE_MATERIAL_INDEX: "
+                f"{source_payload.get('document_count')} document(s), "
+                f"{source_payload.get('chunk_count')} total snippet(s).\n"
+                + "\n".join(doc_lines)
+                + "\nIMPORTANT: Before building the world, browse the source material to understand "
+                "characters, locations, tone, and rules. Start by listing all keys:\n"
+                '  {"tool_call": "source_browse"}\n'
+                "Then drill into specific entries with:\n"
+                '  {"tool_call": "memory_search", "category": "source", "queries": ["keyword"]}\n'
+                "Only return your final world JSON after you have reviewed the source material.\n"
+            )
+
+        source_tool_instructions = ""
+        if source_payload.get("available"):
+            source_tool_instructions = (
+                "\nYou have tools to inspect ingested source material before generating your response.\n"
+                "To list all entries in a source document:\n"
+                '  {"tool_call": "source_browse", "document_key": "doc-key"}\n'
+                "To list all entries across all documents:\n"
+                '  {"tool_call": "source_browse"}\n'
+                "To filter entries by wildcard:\n"
+                '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
+                "To semantic-search source material:\n"
+                '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+                "You will receive the results and can call more tools or return your final response.\n"
+                "ALWAYS browse source material before building the world — "
+                "the summary alone may not capture all characters, rules, or locations.\n"
+            )
+
         finalize_system = (
             "You are a world-builder for interactive text-adventure campaigns.\n"
             "All characters in the game are adults (18+), regardless of source material ages.\n"
             "For non-canonical/original characters, choose distinctive specific names; avoid generic defaults "
             "(Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, River) unless source canon requires them.\n"
+            f"{source_tool_instructions}"
             "Return ONLY valid JSON with these keys:\n"
             '- "characters": object keyed by slug-id (lowercase-hyphenated). Each character has: '
             "name, personality, background, appearance, location, current_status, allegiance, relationship.\n"
@@ -2931,6 +3174,7 @@ class ZorkEmulator:
             f"Description: {setup_data.get('work_description', '')}\n"
             f"{imdb_context}"
             f"{attachment_context}"
+            f"{source_index_hint}"
             f"{genre_context}"
             f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
             f"Include the main character '{chosen.get('main_character', '')}' and all essential NPCs "
@@ -2953,16 +3197,20 @@ class ZorkEmulator:
                         f"Focus on the setting, atmosphere, and adventure.\n"
                         f"{imdb_context}"
                         f"{attachment_context}"
+                        f"{source_index_hint}"
                         f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
                         "Source-material summary (if present) is authoritative; keep names, locations, and plot faithful to it.\n"
                         "Include all essential NPCs and expand chapters into scenes."
                     )
                     _zork_log(f"SETUP FINALIZE RETRY campaign={campaign.id}", cur_user)
-                response = await gpt.turbo_completion(
-                    finalize_system, cur_user, temperature=0.7, max_tokens=4000
+                response = await cls._setup_tool_loop(
+                    finalize_system,
+                    cur_user,
+                    campaign,
+                    temperature=0.7,
+                    max_tokens=4000,
                 )
                 _zork_log("SETUP FINALIZE RAW RESPONSE", response or "(empty)")
-                response = cls._clean_response(response or "{}")
                 json_text = cls._extract_json(response)
                 world = cls._parse_json_lenient(json_text) if json_text else {}
                 if world and world.get("characters") or world.get("start_room"):
@@ -9743,6 +9991,10 @@ class ZorkEmulator:
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
                                 "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
+                                "- To browse all keys in a rulebook-format source document (list before drilling in):\n"
+                                '  {"tool_call": "source_browse", "document_key": "document-key"}\n'
+                                "- To filter rulebook keys by wildcard:\n"
+                                '  {"tool_call": "source_browse", "document_key": "document-key", "wildcard": "keyword*"}\n'
                                 )
                             if roster_hints:
                                 hint_lines = []
@@ -9949,6 +10201,56 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "source_browse":
+                            browse_doc_key = str(
+                                first_payload.get("document_key")
+                                or first_payload.get("document")
+                                or ""
+                            ).strip()[:120]
+                            browse_wildcard = str(
+                                first_payload.get("wildcard") or "%"
+                            ).strip()[:120]
+                            browse_limit = 60
+                            try:
+                                browse_limit = max(1, min(120, int(first_payload.get("limit") or 60)))
+                            except (TypeError, ValueError):
+                                pass
+                            lines = ZorkMemory.browse_source_keys(
+                                campaign.id,
+                                document_key=browse_doc_key or None,
+                                wildcard=browse_wildcard,
+                                limit=browse_limit,
+                            )
+                            if lines:
+                                tool_result_block = (
+                                    f"SOURCE_BROWSE_RESULT "
+                                    f"(document_key={browse_doc_key or '*'!r}, "
+                                    f"wildcard={browse_wildcard!r}, "
+                                    f"showing {len(lines)}):\n"
+                                    + "\n".join(lines)
+                                )
+                            else:
+                                tool_result_block = (
+                                    f"SOURCE_BROWSE_RESULT "
+                                    f"(document_key={browse_doc_key or '*'!r}, "
+                                    f"wildcard={browse_wildcard!r}): no entries found"
+                                )
+                            _zork_log("SOURCE BROWSE BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("SOURCE BROWSE AUGMENTED RESPONSE", response)
 
                         elif tool_name == "plot_plan":
                             campaign_state_plot = cls.get_campaign_state(campaign)

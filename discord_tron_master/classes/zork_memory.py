@@ -717,6 +717,62 @@ class ZorkMemory:
             )
             return []
 
+    @classmethod
+    def browse_source_keys(
+        cls,
+        campaign_id: int,
+        *,
+        document_key: Optional[str] = None,
+        wildcard: str = "%",
+        limit: int = 60,
+    ) -> List[str]:
+        """Return chunk_text lines from rulebook-format source material.
+
+        Useful for browsing KEY: value entries.  *wildcard* filters via
+        SQL LIKE against chunk_text (``*`` is converted to ``%``).
+        When *wildcard* is empty or ``*`` / ``%``, all lines are returned
+        up to *limit*.
+        """
+        try:
+            conn = cls._get_conn()
+            pattern = str(wildcard or "%").strip()
+            if not pattern or pattern == "*":
+                pattern = "%"
+            else:
+                pattern = pattern.replace("*", "%")
+            key = str(document_key or "").strip()
+            if key:
+                rows = conn.execute(
+                    """
+                    SELECT chunk_text
+                    FROM source_material_chunks
+                    WHERE campaign_id = ? AND document_key = ?
+                      AND chunk_text LIKE ? ESCAPE '\\'
+                    ORDER BY chunk_index ASC
+                    LIMIT ?
+                    """,
+                    (campaign_id, key, pattern, max(1, int(limit))),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT chunk_text
+                    FROM source_material_chunks
+                    WHERE campaign_id = ?
+                      AND chunk_text LIKE ? ESCAPE '\\'
+                    ORDER BY document_key ASC, chunk_index ASC
+                    LIMIT ?
+                    """,
+                    (campaign_id, pattern, max(1, int(limit))),
+                ).fetchall()
+            return [str(r[0] or "").strip() for r in rows if str(r[0] or "").strip()]
+        except Exception:
+            logger.exception(
+                "Zork memory: browse_source_keys failed for campaign %s",
+                campaign_id,
+            )
+            return []
+
     # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------
