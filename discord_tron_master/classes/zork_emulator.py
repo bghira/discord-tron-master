@@ -3087,28 +3087,31 @@ class ZorkEmulator:
     # ── Attachment helpers ─────────────────────────────────────────────
 
     @classmethod
-    async def _extract_attachment_text(cls, message) -> Optional[str]:
-        """Return raw text from first .txt attachment, error string, or None."""
+    def _txt_attachments_from_message(cls, message) -> list:
         attachments = getattr(message, "attachments", None)
         if not attachments:
-            # Support command contexts where attachments live on ctx.message.
             inner_message = getattr(message, "message", None)
             attachments = getattr(inner_message, "attachments", None)
         if not attachments:
+            return []
+        return [
+            att
+            for att in attachments
+            if str(getattr(att, "filename", "") or "").lower().endswith(".txt")
+        ]
+
+    @classmethod
+    async def _extract_attachment_text_from_attachment(cls, attachment) -> Optional[str]:
+        if not attachment or not getattr(attachment, "filename", None):
             return None
-        txt_att = None
-        for att in attachments:
-            if att.filename and att.filename.lower().endswith(".txt"):
-                txt_att = att
-                break
-        if txt_att is None:
+        if not str(attachment.filename).lower().endswith(".txt"):
             return None
-        if txt_att.size and txt_att.size > cls.ATTACHMENT_MAX_BYTES:
-            size_kb = txt_att.size // 1024
+        if attachment.size and attachment.size > cls.ATTACHMENT_MAX_BYTES:
+            size_kb = attachment.size // 1024
             limit_kb = cls.ATTACHMENT_MAX_BYTES // 1024
             return f"ERROR:File too large ({size_kb}KB, limit {limit_kb}KB)"
         try:
-            raw = await txt_att.read()
+            raw = await attachment.read()
         except Exception as e:
             logger.warning(f"Attachment read failed: {e}")
             return "ERROR:Could not read attached `.txt` file. Please re-upload and try again."
@@ -3120,6 +3123,22 @@ class ZorkEmulator:
             text = raw.decode("latin-1")
         text = text.strip()
         return text if text else "ERROR:Attached `.txt` file is empty."
+
+    @classmethod
+    async def _extract_attachment_texts_from_message(cls, message) -> list[tuple]:
+        extracted: list[tuple] = []
+        for attachment in cls._txt_attachments_from_message(message):
+            attachment_text = await cls._extract_attachment_text_from_attachment(attachment)
+            extracted.append((attachment, attachment_text))
+        return extracted
+
+    @classmethod
+    async def _extract_attachment_text(cls, message) -> Optional[str]:
+        """Return raw text from first .txt attachment, error string, or None."""
+        attachments = cls._txt_attachments_from_message(message)
+        if not attachments:
+            return None
+        return await cls._extract_attachment_text_from_attachment(attachments[0])
 
     ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
 
@@ -3431,7 +3450,10 @@ class ZorkEmulator:
 
     @classmethod
     def _extract_attachment_label(cls, message, fallback: str = "source-material") -> str:
-        attachments = getattr(message, "attachments", None) or []
+        if isinstance(message, (list, tuple)):
+            attachments = message
+        else:
+            attachments = getattr(message, "attachments", None) or []
         for att in attachments:
             filename = str(getattr(att, "filename", "") or "").strip()
             if not filename.lower().endswith(".txt"):
@@ -3594,17 +3616,47 @@ class ZorkEmulator:
         if not raw_text:
             return False, "No `.txt` attachment found."
 
+        return await cls.ingest_source_material_text(
+            campaign,
+            raw_text,
+            label=label,
+            channel=channel,
+            message=message,
+        )
+
+    @classmethod
+    async def ingest_source_material_text(
+        cls,
+        campaign: ZorkCampaign,
+        raw_text: str,
+        *,
+        label: Optional[str] = None,
+        channel=None,
+        source_format: Optional[str] = None,
+        message=None,
+    ) -> Tuple[bool, str]:
+        if not raw_text:
+            return False, "No `.txt` attachment found."
+
         chunks, total_tokens, _, _, _ = cls._chunk_text_by_tokens(raw_text)
         if not chunks:
             return False, "Attachment has no usable text."
 
         classification_chunk = chunks[0] if chunks else raw_text[:4000]
-        source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
-        try:
-            source_format = await cls._classify_source_material_format(classification_chunk)
-        except Exception as e:
-            logger.warning(f"Source material classification crashed; defaulting generic: {e}")
-            source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        if source_format is None:
+            try:
+                source_format = await cls._classify_source_material_format(
+                    classification_chunk
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Source material classification crashed; defaulting generic: {e}"
+                )
+                source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
+        else:
+            source_format = cls._normalize_source_material_format(source_format)
+            if not source_format:
+                source_format = cls.SOURCE_MATERIAL_FORMAT_GENERIC
         source_mode = cls._source_material_storage_mode(source_format)
 
         resolved_label = " ".join(str(label or "").strip().split())[:120]
@@ -3627,11 +3679,24 @@ class ZorkEmulator:
                 await status_msg.edit(
                     content=(
                         f"Detected source material format `{source_format}` for "
-                        f"`{resolved_label}`. Ingesting now..."
+                        f"`{resolved_label}`."
                     )
                 )
             except Exception:
                 pass
+        if source_format == cls.SOURCE_MATERIAL_FORMAT_GENERIC:
+            result_msg = (
+                f"Source material format for `{resolved_label}` is `{source_format}`. "
+                "It will not be indexed as source chunks and will be used as setup prompt text."
+            )
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(content=result_msg)
+                    await asyncio.sleep(3)
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            return True, result_msg
 
         stored_count, document_key = await asyncio.to_thread(
             ZorkMemory.store_source_material_chunks,
@@ -5428,12 +5493,10 @@ class ZorkEmulator:
 
     @classmethod
     def _build_campaign_suggestion_text(cls, guild_id: int) -> str:
-        existing = cls.list_campaigns(guild_id)
-        names = [campaign.name for campaign in existing]
-        if not names:
-            return "No campaigns exist yet."
-        sample = ", ".join(names[:8])
-        return f"Existing campaigns: {sample}"
+        if not cls.PRESET_CAMPAIGNS:
+            return "No in-repo campaigns are configured."
+        sample = ", ".join(cls.PRESET_CAMPAIGNS.keys())
+        return f"Available campaigns: {sample}"
 
     @classmethod
     def _gpu_worker_available(cls) -> bool:

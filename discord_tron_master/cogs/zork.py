@@ -173,26 +173,65 @@ class Zork(commands.Cog):
         channel,
         summary_instructions: str | None = None,
     ) -> tuple[str | None, str | None]:
-        attachment_text = await ZorkEmulator._extract_attachment_text(ctx.message)
-        if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
-            await channel.send(attachment_text.replace("ERROR:", "", 1))
+        attachment_infos = await ZorkEmulator._extract_attachment_texts_from_message(
+            ctx.message
+        )
+        if not attachment_infos:
             return None, None
 
-        if not attachment_text:
-            return None, None
+        summary_parts: list[str] = []
+        ingest_messages: list[str] = []
+        for attachment, attachment_text in attachment_infos:
+            if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
+                await channel.send(attachment_text.replace("ERROR:", "", 1))
+                continue
+            if not attachment_text:
+                continue
 
-        ingest_ok, ingest_message = await ZorkEmulator.ingest_source_material_attachment(
-            campaign, ctx.message, channel=channel
-        )
-        if not ingest_ok and "No `.txt` attachment found." in ingest_message:
-            ingest_message = None
+            chunks, _, _, _, _ = ZorkEmulator._chunk_text_by_tokens(attachment_text)
+            if not chunks:
+                continue
 
-        attachment_summary = await ZorkEmulator._summarise_long_text(
-            attachment_text,
-            ctx.message,
-            channel=channel,
-            summary_instructions=summary_instructions,
-        )
+            classification_chunk = chunks[0]
+            try:
+                source_format = await ZorkEmulator._classify_source_material_format(
+                    classification_chunk
+                )
+            except Exception:
+                source_format = ZorkEmulator.SOURCE_MATERIAL_FORMAT_GENERIC
+
+            attachment_label = ZorkEmulator._extract_attachment_label(
+                [attachment],
+                fallback="source-material",
+            )
+
+            if source_format == ZorkEmulator.SOURCE_MATERIAL_FORMAT_GENERIC:
+                summary = await ZorkEmulator._summarise_long_text(
+                    attachment_text,
+                    ctx.message,
+                    channel=channel,
+                    summary_instructions=summary_instructions,
+                )
+                if summary:
+                    summary_parts.append(f"{attachment_label}:\n{summary}")
+                continue
+
+            ingest_ok, ingest_message = await ZorkEmulator.ingest_source_material_text(
+                campaign,
+                attachment_text,
+                label=attachment_label,
+                channel=channel,
+                source_format=source_format,
+                message=ctx.message,
+            )
+            if ingest_ok:
+                if ingest_message:
+                    ingest_messages.append(ingest_message)
+            elif "No `.txt` attachment found." not in ingest_message:
+                ingest_messages.append(ingest_message)
+
+        attachment_summary = "\n\n".join(summary_parts).strip() or None
+        ingest_message = "; ".join(ingest_messages).strip() or None
         return attachment_summary, ingest_message
 
     async def _handle_rewind(self, message, app):
