@@ -92,14 +92,28 @@ class Job:
             message_id = None
             if hasattr(ctx, "message") and ctx.message is not None:
                 message_id = ctx.message.id
+            channel = getattr(ctx, "channel", None)
+            guild = getattr(ctx, "guild", None)
+            channel_name = getattr(channel, "name", None)
+            if not isinstance(channel_name, str) or not channel_name.strip():
+                channel_name = type(channel).__name__ if channel is not None else "UnknownChannel"
+            guild_name = getattr(guild, "name", None)
+            if not isinstance(guild_name, str) or not guild_name.strip():
+                guild_name = "Direct Messages"
             return {
                 "author": {
                     "id": ctx.author.id,
                     "name": ctx.author.name,
                     "discriminator": ctx.author.discriminator,
                 },
-                "channel": {"id": ctx.channel.id, "name": ctx.channel.name},
-                "guild": {"id": ctx.guild.id, "name": ctx.guild.name},
+                "channel": {
+                    "id": getattr(channel, "id", None),
+                    "name": channel_name,
+                },
+                "guild": {
+                    "id": getattr(guild, "id", None),
+                    "name": guild_name,
+                },
                 "message_id": message_id,
             }
         except Exception as e:
@@ -109,6 +123,16 @@ class Job:
     def discordmsg_to_dict(self, discordmsg):
         # Format discord message into a dict for WebSocket handling.
         try:
+            channel = getattr(discordmsg, "channel", None)
+            guild = getattr(discordmsg, "guild", None)
+            channel_name = getattr(channel, "name", None)
+            if not isinstance(channel_name, str) or not channel_name.strip():
+                channel_name = (
+                    type(channel).__name__ if channel is not None else "UnknownChannel"
+                )
+            guild_name = getattr(guild, "name", None)
+            if not isinstance(guild_name, str) or not guild_name.strip():
+                guild_name = "Direct Messages"
             return {
                 "author": {
                     "id": discordmsg.author.id,
@@ -116,10 +140,13 @@ class Job:
                     "discriminator": discordmsg.author.discriminator,
                 },
                 "channel": {
-                    "id": discordmsg.channel.id,
-                    "name": discordmsg.channel.name,
+                    "id": getattr(channel, "id", None),
+                    "name": channel_name,
                 },
-                "guild": {"id": discordmsg.guild.id, "name": discordmsg.guild.name},
+                "guild": {
+                    "id": getattr(guild, "id", None),
+                    "name": guild_name,
+                },
                 "message_id": discordmsg.id,
             }
         except Exception as e:
