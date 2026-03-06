@@ -435,6 +435,20 @@ class ZorkMemory:
             deduped.append(str(unit).strip()[:8000])
         return deduped
 
+    @staticmethod
+    def _is_rulebook_fact_line(line: str) -> bool:
+        stripped = str(line or "").strip()
+        if ":" not in stripped:
+            return False
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            return False
+        if len(key) > 140:
+            return False
+        return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _/\-()&'.]*", key))
+
     @classmethod
     def source_material_units_from_chunks(cls, chunks: List[str]) -> List[str]:
         return cls.source_material_units_from_chunks_with_mode(chunks, mode="line")
@@ -457,10 +471,20 @@ class ZorkMemory:
             if not raw.strip():
                 continue
             if source_mode == "rulebook":
+                current_fact: str | None = None
                 for line in raw.splitlines():
                     line_clean = line.strip()
-                    if line_clean:
-                        units.append(line_clean)
+                    if not line_clean:
+                        continue
+                    if cls._is_rulebook_fact_line(line_clean):
+                        if current_fact:
+                            units.append(current_fact)
+                        current_fact = line_clean
+                        continue
+                    if current_fact:
+                        current_fact = f"{current_fact} {line_clean}"
+                if current_fact:
+                    units.append(current_fact)
                 continue
             if source_mode == "story":
                 paragraphs = [line.strip() for line in raw.split("\n\n") if line.strip()]

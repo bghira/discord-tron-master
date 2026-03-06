@@ -4261,8 +4261,10 @@ class ZorkEmulator:
         for line in lines[:80]:
             if ":" not in line:
                 continue
-            key = line.split(":", 1)[0].strip()
-            if not key or len(key) > 140:
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if not key or not value or len(key) > 140:
                 continue
             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-\s]*", key):
                 rulebook_lines += 1
