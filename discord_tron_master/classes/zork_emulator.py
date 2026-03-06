@@ -140,6 +140,8 @@ class ZorkEmulator:
         SOURCE_MATERIAL_FORMAT_STORY: "story",
         SOURCE_MATERIAL_FORMAT_GENERIC: "generic",
     }
+    AUTO_RULEBOOK_DOCUMENT_LABEL = "campaign-rulebook"
+    AUTO_RULEBOOK_MAX_TOKENS = 16_000
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     SCENE_IMAGE_PRESERVE_PREFIX = (
@@ -2699,6 +2701,7 @@ class ZorkEmulator:
         temperature: float = 0.8,
         max_tokens: int = 3000,
         max_tool_steps: int = 6,
+        final_response_instruction: str = "Return your final JSON now.",
     ) -> str:
         """Run a lightweight tool loop for setup LLM calls.
 
@@ -2861,7 +2864,7 @@ class ZorkEmulator:
                 tool_result = (
                     f"UNKNOWN_TOOL: '{tool_name}' is not available during setup. "
                     "Available tools: source_browse, memory_search, name_generate. "
-                    "Return your final JSON now."
+                    f"{final_response_instruction}"
                 )
 
             _zork_log(
@@ -2873,12 +2876,164 @@ class ZorkEmulator:
         # Exhausted steps — force final response.
         augmented_prompt = (
             f"{augmented_prompt}\n"
-            "TOOL_CHAIN_LIMIT: Stop calling tools. Return your final JSON now.\n"
+            f"TOOL_CHAIN_LIMIT: Stop calling tools. {final_response_instruction}\n"
         )
         response = await gpt.turbo_completion(
             system_prompt, augmented_prompt, temperature=temperature, max_tokens=max_tokens
         )
         return cls._clean_response(response or "{}")
+
+    @classmethod
+    def _normalize_generated_rulebook_lines(cls, raw_text: str) -> list[str]:
+        entries: list[str] = []
+        current = ""
+        for raw_line in str(raw_text or "").splitlines():
+            line = " ".join(str(raw_line or "").strip().split())
+            if not line:
+                continue
+            if line.startswith("```"):
+                continue
+            if re.fullmatch(r"[=\-_*#\s]{3,}", line):
+                continue
+            if re.match(r"^[A-Z][A-Z0-9-]{1,80}:\s*\S", line):
+                if current:
+                    entries.append(current)
+                current = line
+                continue
+            if current:
+                current = f"{current} {line}".strip()
+        if current:
+            entries.append(current)
+        cleaned: list[str] = []
+        for entry in entries:
+            compact = re.sub(r"\s+", " ", str(entry or "")).strip()
+            if re.match(r"^[A-Z][A-Z0-9-]{1,80}:\s+\S", compact):
+                cleaned.append(compact[:8000])
+        return cleaned
+
+    @classmethod
+    def _auto_rulebook_source_index_hint(cls, source_payload: dict) -> str:
+        if not source_payload.get("available"):
+            return ""
+        doc_lines = []
+        for doc in source_payload.get("docs") or []:
+            if str(doc.get("document_label") or "") == cls.AUTO_RULEBOOK_DOCUMENT_LABEL:
+                continue
+            doc_lines.append(
+                f"  - document_key='{doc.get('document_key')}' "
+                f"label='{doc.get('document_label')}' "
+                f"format='{doc.get('format')}' "
+                f"snippets={doc.get('chunk_count')}"
+            )
+        if not doc_lines:
+            return ""
+        return (
+            "\nEXISTING_SOURCE_INDEX:\n"
+            + "\n".join(doc_lines)
+            + "\nIf you need canonical facts from these source docs, inspect them before writing the rulebook.\n"
+            "Start by enumerating keys with:\n"
+            '  {"tool_call": "source_browse"}\n'
+            "Then query specific facts with:\n"
+            '  {"tool_call": "memory_search", "category": "source", "queries": ["keyword"]}\n'
+        )
+
+    @classmethod
+    async def _generate_campaign_rulebook(
+        cls,
+        campaign,
+        setup_data: dict,
+        chosen: dict,
+        world: dict,
+    ) -> tuple[int, str]:
+        attachment_summary = str(setup_data.get("attachment_summary") or "").strip()
+        source_payload = cls._source_material_prompt_payload(campaign.id)
+        source_index_hint = cls._auto_rulebook_source_index_hint(source_payload)
+        source_tool_instructions = ""
+        if source_index_hint:
+            source_tool_instructions = (
+                "\nYou may inspect existing source material before writing the new rulebook.\n"
+                "To list all keys in available docs:\n"
+                '  {"tool_call": "source_browse"}\n'
+                "To browse one doc:\n"
+                '  {"tool_call": "source_browse", "document_key": "doc-key"}\n'
+                "To filter keys by wildcard:\n"
+                '  {"tool_call": "source_browse", "document_key": "doc-key", "wildcard": "char-*"}\n'
+                "To semantic-search source material:\n"
+                '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                "To call a tool, return ONLY the JSON tool_call object. Otherwise return ONLY the final rulebook text.\n"
+            )
+
+        genre_context = ""
+        genre_pref = setup_data.get("genre_preference")
+        if isinstance(genre_pref, dict):
+            genre_value = str(genre_pref.get("value") or "").strip()
+            if genre_value:
+                genre_context = f"\nGenre direction: {genre_value}\n"
+
+        system_prompt = (
+            "You convert campaign setup material into a retrievable rulebook for an interactive text adventure.\n"
+            "Output ONLY plain text rulebook lines. No markdown. No headers. No bullets. No numbering.\n"
+            "Every output line must be fully self-contained and independently retrievable.\n"
+            "Format every line exactly as CATEGORY-TAG: fact text\n"
+            "Each line should usually be 50-200 words.\n"
+            "Convert story summaries, plot chapters, character notes, and attachment prose into reusable rules and facts.\n"
+            "Do not write scripts or scene transcripts. Do not rely on adjacent lines for context.\n"
+            "Use these category families when relevant: TONE, SCENE, SETTING, CHAR, PLOT, INTERACTION, GM-RULE, and venue-specific tags such as BLUE-ROOM or RED-ROOM.\n"
+            "Required coverage:\n"
+            "- TONE, TONE-RULES, SCENE-OPENING, SETTING-[MAIN]\n"
+            "- For each named character: CHAR-[NAME], CHAR-[NAME]-PERSONALITY, CHAR-[NAME]-DIALOGUE\n"
+            "- For each important plotline: PLOT-[SHORTNAME]\n"
+            "- For major cast first impressions: INTERACTION-NEWCOMER-[NAME]\n"
+            "- GM-RULE-NO-RAILROADING, GM-RULE-[GENRE]-FIRST, GM-RULE-CHARACTERS-FIRST, GM-RULE-PACING, GM-RULE-NAMES, GM-RULE-NO-RECYCLING-NAMES, GM-RULE-ENSEMBLE, GM-RULE-DIALOGUE-OVER-DESCRIPTION, GM-RULE-ALTERNATIVES\n"
+            "If the setting involves intimacy, vulnerability, or explicit consent norms, include TONE-CONSENT and GM-RULE-CONSENT-ENFORCEMENT.\n"
+            "If the setting has money, rooms, rentals, or prices, include GM-RULE-MONEY.\n"
+            "Dialogue lines must show distinct voice. Running jokes, recurring habits, venue rules, and notable recurring objects should become separate retrievable facts when important.\n"
+            "Avoid generic AI-default names for any new characters. Ban list: Morgan, Kai, River, Sage, Quinn, Riley, Jordan, Avery, Harper, Rowan, Blake, Skyler, Ash, Nova, Zara, Milo, Ezra, Luna; surnames: Chen, Mendoza, Nakamura, Patel, Rollins, Kim, Santos, Okafor, Volkov, Johansson, Delacroix, Venn, Sands, Kade, Park.\n"
+            "Preserve player agency, kindness, and genre tone. Unless the genre explicitly demands otherwise, do not invent trauma hooks or coercive plot pressure.\n"
+            f"{source_tool_instructions}"
+        )
+        user_prompt = (
+            f"Generate a rulebook for campaign '{setup_data.get('raw_name') or campaign.name}'.\n"
+            f"{genre_context}"
+            f"{source_index_hint}"
+            "Use the chosen storyline, expanded world JSON, and any detailed attachment summary below.\n"
+            "If the attachment summary is a story-generator prompt or setup note, translate it into concise retrievable rulebook facts instead of copying it as prose.\n"
+            "If existing source docs contain canonical facts, merge them faithfully into this synthesized rulebook.\n\n"
+            f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
+            f"Expanded world JSON:\n{json.dumps(world, indent=2)}\n\n"
+            f"Detailed attachment summary:\n{attachment_summary or '(none)'}\n"
+        )
+        _zork_log(
+            f"SETUP RULEBOOK GENERATION campaign={campaign.id}",
+            f"--- SYSTEM ---\n{system_prompt}\n--- USER ---\n{user_prompt}",
+        )
+        try:
+            response = await cls._setup_tool_loop(
+                system_prompt,
+                user_prompt,
+                campaign,
+                temperature=0.5,
+                max_tokens=cls.AUTO_RULEBOOK_MAX_TOKENS,
+                final_response_instruction="Return your final rulebook text now.",
+            )
+        except Exception as exc:
+            logger.warning("Campaign rulebook generation failed: %s", exc)
+            _zork_log("SETUP RULEBOOK GENERATION FAILED", str(exc))
+            return 0, ""
+        _zork_log("SETUP RULEBOOK RAW RESPONSE", response or "(empty)")
+        normalized_lines = cls._normalize_generated_rulebook_lines(response or "")
+        if not normalized_lines:
+            return 0, ""
+        stored_ok, stored_msg = await cls.ingest_source_material_text(
+            campaign,
+            "\n".join(normalized_lines),
+            label=cls.AUTO_RULEBOOK_DOCUMENT_LABEL,
+            source_format=cls.SOURCE_MATERIAL_FORMAT_RULEBOOK,
+        )
+        if not stored_ok:
+            _zork_log("SETUP RULEBOOK INGEST FAILED", stored_msg or "(empty)")
+            return 0, ""
+        return len(normalized_lines), stored_msg
 
     @classmethod
     async def _setup_generate_storyline_variants(
@@ -3433,6 +3588,19 @@ class ZorkEmulator:
         if summary:
             campaign.summary = summary
 
+        auto_rulebook_count = 0
+        auto_rulebook_msg = ""
+        try:
+            auto_rulebook_count, auto_rulebook_msg = await cls._generate_campaign_rulebook(
+                campaign,
+                setup_data,
+                chosen,
+                world if isinstance(world, dict) else {},
+            )
+        except Exception as exc:
+            logger.warning("Auto rulebook generation crashed: %s", exc)
+            _zork_log("SETUP RULEBOOK CRASHED", str(exc))
+
         # Build final state — remove setup keys
         state.pop("setup_phase", None)
         state.pop("setup_data", None)
@@ -3523,7 +3691,8 @@ class ZorkEmulator:
 
         _zork_log(
             f"CAMPAIGN SETUP FINALIZED campaign={campaign.id}",
-            f"characters={char_count} chapters={chapter_count} on_rails={on_rails}",
+            f"characters={char_count} chapters={chapter_count} on_rails={on_rails} "
+            f"auto_rulebook_lines={auto_rulebook_count} auto_rulebook_msg={auto_rulebook_msg!r}",
         )
         return result_msg
 
