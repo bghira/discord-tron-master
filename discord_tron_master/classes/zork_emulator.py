@@ -2052,9 +2052,15 @@ class ZorkEmulator:
             # Names appear as markdown-style links: [Name](/name/name)
             names = re.findall(r"\[([A-Z][^\]]+)\]\(/name/", resp.text)
             if not names:
-                # Fallback: try plain <a class="plain"> tags
+                # Fallback: try plain result links; attribute order varies.
                 names = re.findall(
-                    r'<a\s+class="plain"[^>]*>([^<]+)</a>', resp.text
+                    r'<a\b[^>]*href="/name/[^"]+"[^>]*class="plain"[^>]*>([^<]+)</a>',
+                    resp.text,
+                )
+            if not names:
+                names = re.findall(
+                    r'<a\b[^>]*class="plain"[^>]*href="/name/[^"]+"[^>]*>([^<]+)</a>',
+                    resp.text,
                 )
             return [n.strip() for n in names if n.strip()][:count]
         except Exception:
