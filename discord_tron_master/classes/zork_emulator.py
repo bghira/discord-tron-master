@@ -2538,12 +2538,11 @@ class ZorkEmulator:
             try:
                 cur_prompt = user_prompt
                 if attempt == 1:
-                    # Retry with simplified prompt on empty first response.
+                    # Retry must preserve all original context (including source material).
                     cur_prompt = (
-                        f"Generate 2-3 adventure storyline variants for an adult text-adventure "
-                        f"game inspired by '{raw_name}'. All characters are adults. "
-                        f"Focus on the setting, survival themes, and exploration.\n"
-                        f"{imdb_context}"
+                        f"{user_prompt}\n\n"
+                        "FORMAT REPAIR: Your previous response was invalid or incomplete JSON. "
+                        "Return ONLY one valid JSON object with key 'variants' and no trailing text."
                     )
                     _zork_log(f"SETUP VARIANT RETRY campaign={campaign.id}", cur_prompt)
                 response = await gpt.turbo_completion(
@@ -2791,8 +2790,10 @@ class ZorkEmulator:
                         f"inspired by '{raw_name}'. All characters are adults.\n"
                         f"Focus on the setting, atmosphere, and adventure.\n"
                         f"{imdb_context}"
+                        f"{attachment_context}"
                         f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
-                        f"Include all essential NPCs and expand chapters into scenes."
+                        "Source-material summary (if present) is authoritative; keep names, locations, and plot faithful to it.\n"
+                        "Include all essential NPCs and expand chapters into scenes."
                     )
                     _zork_log(f"SETUP FINALIZE RETRY campaign={campaign.id}", cur_user)
                 response = await gpt.turbo_completion(
