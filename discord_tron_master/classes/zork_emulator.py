@@ -897,6 +897,26 @@ class ZorkEmulator:
         return campaign_id, None
 
     @classmethod
+    async def begin_turn_for_campaign(
+        cls,
+        ctx,
+        campaign_id: int,
+    ) -> Tuple[Optional[int], Optional[str]]:
+        app = AppConfig.get_flask()
+        if app is None:
+            raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
+
+        with app.app_context():
+            campaign = ZorkCampaign.query.get(campaign_id)
+            if campaign is None:
+                return None, "The linked private Zork campaign no longer exists."
+
+        if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
+            await cls._delete_context_message(ctx)
+            return None, None
+        return campaign_id, None
+
+    @classmethod
     def end_turn(cls, campaign_id: int, user_id: int):
         cls._clear_inflight_turn(campaign_id, user_id)
 
@@ -9829,7 +9849,9 @@ class ZorkEmulator:
                                 campaign.state_json = cls._dump_json(interrupt_state)
                                 db.session.commit()
                         # Non-interruptible timers or local timers from another player are left running.
-                    is_thread_channel = isinstance(ctx.channel, discord.Thread)
+                    is_thread_channel = isinstance(ctx.channel, discord.Thread) or (
+                        getattr(ctx, "guild", None) is None
+                    )
 
                     has_character_name = bool(
                         player_state.get("character_name", "").strip()

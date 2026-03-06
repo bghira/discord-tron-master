@@ -117,6 +117,27 @@ class Zork(commands.Cog):
         label = " ".join(label_tokens).strip() or None
         return "ingest", label
 
+    def _get_private_dm_binding(self, user_id: int) -> dict | None:
+        binding = self.config.get_zork_private_dm(user_id)
+        if not isinstance(binding, dict) or not binding.get("enabled"):
+            return None
+        try:
+            campaign_id = int(binding.get("campaign_id") or 0)
+        except (TypeError, ValueError):
+            campaign_id = 0
+        if campaign_id <= 0:
+            return None
+        result = dict(binding)
+        result["campaign_id"] = campaign_id
+        for key in ("guild_id", "channel_id"):
+            try:
+                value = int(result.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            result[key] = value or None
+        result["campaign_name"] = str(result.get("campaign_name") or "").strip() or None
+        return result
+
     def _should_ignore_message(self, message) -> bool:
         if message.author.bot:
             return True
@@ -334,25 +355,56 @@ class Zork(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.guild is None:
-            return
         if self._should_ignore_message(message):
             return
         app = AppConfig.get_flask()
         if app is None:
             return
-        with app.app_context():
-            if not ZorkEmulator.is_channel_enabled(
-                message.guild.id, message.channel.id
-            ):
-                return
         content = self._strip_bot_mention(message.content)
         if not content:
             return
 
+        campaign_id = None
+        if message.guild is None:
+            binding = self._get_private_dm_binding(message.author.id)
+            if binding is None:
+                return
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(binding["campaign_id"])
+                if campaign is None:
+                    self.config.clear_zork_private_dm(message.author.id)
+                    await message.channel.send(
+                        "Your linked private Zork campaign no longer exists. "
+                        f"Re-enable it from the campaign channel with `{self._prefix()}zork private enable`."
+                    )
+                    return
+                if ZorkEmulator.is_in_setup_mode(campaign):
+                    await message.channel.send(
+                        f"Campaign `{campaign.name}` is still in setup. "
+                        "Finish setup in the server channel or thread before using private DMs."
+                    )
+                    return
+            campaign_id, error_text = await ZorkEmulator.begin_turn_for_campaign(
+                message,
+                binding["campaign_id"],
+            )
+            if error_text is not None:
+                await message.channel.send(error_text)
+                return
+            if campaign_id is None:
+                return
+        else:
+            with app.app_context():
+                if not ZorkEmulator.is_channel_enabled(
+                    message.guild.id, message.channel.id
+                ):
+                    return
+
         # Rewind detection — must happen before begin_turn.
         content_stripped = message.content.strip().lower()
         if (
+            message.guild is not None
+            and
             content_stripped == "rewind"
             and message.reference is not None
             and message.reference.message_id is not None
@@ -360,13 +412,14 @@ class Zork(commands.Cog):
             await self._handle_rewind(message, app)
             return
 
-        campaign_id, error_text = await ZorkEmulator.begin_turn(
-            message, command_prefix=self._prefix()
-        )
-        if error_text is not None:
-            return
         if campaign_id is None:
-            return
+            campaign_id, error_text = await ZorkEmulator.begin_turn(
+                message, command_prefix=self._prefix()
+            )
+            if error_text is not None:
+                return
+            if campaign_id is None:
+                return
 
         # Setup mode intercept — route to setup handler instead of play_action.
         with app.app_context():
@@ -529,6 +582,7 @@ class Zork(commands.Cog):
             "format is auto-detected as story/rulebook/generic.\n"
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
+            f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
@@ -958,6 +1012,109 @@ class Zork(commands.Cog):
             player.updated = db.func.now()
             db.session.commit()
             await ctx.send("Persona updated for your character.")
+
+    @zork.command(name="private")
+    async def zork_private(self, ctx, *, mode: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Run this in the campaign channel or thread you want to bind.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        command = str(mode or "").strip().lower()
+        binding = self._get_private_dm_binding(ctx.author.id)
+
+        if command in ("disable", "off"):
+            if binding is None:
+                await ctx.send("Private DMs are already disabled for you.")
+                return
+            self.config.clear_zork_private_dm(ctx.author.id)
+            bound_name = binding.get("campaign_name") or f"campaign {binding['campaign_id']}"
+            await ctx.send(
+                f"Private DMs disabled for `{bound_name}`. "
+                "Your future turns will only come from normal server messages."
+            )
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            campaign = (
+                ZorkCampaign.query.get(channel.active_campaign_id)
+                if channel.active_campaign_id
+                else None
+            )
+            player = None
+            player_state = {}
+            if campaign is not None:
+                player = ZorkEmulator.get_or_create_player(
+                    campaign.id, ctx.author.id, campaign=campaign
+                )
+                player_state = ZorkEmulator.get_player_state(player)
+
+        if command in ("", "status"):
+            if binding is None:
+                if campaign is None:
+                    await ctx.send(
+                        "Private DMs are disabled. No active campaign is bound in this channel."
+                    )
+                else:
+                    await ctx.send(
+                        f"Private DMs are disabled. Use `{self._prefix()}zork private enable` "
+                        f"to bind your DMs to `{campaign.name}`."
+                    )
+                return
+            current_name = campaign.name if campaign is not None else None
+            bound_name = binding.get("campaign_name") or f"campaign {binding['campaign_id']}"
+            if current_name and current_name == bound_name:
+                await ctx.send(
+                    f"Private DMs are enabled for `{bound_name}` from this channel. "
+                    "Send plain messages to the bot in DM to play privately."
+                )
+            else:
+                await ctx.send(
+                    f"Private DMs are enabled for `{bound_name}`. "
+                    f"Use `{self._prefix()}zork private enable` here to rebind to `{current_name}`."
+                    if current_name
+                    else f"Private DMs are enabled for `{bound_name}`."
+                )
+            return
+
+        if command not in ("enable", "on"):
+            await ctx.send(
+                f"Usage: `{self._prefix()}zork private [enable|disable]`"
+            )
+            return
+
+        if campaign is None:
+            await ctx.send("No active campaign in this channel.")
+            return
+        if ZorkEmulator.is_in_setup_mode(campaign):
+            await ctx.send(
+                "Finish campaign setup before enabling private DMs for this campaign."
+            )
+            return
+        character_name = str(player_state.get("character_name") or "").strip()
+        if not character_name:
+            await ctx.send(
+                f"Set your identity first with `{self._prefix()}zork identity <name>`, "
+                "then enable private DMs."
+            )
+            return
+
+        self.config.set_zork_private_dm(
+            ctx.author.id,
+            enabled=True,
+            campaign_id=campaign.id,
+            guild_id=ctx.guild.id,
+            channel_id=ctx.channel.id,
+            campaign_name=campaign.name,
+        )
+        await ctx.send(
+            f"Private DMs enabled for `{campaign.name}` as `{character_name}`.\n"
+            "Send plain messages to the bot in DM and they will act in this shared campaign."
+        )
 
     @zork.command(name="thread")
     async def zork_thread(self, ctx, *, name: str = None):

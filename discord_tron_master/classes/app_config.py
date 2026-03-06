@@ -81,6 +81,13 @@ DEFAULT_USER_CONFIG = {
     "flux_adapter_1": "",
     "flux_guidance_scale": 3.0,
     "skip_guidance_layers": -1,
+    "zork_private_dm": {
+        "enabled": False,
+        "campaign_id": None,
+        "guild_id": None,
+        "channel_id": None,
+        "campaign_name": None,
+    },
 }
 
 
@@ -210,6 +217,34 @@ class AppConfig:
         user_id = str(user_id)
         user_config = self.get_user_config(user_id)
         return user_config.get(setting_key, default_value)
+
+    def get_zork_private_dm(self, user_id):
+        binding = self.get_user_setting(user_id, "zork_private_dm", {})
+        if not isinstance(binding, dict):
+            binding = {}
+        return self.merge_dicts(DEFAULT_USER_CONFIG["zork_private_dm"], binding)
+
+    def set_zork_private_dm(
+        self,
+        user_id,
+        *,
+        enabled,
+        campaign_id=None,
+        guild_id=None,
+        channel_id=None,
+        campaign_name=None,
+    ):
+        binding = {
+            "enabled": bool(enabled),
+            "campaign_id": campaign_id,
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "campaign_name": campaign_name,
+        }
+        self.set_user_setting(user_id, "zork_private_dm", binding)
+
+    def clear_zork_private_dm(self, user_id):
+        self.set_zork_private_dm(user_id, enabled=False)
 
     def get_web_root(self):
         self.reload_config()
