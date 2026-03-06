@@ -661,7 +661,10 @@ class ZorkEmulator:
         "- You CANNOT add new chapters or scenes beyond STORY_CONTEXT.\n"
         "- You MUST advance along the current chapter/scene trajectory.\n"
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
+        "- In EVERY final non-tool JSON response, include state_update.current_chapter and state_update.current_scene explicitly.\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
+        "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
+        "- If the scene does not advance yet, still restate the current chapter/scene indexes explicitly in state_update.\n"
         "- If player tries to derail, steer back via NPC actions or environmental events.\n"
         "- If player goes off-route or stalls, use grounded calendar pressure and timed events "
         "(set_timer_*) to re-align toward the next outlined beat without abrupt teleportation.\n"
@@ -4982,6 +4985,110 @@ class ZorkEmulator:
         while lines and not lines[-1]:
             lines.pop()
         return "\n".join(lines) if lines else None
+
+    @classmethod
+    def _auto_advance_on_rails_story_context(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        action_text: str,
+        narration: str,
+        summary_update: object,
+        state_update: Dict[str, object],
+        player_state_update: Dict[str, object],
+        character_updates: Dict[str, object],
+        calendar_update: object,
+    ) -> bool:
+        if not bool(campaign_state.get("on_rails", False)):
+            return False
+        outline = campaign_state.get("story_outline")
+        if not isinstance(outline, dict):
+            return False
+        chapters = outline.get("chapters")
+        if not isinstance(chapters, list) or not chapters:
+            return False
+        if not isinstance(state_update, dict):
+            return False
+        if "current_chapter" in state_update or "current_scene" in state_update:
+            return False
+
+        action_clean = " ".join(str(action_text or "").strip().lower().split())
+        if not action_clean:
+            return False
+        if action_clean in {
+            "look",
+            "l",
+            "inventory",
+            "inv",
+            "i",
+            "calendar",
+            "cal",
+            "events",
+            "roster",
+            "characters",
+            "npcs",
+        }:
+            return False
+        if action_clean.startswith("[ooc"):
+            return False
+
+        if cls._is_emptyish_turn_payload(
+            narration=narration,
+            state_update=state_update,
+            player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
+            summary_update=summary_update,
+            xp_awarded=0,
+            scene_image_prompt=None,
+            character_updates=character_updates if isinstance(character_updates, dict) else {},
+            calendar_update=calendar_update,
+        ):
+            return False
+
+        old_ch = cls._coerce_non_negative_int(
+            campaign_state.get("current_chapter", 0), default=0
+        )
+        old_sc = cls._coerce_non_negative_int(
+            campaign_state.get("current_scene", 0), default=0
+        )
+        old_ch = min(old_ch, len(chapters) - 1)
+        current_entry = chapters[old_ch] if 0 <= old_ch < len(chapters) else {}
+        scenes = current_entry.get("scenes")
+        if not isinstance(scenes, list):
+            scenes = []
+
+        looks_major = cls._looks_like_major_narrative_beat(
+            narration=narration,
+            summary_update=summary_update,
+            state_update=state_update,
+            character_updates=character_updates if isinstance(character_updates, dict) else {},
+            calendar_update=calendar_update,
+        )
+        has_player_motion = bool(
+            isinstance(player_state_update, dict)
+            and any(
+                key in player_state_update
+                for key in ("location", "room_title", "room_summary", "room_description")
+            )
+        )
+        has_scene_signal = bool(str(summary_update or "").strip()) or has_player_motion or looks_major
+        if not has_scene_signal:
+            return False
+
+        new_ch = old_ch
+        new_sc = old_sc
+        if scenes and old_sc + 1 < len(scenes):
+            new_sc = old_sc + 1
+        elif old_ch + 1 < len(chapters):
+            new_ch = old_ch + 1
+            new_sc = 0
+            if isinstance(current_entry, dict):
+                current_entry["completed"] = True
+        else:
+            return False
+
+        campaign_state["current_chapter"] = new_ch
+        campaign_state["current_scene"] = new_sc
+        return True
 
     @classmethod
     def _split_room_state(
@@ -11958,6 +12065,7 @@ class ZorkEmulator:
                             "- narration with one concrete scene development\n"
                             "- state_update object (with game_time advanced)\n"
                             "- summary_update with durable consequence when applicable.\n"
+                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
                         )
                         _repair_response = await gpt.turbo_completion(
                             system_prompt,
@@ -12028,6 +12136,7 @@ class ZorkEmulator:
                             "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
                             "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
                             "Return final JSON (no tool_call) with reasoning.\n"
+                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
                         )
                         _clock_retry_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -12081,6 +12190,7 @@ class ZorkEmulator:
                             "Do NOT restate player phrasing. NPC first line must add new information, a decision, "
                             "a demand, a consequence, or a direct question.\n"
                             "Return final JSON (no tool_call) with reasoning.\n"
+                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
                         )
                         _anti_echo_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -12304,6 +12414,32 @@ class ZorkEmulator:
                     campaign.state_json = cls._dump_json(campaign_state)
 
                     # Chapter/scene advancement from state_update
+                    auto_story_advanced = cls._auto_advance_on_rails_story_context(
+                        campaign_state,
+                        action_text=action,
+                        narration=raw_narration,
+                        summary_update=summary_update,
+                        state_update=state_update if isinstance(state_update, dict) else {},
+                        player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
+                        character_updates=character_updates if isinstance(character_updates, dict) else {},
+                        calendar_update=calendar_update,
+                    )
+                    if auto_story_advanced:
+                        _zork_log(
+                            "AUTO STORY ADVANCE",
+                            json.dumps(
+                                {
+                                    "current_chapter": campaign_state.get("current_chapter"),
+                                    "current_scene": campaign_state.get("current_scene"),
+                                    "action": str(action or "")[:160],
+                                },
+                                ensure_ascii=True,
+                            ),
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state, "auto_story_advance"
+                        )
+
                     story_outline = campaign_state.get("story_outline")
                     if isinstance(story_outline, dict):
                         chapters = story_outline.get("chapters", [])
