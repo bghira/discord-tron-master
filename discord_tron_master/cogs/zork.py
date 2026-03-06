@@ -126,6 +126,29 @@ class Zork(commands.Cog):
         ]
         return "\n".join(filtered)
 
+    @classmethod
+    def _format_preset_campaigns(
+        cls, active_campaign_id: int | None, campaigns
+    ) -> list[str]:
+        if not getattr(ZorkEmulator, "PRESET_CAMPAIGNS", None):
+            return []
+
+        preset_rows: dict[str, object] = {}
+        for campaign in campaigns:
+            normalized = ZorkEmulator._normalize_campaign_name(campaign.name or "")
+            preset_key = ZorkEmulator.PRESET_ALIASES.get(normalized)
+            if preset_key and preset_key in ZorkEmulator.PRESET_CAMPAIGNS:
+                preset_rows[preset_key] = campaign
+
+        out: list[str] = []
+        for preset_key in ZorkEmulator.PRESET_CAMPAIGNS:
+            marker = "-"
+            row = preset_rows.get(preset_key)
+            if row is not None and getattr(row, "id", None) == active_campaign_id:
+                marker = "*"
+            out.append(f"{marker} {preset_key}")
+        return out
+
     async def _send_action_reply(
         self, ctx_like, narration: str, campaign_id: int = None
     ):
@@ -141,6 +164,36 @@ class Zork(commands.Cog):
         if campaign_id is not None and msg is not None:
             ZorkEmulator.register_timer_message(campaign_id, msg.id)
         return msg
+
+    async def _prepare_thread_source_material(
+        self,
+        ctx,
+        campaign,
+        *,
+        channel,
+        summary_instructions: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        attachment_text = await ZorkEmulator._extract_attachment_text(ctx.message)
+        if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
+            await channel.send(attachment_text.replace("ERROR:", "", 1))
+            return None, None
+
+        if not attachment_text:
+            return None, None
+
+        ingest_ok, ingest_message = await ZorkEmulator.ingest_source_material_attachment(
+            campaign, ctx.message, channel=channel
+        )
+        if not ingest_ok and "No `.txt` attachment found." in ingest_message:
+            ingest_message = None
+
+        attachment_summary = await ZorkEmulator._summarise_long_text(
+            attachment_text,
+            ctx.message,
+            channel=channel,
+            summary_instructions=summary_instructions,
+        )
+        return attachment_summary, ingest_message
 
     async def _handle_rewind(self, message, app):
         """Process a 'rewind' reply: restore state and purge messages."""
@@ -474,16 +527,18 @@ class Zork(commands.Cog):
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
             campaigns = ZorkEmulator.list_campaigns(ctx.guild.id)
-            if not campaigns:
+            if not campaigns and not ZorkEmulator.PRESET_CAMPAIGNS:
                 await ctx.send(
                     f"No campaigns yet. Use `{self._prefix()}zork campaign <name>` to create one."
                 )
                 return
             active_id = channel.active_campaign_id
-            lines = []
-            for campaign in campaigns:
-                marker = "*" if campaign.id == active_id else "-"
-                lines.append(f"{marker} {campaign.name}")
+            lines = self._format_preset_campaigns(active_id, campaigns)
+            if not lines:
+                await ctx.send(
+                    f"No campaigns yet. Use `{self._prefix()}zork campaign <name>` to create one."
+                )
+                return
             await DiscordBot.send_large_message(ctx, "Campaigns:\n" + "\n".join(lines))
 
     @zork.command(name="campaign")
@@ -843,6 +898,11 @@ class Zork(commands.Cog):
 
         if isinstance(ctx.channel, discord.Thread):
             setup_message = None
+            requested_name = bool(parsed_name)
+            has_txt_attachment = any(
+                str(getattr(att, "filename", "")).lower().endswith(".txt")
+                for att in ctx.message.attachments
+            )
             with app.app_context():
                 channel, _ = ZorkEmulator.enable_channel(
                     ctx.guild.id, ctx.channel.id, ctx.author.id
@@ -856,20 +916,28 @@ class Zork(commands.Cog):
                     enforce_activity_window=False,
                 )
                 campaign_state = ZorkEmulator.get_campaign_state(campaign)
-                if not campaign_state.get("setup_phase") and not campaign_state.get(
-                    "default_persona"
+                att_summary = None
+                if has_txt_attachment:
+                    att_summary, _ = await self._prepare_thread_source_material(
+                        ctx,
+                        campaign,
+                        channel=ctx.channel,
+                        summary_instructions=summary_instructions,
+                    )
+                    if campaign_state.get("setup_phase") or campaign_state.get(
+                        "default_persona"
+                    ):
+                        campaign.state_json = "{}"
+                        campaign.summary = ""
+                        campaign.last_narration = None
+                        campaign.updated = db.func.now()
+                        db.session.commit()
+                        campaign_state = ZorkEmulator.get_campaign_state(campaign)
+
+                if (has_txt_attachment and requested_name) or (
+                    not campaign_state.get("setup_phase")
+                    and not campaign_state.get("default_persona")
                 ):
-                    # Summarise attachment first so classify can use it
-                    att_summary = None
-                    att_text = await ZorkEmulator._extract_attachment_text(ctx.message)
-                    if isinstance(att_text, str) and att_text.startswith("ERROR:"):
-                        await ctx.send(att_text.replace("ERROR:", "", 1))
-                    elif att_text:
-                        att_summary = await ZorkEmulator._summarise_long_text(
-                            att_text,
-                            ctx.message,
-                            summary_instructions=summary_instructions,
-                        )
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign,
                         campaign_name,
@@ -917,15 +985,14 @@ class Zork(commands.Cog):
                 ctx.author.id,
                 enforce_activity_window=False,
             )
-            # Summarise attachment first so classify can use it
             att_summary = None
-            att_text = await ZorkEmulator._extract_attachment_text(ctx.message)
-            if isinstance(att_text, str) and att_text.startswith("ERROR:"):
-                await thread.send(att_text.replace("ERROR:", "", 1))
-            elif att_text:
-                att_summary = await ZorkEmulator._summarise_long_text(
-                    att_text,
-                    ctx.message,
+            if any(
+                str(getattr(att, "filename", "")).lower().endswith(".txt")
+                for att in ctx.message.attachments
+            ):
+                att_summary, _ = await self._prepare_thread_source_material(
+                    ctx,
+                    campaign,
                     channel=thread,
                     summary_instructions=summary_instructions,
                 )
