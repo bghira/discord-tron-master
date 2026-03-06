@@ -383,6 +383,9 @@ class ZorkEmulator:
         "- Not every detail needs immediate resolution, but specific details should usually matter later. Track long-thread setups via plot_plan.\n"
         "- For threads likely to span more than 3 turns, use plot_plan to persist setup/payoff intent instead of winging it each turn.\n"
         "- NPCs have independent motivations, schedules, and emotional states that exist regardless of the player.\n"
+        "- NPCs pursue established characterization first and plot second. Characters are not plot-delivery devices.\n"
+        "- If a character's established personality conflicts with advancing the current storyline, personality wins.\n"
+        "- Let the player drive story direction. If the player rejects a premise, adapt the premise instead of making NPCs more insistent.\n"
         "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
         "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
         "- Most human interactions are not foreplay. NPCs should behave like people with their own priorities unless the scene has organically built to intimacy through player and NPC choices.\n"
@@ -450,12 +453,13 @@ class ZorkEmulator:
         "Categories should be character-keyed when possible (e.g. 'char:alice', 'char:marcus-blackwell'). "
         "A category can contain multiple memories.\n"
         "When category is provided in memory_search, curated memories in that category are vector searched.\n"
-        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as sentence-level snippets. "
+        "When SOURCE_MATERIAL_DOCS is present, source canon is indexed in vector memory as newline-level snippets. "
         "Use memory_search with category 'source' to query canon snippets before narrating key plot facts:\n"
         '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
         "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
-        "For centered source context windows, memory_search also supports optional before_lines/after_lines "
-        "(defaults: 5/5, yielding up to 11 snippets centered on the best hit).\n"
+        "By default source search returns only the single best matching snippet. "
+        "For expanded context windows, memory_search supports optional before_lines/after_lines "
+        "(defaults: 0/0; set ranges only when needed).\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -3245,7 +3249,7 @@ class ZorkEmulator:
             return False, "Attachment has no usable text."
         sentence_units = ZorkMemory.source_material_units_from_chunks(chunks)
         if not sentence_units:
-            return False, "Attachment has no usable sentence snippets."
+            return False, "Attachment has no usable source snippets."
 
         resolved_label = " ".join(str(label or "").strip().split())[:120]
         if not resolved_label:
@@ -3257,7 +3261,7 @@ class ZorkEmulator:
             try:
                 status_msg = await progress_channel.send(
                     f"Ingesting source material `{resolved_label}`... "
-                    f"({len(sentence_units)} sentence snippet(s), ~{total_tokens} tokens)"
+                    f"({len(sentence_units)} snippet(s), ~{total_tokens} tokens)"
                 )
             except Exception:
                 status_msg = None
@@ -3291,7 +3295,7 @@ class ZorkEmulator:
 
         result_msg = (
             f"Source material stored: `{resolved_label}` as key `{document_key}` "
-            f"({stored_count} sentence snippet(s), ~{total_tokens} tokens). "
+            f"({stored_count} snippet(s), ~{total_tokens} tokens). "
             f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
         if status_msg is not None:
@@ -9077,16 +9081,16 @@ class ZorkEmulator:
                             ]
                             try:
                                 source_before_lines = int(
-                                    first_payload.get("before_lines", 5)
+                                    first_payload.get("before_lines", 0)
                                 )
                             except (TypeError, ValueError):
-                                source_before_lines = 5
+                                source_before_lines = 0
                             try:
                                 source_after_lines = int(
-                                    first_payload.get("after_lines", 5)
+                                    first_payload.get("after_lines", 0)
                                 )
                             except (TypeError, ValueError):
-                                source_after_lines = 5
+                                source_after_lines = 0
                             source_before_lines = max(0, min(50, source_before_lines))
                             source_after_lines = max(0, min(50, source_after_lines))
                             category_scope = " ".join(
@@ -9298,7 +9302,7 @@ class ZorkEmulator:
                                 '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
                                 "- To scope one source document only:\n"
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
-                                "- To request centered source context windows (defaults: before_lines=5, after_lines=5):\n"
+                                "- To request expanded source context windows (default is single snippet, before_lines=0, after_lines=0):\n"
                                 '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
                                 )
                             if roster_hints:

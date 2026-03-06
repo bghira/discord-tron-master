@@ -23,7 +23,7 @@ _model = None
 _model_lock = threading.Lock()
 _EMBED_DIM = 384
 _MAX_INPUT_CHARS = 512
-_SOURCE_SENTENCE_MAX_CHARS = 1200
+_SOURCE_SNIPPET_MAX_CHARS = 1200
 
 
 def _get_model():
@@ -382,16 +382,16 @@ class ZorkMemory:
         return key[:80] or "source-material"
 
     @classmethod
-    def _split_source_sentence_fragments(cls, text: str) -> List[str]:
-        clean = " ".join(str(text or "").strip().split())
+    def _split_source_line_fragments(cls, text: str) -> List[str]:
+        clean = str(text or "").strip()
         if not clean:
             return []
-        fragments = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean) if s.strip()]
+        fragments = [line.strip() for line in clean.splitlines() if line.strip()]
         if not fragments:
             fragments = [clean]
         out: List[str] = []
         for fragment in fragments:
-            if len(fragment) <= _SOURCE_SENTENCE_MAX_CHARS:
+            if len(fragment) <= _SOURCE_SNIPPET_MAX_CHARS:
                 out.append(fragment)
                 continue
             words = fragment.split()
@@ -399,7 +399,7 @@ class ZorkMemory:
             current_len = 0
             for word in words:
                 wlen = len(word) + (1 if current else 0)
-                if current and current_len + wlen > _SOURCE_SENTENCE_MAX_CHARS:
+                if current and current_len + wlen > _SOURCE_SNIPPET_MAX_CHARS:
                     out.append(" ".join(current).strip())
                     current = [word]
                     current_len = len(word)
@@ -412,18 +412,13 @@ class ZorkMemory:
 
     @classmethod
     def source_material_units_from_chunks(cls, chunks: List[str]) -> List[str]:
-        """Convert source-material chunks into sentence-level searchable units."""
+        """Convert source-material chunks into newline-level searchable units."""
         units: List[str] = []
         for chunk in chunks or []:
-            raw = str(chunk or "").strip()
-            if not raw:
+            raw = str(chunk or "")
+            if not raw.strip():
                 continue
-            # Respect paragraph boundaries first, then split each paragraph to sentences.
-            paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
-            if not paragraphs:
-                paragraphs = [raw]
-            for para in paragraphs:
-                units.extend(cls._split_source_sentence_fragments(para))
+            units.extend(cls._split_source_line_fragments(raw))
 
         deduped: List[str] = []
         seen = set()
@@ -560,8 +555,8 @@ class ZorkMemory:
         *,
         document_key: Optional[str] = None,
         top_k: int = 5,
-        before_lines: int = 5,
-        after_lines: int = 5,
+        before_lines: int = 0,
+        after_lines: int = 0,
     ) -> List[Tuple[str, str, int, str, float]]:
         """Vector-search source material chunks.
 
@@ -618,6 +613,7 @@ class ZorkMemory:
             scored.sort(key=lambda t: t[4], reverse=True)
             selected = scored[: max(1, int(top_k))]
             expanded: List[Tuple[str, str, int, str, float]] = []
+            mark_center = bool(before_n or after_n)
             for doc_key, doc_label, center_idx, center_text, score in selected:
                 doc_chunks = by_doc.get(doc_key, {})
                 if center_idx <= 0:
@@ -630,7 +626,7 @@ class ZorkMemory:
                     part = str(doc_chunks.get(idx) or "").strip()
                     if not part:
                         continue
-                    if idx == center_idx:
+                    if idx == center_idx and mark_center:
                         window_parts.append(f">> {part}")
                     else:
                         window_parts.append(part)
