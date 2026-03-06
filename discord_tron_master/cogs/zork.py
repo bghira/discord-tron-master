@@ -1,6 +1,7 @@
 from discord.ext import commands
 import datetime
 import logging
+import shlex
 import discord
 
 from discord_tron_master.bot import DiscordBot
@@ -39,6 +40,52 @@ class Zork(commands.Cog):
             if role.name == "Image Admin":
                 return True
         return False
+
+    def _parse_thread_options(
+        self, raw: str | None
+    ) -> tuple[str | None, bool | None, str | None]:
+        if not raw:
+            return None, None, None
+        try:
+            tokens = shlex.split(raw)
+        except ValueError:
+            tokens = str(raw).split()
+
+        name_tokens: list[str] = []
+        use_imdb: bool | None = None
+        summary_instructions: str | None = None
+        i = 0
+        while i < len(tokens):
+            token = str(tokens[i] or "")
+            low = token.lower()
+            if low == "--imdb":
+                use_imdb = True
+                i += 1
+                continue
+            if low in ("--no-imdb", "--noimdb"):
+                use_imdb = False
+                i += 1
+                continue
+            if low.startswith("--summary-instructions=") or low.startswith("--summary="):
+                summary_instructions = token.split("=", 1)[1]
+                i += 1
+                continue
+            if low in ("--summary-instructions", "--summary"):
+                if i + 1 < len(tokens):
+                    summary_instructions = str(tokens[i + 1] or "")
+                    i += 2
+                else:
+                    i += 1
+                continue
+            name_tokens.append(token)
+            i += 1
+
+        parsed_name = " ".join(name_tokens).strip() or None
+        if summary_instructions:
+            summary_instructions = " ".join(summary_instructions.strip().split())[:600]
+            if not summary_instructions:
+                summary_instructions = None
+        return parsed_name, use_imdb, summary_instructions
 
     def _should_ignore_message(self, message) -> bool:
         if message.author.bot:
@@ -352,7 +399,7 @@ class Zork(commands.Cog):
             f"Zork commands:\n"
             f"- `{prefix}zork` enable adventure mode in this channel\n"
             f"- `{prefix}zork <action>` take an action (ex: look, open door, take lamp)\n"
-            f"- `{prefix}zork thread [name]` create a dedicated Zork thread/campaign for yourself\n"
+            f"- `{prefix}zork thread [name] [--imdb|--no-imdb] [--summary-instructions \"...\"]` create a dedicated Zork thread/campaign for yourself\n"
             f"- `{prefix}zork source-material [label]` ingest attached `.txt` as campaign canon memory chunks\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
@@ -791,6 +838,7 @@ class Zork(commands.Cog):
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
+        parsed_name, use_imdb, summary_instructions = self._parse_thread_options(name)
 
         if isinstance(ctx.channel, discord.Thread):
             setup_message = None
@@ -798,7 +846,7 @@ class Zork(commands.Cog):
                 channel, _ = ZorkEmulator.enable_channel(
                     ctx.guild.id, ctx.channel.id, ctx.author.id
                 )
-                campaign_name = name or f"thread-{ctx.channel.id}"
+                campaign_name = parsed_name or f"thread-{ctx.channel.id}"
                 campaign, _, _ = ZorkEmulator.set_active_campaign(
                     channel,
                     ctx.guild.id,
@@ -816,17 +864,17 @@ class Zork(commands.Cog):
                     if isinstance(att_text, str) and att_text.startswith("ERROR:"):
                         await ctx.send(att_text.replace("ERROR:", "", 1))
                     elif att_text:
-                        short_msg = ZorkEmulator._attachment_setup_length_error(
-                            att_text
+                        att_summary = await ZorkEmulator._summarise_long_text(
+                            att_text,
+                            ctx.message,
+                            summary_instructions=summary_instructions,
                         )
-                        if short_msg:
-                            await ctx.send(short_msg)
-                        else:
-                            att_summary = await ZorkEmulator._summarise_long_text(
-                                att_text, ctx.message
-                            )
                     setup_message = await ZorkEmulator.start_campaign_setup(
-                        campaign, campaign_name, attachment_summary=att_summary
+                        campaign,
+                        campaign_name,
+                        attachment_summary=att_summary,
+                        use_imdb=use_imdb,
+                        attachment_summary_instructions=summary_instructions,
                     )
                 resolved_campaign_name = campaign.name
             if setup_message:
@@ -840,7 +888,7 @@ class Zork(commands.Cog):
                 )
             return
 
-        thread_name = (name or f"zork-{ctx.author.display_name}").strip()
+        thread_name = (parsed_name or f"zork-{ctx.author.display_name}").strip()
         if not thread_name:
             thread_name = f"zork-{ctx.author.id}"
         thread_name = thread_name[:90]
@@ -858,7 +906,7 @@ class Zork(commands.Cog):
             channel, _ = ZorkEmulator.enable_channel(
                 ctx.guild.id, thread.id, ctx.author.id
             )
-            campaign_name = (name or thread.name or f"thread-{thread.id}").strip()
+            campaign_name = (parsed_name or thread.name or f"thread-{thread.id}").strip()
             if not campaign_name:
                 campaign_name = f"thread-{thread.id}"
             campaign, _, _ = ZorkEmulator.set_active_campaign(
@@ -874,15 +922,18 @@ class Zork(commands.Cog):
             if isinstance(att_text, str) and att_text.startswith("ERROR:"):
                 await thread.send(att_text.replace("ERROR:", "", 1))
             elif att_text:
-                short_msg = ZorkEmulator._attachment_setup_length_error(att_text)
-                if short_msg:
-                    await thread.send(short_msg)
-                else:
-                    att_summary = await ZorkEmulator._summarise_long_text(
-                        att_text, ctx.message, channel=thread
-                    )
+                att_summary = await ZorkEmulator._summarise_long_text(
+                    att_text,
+                    ctx.message,
+                    channel=thread,
+                    summary_instructions=summary_instructions,
+                )
             setup_message = await ZorkEmulator.start_campaign_setup(
-                campaign, name or thread_name, attachment_summary=att_summary
+                campaign,
+                parsed_name or thread_name,
+                attachment_summary=att_summary,
+                use_imdb=use_imdb,
+                attachment_summary_instructions=summary_instructions,
             )
             resolved_campaign_name = campaign.name
 

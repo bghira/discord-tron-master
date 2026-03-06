@@ -92,6 +92,18 @@ class ZorkEmulator:
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_MIN_SETUP_CHUNKS = 1
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
+    SETUP_GENRE_TEMPLATES = (
+        "upbeat",
+        "rom-com",
+        "chick-flick",
+        "woke-culture-piece",
+        "spaghetti-western",
+        "psychedelic",
+        "buddy-comedy",
+        "absurd",
+        "detective-novel",
+        "dreamlike-fantasy",
+    )
     SOURCE_MATERIAL_CATEGORY = "source"
     SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
@@ -2093,14 +2105,23 @@ class ZorkEmulator:
 
     @classmethod
     async def start_campaign_setup(
-        cls, campaign, raw_name: str, attachment_summary: str = None
+        cls,
+        campaign,
+        raw_name: str,
+        attachment_summary: str = None,
+        *,
+        use_imdb: Optional[bool] = None,
+        attachment_summary_instructions: Optional[str] = None,
     ) -> str:
         """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
         gpt = GPT()
         has_source_material = bool(str(attachment_summary or "").strip())
+        effective_use_imdb = (
+            bool(use_imdb) if isinstance(use_imdb, bool) else (not has_source_material)
+        )
 
-        # Source material takes precedence over IMDB during setup classification.
-        if has_source_material:
+        # IMDB usage is controlled by explicit flag or source-first default.
+        if not effective_use_imdb:
             imdb_results = []
             imdb_text = ""
         else:
@@ -2160,7 +2181,7 @@ class ZorkEmulator:
         suggested = result.get("suggested_title") or raw_name
 
         # If LLM missed it but IMDB found results, promote the top hit.
-        if not has_source_material and not is_known and imdb_results:
+        if effective_use_imdb and not is_known and imdb_results:
             top = imdb_results[0]
             # Enrich with synopsis for a better description
             cls._imdb_enrich_results([top], max_enrich=1)
@@ -2184,10 +2205,15 @@ class ZorkEmulator:
             "is_known_work": is_known,
             "work_type": work_type,
             "work_description": work_desc,
-            "imdb_results": (imdb_results or []) if not has_source_material else [],
+            "imdb_results": (imdb_results or []) if effective_use_imdb else [],
+            "use_imdb": effective_use_imdb,
         }
         if attachment_summary:
             setup_data["attachment_summary"] = attachment_summary
+        if attachment_summary_instructions:
+            setup_data["attachment_summary_instructions"] = str(
+                attachment_summary_instructions
+            )[:600]
 
         state = cls.get_campaign_state(campaign)
         state["setup_phase"] = "classify_confirm"
@@ -2227,6 +2253,10 @@ class ZorkEmulator:
 
         if phase == "classify_confirm":
             return await cls._setup_handle_classify_confirm(
+                ctx, content, campaign, state, setup_data
+            )
+        elif phase == "genre_pick":
+            return await cls._setup_handle_genre_pick(
                 ctx, content, campaign, state, setup_data
             )
         elif phase == "storyline_pick":
@@ -2287,6 +2317,47 @@ class ZorkEmulator:
         )
 
     @classmethod
+    def _setup_genre_prompt(cls) -> str:
+        lines = ["Choose a genre direction before I generate variants:\n"]
+        for idx, genre in enumerate(cls.SETUP_GENRE_TEMPLATES, 1):
+            lines.append(f"{idx}. **{genre}**")
+        lines.append(
+            "\nReply with a number or exact genre name.\n"
+            "For custom direction, reply `custom: <your genre description>`."
+        )
+        return "\n".join(lines)
+
+    @classmethod
+    def _parse_setup_genre_choice(
+        cls, content: str
+    ) -> Tuple[Optional[dict], Optional[str]]:
+        raw = str(content or "").strip()
+        if not raw:
+            return None, "Please choose a genre."
+
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(cls.SETUP_GENRE_TEMPLATES):
+                genre = cls.SETUP_GENRE_TEMPLATES[idx - 1]
+                return {"kind": "template", "value": genre}, None
+            return None, f"Please choose a number between 1 and {len(cls.SETUP_GENRE_TEMPLATES)}."
+
+        lowered = raw.lower().strip()
+        if lowered.startswith("custom:") or lowered.startswith("other:"):
+            custom = raw.split(":", 1)[1].strip()
+            if len(custom) < 3:
+                return None, "Custom genre is too short. Add a bit more detail."
+            return {"kind": "custom", "value": custom[:200]}, None
+
+        normalized = lowered.replace("_", "-").replace(" ", "-")
+        normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+        if normalized in cls.SETUP_GENRE_TEMPLATES:
+            return {"kind": "template", "value": normalized}, None
+
+        # Treat any non-empty non-template input as custom direction.
+        return {"kind": "custom", "value": raw[:200]}, None
+
+    @classmethod
     async def _setup_handle_classify_confirm(
         cls, ctx, content, campaign, state, setup_data
     ) -> str:
@@ -2334,7 +2405,13 @@ class ZorkEmulator:
                 str(setup_data.get("attachment_summary") or "").strip()
                 or str(setup_data.get("source_material_document_key") or "").strip()
             )
-            imdb_results = [] if has_source_material else cls._imdb_search(content)
+            use_imdb_cfg = setup_data.get("use_imdb")
+            use_imdb_effective = (
+                bool(use_imdb_cfg)
+                if isinstance(use_imdb_cfg, bool)
+                else (not has_source_material)
+            )
+            imdb_results = cls._imdb_search(content) if use_imdb_effective else []
             imdb_text = cls._format_imdb_results(imdb_results)
             _zork_log(
                 f"SETUP RE-CLASSIFY campaign={campaign.id}",
@@ -2383,7 +2460,7 @@ class ZorkEmulator:
 
             # If LLM still missed it but IMDB found results, promote top hit.
             if (
-                not has_source_material
+                use_imdb_effective
                 and not setup_data["is_known_work"]
                 and imdb_results
                 and not novel_intent
@@ -2400,7 +2477,7 @@ class ZorkEmulator:
 
             # Filter to confirmed match only
             confirmed_name = setup_data.get("raw_name", "").lower()
-            if (not has_source_material) and imdb_results and confirmed_name:
+            if use_imdb_effective and imdb_results and confirmed_name:
                 best = None
                 for r in imdb_results:
                     if (
@@ -2412,7 +2489,7 @@ class ZorkEmulator:
                 setup_data["imdb_results"] = [best] if best else [imdb_results[0]]
             else:
                 setup_data["imdb_results"] = imdb_results or []
-            if has_source_material:
+            if not use_imdb_effective:
                 setup_data["imdb_results"] = []
             # Enrich with synopsis
             if setup_data.get("imdb_results"):
@@ -2443,13 +2520,40 @@ class ZorkEmulator:
         if isinstance(att_text, str) and att_text.startswith("ERROR:"):
             await ctx.channel.send(att_text.replace("ERROR:", "", 1))
         elif att_text:
-            summary = await cls._summarise_long_text(att_text, ctx)
+            summary_instructions = str(
+                setup_data.get("attachment_summary_instructions") or ""
+            ).strip()
+            summary = await cls._summarise_long_text(
+                att_text,
+                ctx,
+                summary_instructions=summary_instructions or None,
+            )
             if summary:
                 setup_data["attachment_summary"] = summary
 
-        # Generate storyline variants
+        if user_guidance:
+            setup_data["variant_user_guidance"] = user_guidance
+        state["setup_phase"] = "genre_pick"
+        state["setup_data"] = setup_data
+        campaign.state_json = cls._dump_json(state)
+        campaign.updated = db.func.now()
+        db.session.commit()
+        return cls._setup_genre_prompt()
+
+    @classmethod
+    async def _setup_handle_genre_pick(
+        cls, ctx, content, campaign, state, setup_data
+    ) -> str:
+        genre_pref, error = cls._parse_setup_genre_choice(content)
+        if error:
+            return f"{error}\n\n{cls._setup_genre_prompt()}"
+
+        setup_data["genre_preference"] = genre_pref
+        user_guidance = str(setup_data.pop("variant_user_guidance", "") or "").strip() or None
         variants_msg = await cls._setup_generate_storyline_variants(
-            campaign, setup_data, user_guidance=user_guidance
+            campaign,
+            setup_data,
+            user_guidance=user_guidance,
         )
         state["setup_phase"] = "storyline_pick"
         state["setup_data"] = setup_data
@@ -2505,6 +2609,23 @@ class ZorkEmulator:
                 f"{user_guidance}\n"
                 "Follow these instructions closely when designing the variants.\n"
             )
+        genre_context = ""
+        genre_pref = setup_data.get("genre_preference")
+        if isinstance(genre_pref, dict):
+            genre_value = str(genre_pref.get("value") or "").strip()
+            genre_kind = str(genre_pref.get("kind") or "").strip().lower()
+            if genre_value:
+                if genre_kind == "custom":
+                    genre_context = (
+                        "\nGenre direction (custom):\n"
+                        f"{genre_value}\n"
+                        "Treat this as a hard style/tone preference while staying coherent.\n"
+                    )
+                else:
+                    genre_context = (
+                        f"\nGenre direction: {genre_value}\n"
+                        "Prioritize this tone and genre conventions in all variants.\n"
+                    )
 
         if is_known:
             user_prompt = (
@@ -2513,6 +2634,7 @@ class ZorkEmulator:
                 f"Description: {work_desc}\n"
                 f"{imdb_context}"
                 f"{attachment_context}"
+                f"{genre_context}"
                 f"{guidance_context}\n"
                 f"Use the ACTUAL characters, locations, and plot points from '{raw_name}'. "
                 f"Variant ideas: faithful retelling from a character's perspective, "
@@ -2524,6 +2646,7 @@ class ZorkEmulator:
                 f"Generate 2-3 storyline variants for an original text-adventure campaign "
                 f"called '{raw_name}'.\n"
                 f"{attachment_context}"
+                f"{genre_context}"
                 f"{guidance_context}"
                 f"Each variant should have a different tone, central conflict, or protagonist archetype. "
                 f"Be creative and specific with character names and chapter titles."
@@ -2764,6 +2887,12 @@ class ZorkEmulator:
                 f"\nDetailed source material:\n{attachment_summary}\n"
                 "Use this to create an accurate world with faithful characters, locations, and plot.\n"
             )
+        genre_context = ""
+        genre_pref = setup_data.get("genre_preference")
+        if isinstance(genre_pref, dict):
+            genre_value = str(genre_pref.get("value") or "").strip()
+            if genre_value:
+                genre_context = f"\nGenre direction: {genre_value}\n"
 
         finalize_user = (
             f"Build the complete world for: '{raw_name}'\n"
@@ -2771,6 +2900,7 @@ class ZorkEmulator:
             f"Description: {setup_data.get('work_description', '')}\n"
             f"{imdb_context}"
             f"{attachment_context}"
+            f"{genre_context}"
             f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
             f"Include the main character '{chosen.get('main_character', '')}' and all essential NPCs "
             f"({', '.join(chosen.get('essential_npcs', []))}).\n"
@@ -3034,7 +3164,13 @@ class ZorkEmulator:
         return result
 
     @classmethod
-    async def _summarise_long_text(cls, text: str, ctx_message, channel=None) -> str:
+    async def _summarise_long_text(
+        cls,
+        text: str,
+        ctx_message,
+        channel=None,
+        summary_instructions: Optional[str] = None,
+    ) -> str:
         """Chunk, summarise in parallel, condense to budget. Returns summary.
         *channel* overrides ctx_message.channel for progress messages.
         All sizing uses the GLM tokenizer for accurate token counts."""
@@ -3079,11 +3215,18 @@ class ZorkEmulator:
         # Step 2 — parallel summarise
         # Scale max_tokens with chunk size so larger chunks get more summary room
         summary_max_tokens = min(1500, max(800, target_chunk_tokens // 4))
+        instruction_text = " ".join(str(summary_instructions or "").strip().split())[:600]
         summarise_system = (
             "Summarise the following text passage for a text-adventure campaign. "
             "Preserve all character names, plot points, locations, and key events. "
             f"Be detailed but concise. End with the exact line: {guard}"
         )
+        if instruction_text:
+            summarise_system = (
+                f"{summarise_system}\n"
+                "Additional user instruction for this summary:\n"
+                f"{instruction_text}"
+            )
 
         async def _summarise_chunk(chunk_text: str) -> str:
             try:
