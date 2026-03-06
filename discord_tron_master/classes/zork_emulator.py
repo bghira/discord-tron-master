@@ -107,6 +107,28 @@ class ZorkEmulator:
         "sci-fi": "Technology, exploration, and questions about what it means to be human.",
         "dreamlike-fantasy": "Surreal, poetic, and just slightly impossible.",
     } 
+    # Behind the Name usage codes for name_generate tool.
+    # Keys are human-friendly labels the LLM can use; values are URL param fragments.
+    NAME_ORIGIN_CODES = {
+        "african": "afr", "albanian": "alb", "arabic": "ara", "armenian": "arm",
+        "azerbaijani": "aze", "basque": "bas", "bengali": "ben", "bosnian": "bos",
+        "breton": "bre", "bulgarian": "bul", "catalan": "cat", "chinese": "chi",
+        "croatian": "cro", "czech": "cze", "danish": "dan", "dutch": "dut",
+        "english": "eng", "estonian": "est", "filipino": "fil", "finnish": "fin",
+        "french": "fre", "galician": "gal", "georgian": "geo", "german": "ger",
+        "greek": "gre", "hawaiian": "haw", "hebrew": "heb", "hindi": "hin",
+        "hungarian": "hun", "icelandic": "ice", "igbo": "igb", "indian": "ind",
+        "indonesian": "ins", "irish": "ire", "italian": "ita", "japanese": "jpn",
+        "kazakh": "kaz", "korean": "kor", "latvian": "lat", "lithuanian": "lth",
+        "macedonian": "mac", "malay": "mly", "maori": "mao", "native-american": "nam",
+        "norwegian": "nor", "persian": "per", "polish": "pol", "portuguese": "por",
+        "romanian": "rum", "russian": "rus", "scottish": "sco", "serbian": "ser",
+        "slovak": "slk", "slovene": "sln", "spanish": "spa", "swahili": "swa",
+        "swedish": "swe", "thai": "tha", "turkish": "tur", "ukrainian": "ukr",
+        "urdu": "urd", "vietnamese": "vie", "welsh": "wel", "yoruba": "yor",
+    }
+    NAME_GENERATE_URL = "https://www.behindthename.com/random/random.php"
+
     SOURCE_MATERIAL_CATEGORY = "source"
     SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT = 8
     SOURCE_MATERIAL_FORMAT_STORY = "story"
@@ -365,7 +387,8 @@ class ZorkEmulator:
         "  Set it in player_state_update.character_name.\n"
         "- GM-RULE-NAMES: for newly created original characters, avoid generic AI-default names. "
         "Do not default to names like Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, or River unless source canon explicitly requires them. "
-        "Prefer distinctive, specific names with personality.\n"
+        "Prefer distinctive, specific names with personality. "
+        "Use the name_generate tool to get real culturally-appropriate names when introducing new NPCs.\n"
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
@@ -516,6 +539,21 @@ class ZorkEmulator:
         "source_browse returns the raw KEY: value lines, up to 60 by default (adjustable via 'limit').\n"
         "STRATEGY: for a rulebook you have not seen before, call source_browse with no wildcard first to see what keys exist, "
         "then use memory_search with category 'source:<document_key>' for semantic detail on specific entries.\n"
+        "\nNAME GENERATION — name_generate tool:\n"
+        "When introducing a new NPC, use name_generate to get real culturally-appropriate names instead of inventing them.\n"
+        "- Generate names filtered by cultural origin:\n"
+        '  {"tool_call": "name_generate", "origins": ["italian", "arabic"], "gender": "f", "context": "confident bartender in her 40s"}\n'
+        "- Generate names with no origin filter:\n"
+        '  {"tool_call": "name_generate", "gender": "m", "count": 5}\n'
+        "Parameters:\n"
+        '  origins: array of origin strings (e.g. "english", "korean", "spanish", "nigerian"). '
+        "Multiple origins are combined. Omit for any origin.\n"
+        '  gender: "m", "f", or "both" (default "both")\n'
+        "  count: 1-6 names (default 5)\n"
+        "  context: brief character concept to help you evaluate the results (not sent to the name service)\n"
+        "Review the returned names against your character concept — ethnicity, sound, mood, setting — "
+        "and pick the best fit. Call again with different origins if none work.\n"
+        "IMPORTANT: ALWAYS use this tool when creating new original NPCs. Do not invent names from your training data.\n"
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
         '{"tool_call": "sms_list", "wildcard": "*"}\n'
@@ -1970,6 +2008,55 @@ class ZorkEmulator:
 
     # ── Campaign Setup State Machine ──────────────────────────────────────
 
+    # ── Name Generation ──────────────────────────────────────────────────
+
+    @classmethod
+    def _fetch_random_names(
+        cls,
+        origins: List[str] | None = None,
+        gender: str = "both",
+        count: int = 5,
+    ) -> List[str]:
+        """Fetch random names from behindthename.com.
+
+        *origins* is a list of human-friendly keys (e.g. ``["italian", "arabic"]``).
+        Returns a list of first-name strings, or empty on failure.
+        """
+        params: dict = {
+            "number": str(max(1, min(6, int(count)))),
+            "gender": gender if gender in ("m", "f", "both") else "both",
+            "surname": "",
+        }
+        if origins:
+            resolved_any = False
+            for origin in origins:
+                code = cls.NAME_ORIGIN_CODES.get(
+                    origin.strip().lower().replace(" ", "-")
+                )
+                if code:
+                    params[f"usage_{code}"] = "1"
+                    resolved_any = True
+            if not resolved_any:
+                # Fallback: use all origins so we at least get names.
+                params["all"] = "yes"
+        else:
+            params["all"] = "yes"
+
+        try:
+            resp = requests.get(cls.NAME_GENERATE_URL, params=params, timeout=6)
+            resp.raise_for_status()
+            # Names appear as markdown-style links: [Name](/name/name)
+            names = re.findall(r"\[([A-Z][^\]]+)\]\(/name/", resp.text)
+            if not names:
+                # Fallback: try plain <a class="plain"> tags
+                names = re.findall(
+                    r'<a\s+class="plain"[^>]*>([^<]+)</a>', resp.text
+                )
+            return [n.strip() for n in names if n.strip()][:count]
+        except Exception:
+            logger.warning("name_generate: behindthename.com fetch failed")
+            return []
+
     IMDB_SUGGEST_URL = "https://v2.sg.media-imdb.com/suggestion/{first}/{query}.json"
     IMDB_TIMEOUT = 5
 
@@ -2719,10 +2806,49 @@ class ZorkEmulator:
                 else:
                     tool_result = "SOURCE_SEARCH_RESULT: no relevant hits"
 
+            elif tool_name == "name_generate":
+                raw_origins = payload.get("origins") or []
+                if isinstance(raw_origins, str):
+                    raw_origins = [raw_origins]
+                origins = [
+                    str(o).strip().lower()
+                    for o in raw_origins
+                    if str(o or "").strip()
+                ][:4]
+                ng_gender = str(payload.get("gender") or "both").strip().lower()
+                ng_count = 5
+                try:
+                    ng_count = max(1, min(6, int(payload.get("count") or 5)))
+                except (TypeError, ValueError):
+                    pass
+                ng_context = str(payload.get("context") or "").strip()[:300]
+                names = cls._fetch_random_names(
+                    origins=origins or None,
+                    gender=ng_gender,
+                    count=ng_count,
+                )
+                if names:
+                    tool_result = (
+                        f"NAME_GENERATE_RESULT "
+                        f"(origins={origins or 'any'}, gender={ng_gender}):\n"
+                        + "\n".join(f"- {n}" for n in names)
+                    )
+                    if ng_context:
+                        tool_result += f"\nEvaluate against: {ng_context}"
+                    tool_result += (
+                        "\nPick the best fit or call name_generate again "
+                        "with different origins/gender."
+                    )
+                else:
+                    tool_result = (
+                        f"NAME_GENERATE_RESULT (origins={origins or 'any'}): "
+                        "no names returned — try broader origins."
+                    )
+
             else:
                 tool_result = (
                     f"UNKNOWN_TOOL: '{tool_name}' is not available during setup. "
-                    "Available tools: source_browse, memory_search (category 'source'). "
+                    "Available tools: source_browse, memory_search, name_generate. "
                     "Return your final JSON now."
                 )
 
@@ -2777,7 +2903,15 @@ class ZorkEmulator:
                 "Only return your final variants JSON after you have reviewed the source material.\n"
             )
 
-        source_tool_instructions = ""
+        name_tool_instructions = (
+            "\nYou have a name_generate tool for culturally-appropriate character names.\n"
+            "To generate names filtered by origin:\n"
+            '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
+            "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+            "You will receive the results and can call more tools or return your final response.\n"
+            "Use name_generate for ALL new original characters instead of inventing names.\n"
+        )
+        source_tool_instructions = name_tool_instructions
         if source_payload.get("available"):
             source_tool_instructions = (
                 "\nYou have tools to inspect ingested source material before generating your response.\n"
@@ -2789,10 +2923,13 @@ class ZorkEmulator:
                 '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
                 "To semantic-search source material:\n"
                 '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                "To generate culturally-appropriate character names:\n"
+                '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
                 "To call a tool, return ONLY the JSON tool_call object (no other keys). "
                 "You will receive the results and can call more tools or return your final response.\n"
                 "ALWAYS browse source material before generating variants — "
                 "the summary alone may not capture all characters, rules, or locations.\n"
+                "Use name_generate for ALL new original characters instead of inventing names.\n"
             )
 
         system_prompt = (
@@ -3109,7 +3246,15 @@ class ZorkEmulator:
                 "Only return your final world JSON after you have reviewed the source material.\n"
             )
 
-        source_tool_instructions = ""
+        name_tool_instructions = (
+            "\nYou have a name_generate tool for culturally-appropriate character names.\n"
+            "To generate names filtered by origin:\n"
+            '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
+            "To call a tool, return ONLY the JSON tool_call object (no other keys). "
+            "You will receive the results and can call more tools or return your final response.\n"
+            "Use name_generate for ALL new original characters instead of inventing names.\n"
+        )
+        source_tool_instructions = name_tool_instructions
         if source_payload.get("available"):
             source_tool_instructions = (
                 "\nYou have tools to inspect ingested source material before generating your response.\n"
@@ -3121,10 +3266,13 @@ class ZorkEmulator:
                 '  {"tool_call": "source_browse", "wildcard": "keyword*"}\n'
                 "To semantic-search source material:\n"
                 '  {"tool_call": "memory_search", "category": "source", "queries": ["query1", "query2"]}\n'
+                "To generate culturally-appropriate character names:\n"
+                '  {"tool_call": "name_generate", "origins": ["italian"], "gender": "f", "context": "tough bouncer"}\n'
                 "To call a tool, return ONLY the JSON tool_call object (no other keys). "
                 "You will receive the results and can call more tools or return your final response.\n"
                 "ALWAYS browse source material before building the world — "
                 "the summary alone may not capture all characters, rules, or locations.\n"
+                "Use name_generate for ALL new original characters instead of inventing names.\n"
             )
 
         finalize_system = (
@@ -10251,6 +10399,71 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("SOURCE BROWSE AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "name_generate":
+                            raw_origins = first_payload.get("origins") or []
+                            if isinstance(raw_origins, str):
+                                raw_origins = [raw_origins]
+                            origins = [
+                                str(o).strip().lower()
+                                for o in raw_origins
+                                if str(o or "").strip()
+                            ][:4]
+                            ng_gender = str(
+                                first_payload.get("gender") or "both"
+                            ).strip().lower()
+                            ng_count = 5
+                            try:
+                                ng_count = max(1, min(6, int(first_payload.get("count") or 5)))
+                            except (TypeError, ValueError):
+                                pass
+                            ng_context = str(
+                                first_payload.get("context") or ""
+                            ).strip()[:300]
+                            names = cls._fetch_random_names(
+                                origins=origins or None,
+                                gender=ng_gender,
+                                count=ng_count,
+                            )
+                            if names:
+                                tool_result_block = (
+                                    f"NAME_GENERATE_RESULT "
+                                    f"(origins={origins or 'any'}, "
+                                    f"gender={ng_gender}, "
+                                    f"count={len(names)}):\n"
+                                    + "\n".join(f"- {n}" for n in names)
+                                    + "\n\nEvaluate these against your character concept"
+                                )
+                                if ng_context:
+                                    tool_result_block += (
+                                        f" ({ng_context})"
+                                    )
+                                tool_result_block += (
+                                    ". Pick the best fit, or call name_generate again "
+                                    "with different origins/gender for more options."
+                                )
+                            else:
+                                tool_result_block = (
+                                    f"NAME_GENERATE_RESULT "
+                                    f"(origins={origins or 'any'}): "
+                                    "no names returned — try broader origins "
+                                    "or fewer filters."
+                                )
+                            _zork_log("NAME GENERATE BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("NAME GENERATE AUGMENTED RESPONSE", response)
 
                         elif tool_name == "plot_plan":
                             campaign_state_plot = cls.get_campaign_state(campaign)
