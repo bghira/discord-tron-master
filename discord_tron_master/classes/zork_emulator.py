@@ -85,10 +85,11 @@ class ZorkEmulator:
     PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
     ATTACHMENT_MAX_BYTES = 500_000
-    ATTACHMENT_CHUNK_TOKENS = 2_000       # minimum tokens per chunk
+    ATTACHMENT_CHUNK_TOKENS = 50_000      # minimum tokens per chunk
     ATTACHMENT_MODEL_CTX_TOKENS = 200_000 # GLM-5 context window
     ATTACHMENT_PROMPT_OVERHEAD_TOKENS = 6_000  # reserve for system + user + IMDB + storyline JSON
-    ATTACHMENT_RESPONSE_RESERVE_TOKENS = 4_000 # max_tokens used by finalize response
+    ATTACHMENT_RESPONSE_RESERVE_TOKENS = 90_000 # max_tokens used by finalize response
+    ATTACHMENT_SUMMARY_MAX_TOKENS = 90_000
     ATTACHMENT_MAX_PARALLEL = 4
     ATTACHMENT_MIN_SETUP_CHUNKS = 1
     ATTACHMENT_GUARD_TOKEN = "--COMPLETED SUMMARY--"
@@ -3585,6 +3586,136 @@ class ZorkEmulator:
     ATTACHMENT_MAX_CHUNKS = 8  # dynamic chunk sizing target
 
     @classmethod
+    def _is_attachment_header_line(cls, line: str) -> bool:
+        stripped = str(line or "").strip()
+        if not stripped:
+            return False
+        if re.match(r"^#{1,6}\s+\S", stripped):
+            return True
+        return bool(re.match(r"^[A-Z0-9][A-Z0-9 _/\-()&'.]{1,80}:\s*$", stripped))
+
+    @classmethod
+    def _is_attachment_indented_line(cls, line: str) -> bool:
+        raw = str(line or "").rstrip("\n")
+        return bool(re.match(r"^(?:\t+|\s{4,})\S", raw))
+
+    @classmethod
+    def _split_attachment_structural_blocks(cls, text: str) -> List[str]:
+        clean = str(text or "").strip()
+        if not clean:
+            return []
+        lines = clean.splitlines()
+        blocks: List[str] = []
+        current: List[str] = []
+
+        def flush_current() -> None:
+            if not current:
+                return
+            block = "\n".join(current).strip()
+            current.clear()
+            if block:
+                blocks.append(block)
+
+        for raw_line in lines:
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                flush_current()
+                continue
+            if cls._is_attachment_header_line(line):
+                flush_current()
+                blocks.append(stripped)
+                continue
+            if cls._is_attachment_indented_line(raw_line):
+                flush_current()
+                blocks.append(line)
+                continue
+            current.append(line)
+        flush_current()
+        return blocks or [clean]
+
+    @classmethod
+    def _hard_wrap_attachment_text(
+        cls,
+        text: str,
+        *,
+        target_chunk_tokens: int,
+    ) -> List[str]:
+        clean = str(text or "").strip()
+        if not clean:
+            return []
+        chars_per_tok = max(len(clean) / max(glm_token_count(clean), 1), 1.0)
+        target_chars = max(512, int(target_chunk_tokens * chars_per_tok))
+        out: List[str] = []
+        start = 0
+        length = len(clean)
+        while start < length:
+            end = min(length, start + target_chars)
+            if end < length:
+                window = clean[start:end]
+                breakpoints = [
+                    window.rfind("\n\n"),
+                    window.rfind("\n"),
+                    window.rfind("    "),
+                    window.rfind("\t"),
+                    window.rfind(" "),
+                ]
+                best_break = max(breakpoints)
+                if best_break > max(256, target_chars // 3):
+                    end = start + best_break
+            piece = clean[start:end].strip()
+            if piece:
+                out.append(piece)
+            start = max(end, start + 1)
+            while start < length and clean[start].isspace():
+                start += 1
+        return out
+
+    @classmethod
+    def _pack_attachment_chunks(
+        cls,
+        segments: List[str],
+        *,
+        target_chunk_tokens: int,
+    ) -> List[str]:
+        packed: List[str] = []
+        current: List[str] = []
+
+        def flush_current() -> None:
+            if not current:
+                return
+            block = "\n\n".join(current).strip()
+            current.clear()
+            if block:
+                packed.append(block)
+
+        for segment in segments:
+            piece = str(segment or "").strip()
+            if not piece:
+                continue
+            piece_tokens = glm_token_count(piece)
+            if piece_tokens > target_chunk_tokens:
+                flush_current()
+                packed.extend(
+                    cls._hard_wrap_attachment_text(
+                        piece,
+                        target_chunk_tokens=target_chunk_tokens,
+                    )
+                )
+                continue
+            if not current:
+                current.append(piece)
+                continue
+            candidate = "\n\n".join([*current, piece]).strip()
+            if glm_token_count(candidate) <= target_chunk_tokens:
+                current.append(piece)
+                continue
+            flush_current()
+            current.append(piece)
+        flush_current()
+        return packed
+
+    @classmethod
     def _chunk_text_by_tokens(
         cls,
         text: str,
@@ -3601,21 +3732,16 @@ class ZorkEmulator:
         target_chunk_tokens = max(chunk_floor, total_tokens // chunk_limit)
         chars_per_tok = len(clean) / max(total_tokens, 1)
         chunk_char_target = max(1, int(target_chunk_tokens * chars_per_tok))
-        paragraphs = clean.split("\n\n")
-        chunks: List[str] = []
-        current_chunk: List[str] = []
-        current_len = 0
-        for para in paragraphs:
-            para_len = len(para)
-            if current_len + para_len + 2 > chunk_char_target and current_chunk:
-                chunks.append("\n\n".join(current_chunk))
-                current_chunk = [para]
-                current_len = para_len
-            else:
-                current_chunk.append(para)
-                current_len += para_len + 2
-        if current_chunk:
-            chunks.append("\n\n".join(current_chunk))
+        blocks = cls._split_attachment_structural_blocks(clean)
+        chunks = cls._pack_attachment_chunks(
+            blocks,
+            target_chunk_tokens=target_chunk_tokens,
+        )
+        if not chunks:
+            chunks = cls._hard_wrap_attachment_text(
+                clean,
+                target_chunk_tokens=target_chunk_tokens,
+            )
         return chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target
 
     @classmethod
@@ -3706,7 +3832,10 @@ class ZorkEmulator:
 
         # Step 2 — parallel summarise
         # Scale max_tokens with chunk size so larger chunks get more summary room
-        summary_max_tokens = min(1500, max(800, target_chunk_tokens // 4))
+        summary_max_tokens = min(
+            cls.ATTACHMENT_SUMMARY_MAX_TOKENS,
+            max(8_000, target_chunk_tokens // 2),
+        )
         instruction_text = " ".join(str(summary_instructions or "").strip().split())[:600]
         summarise_system = (
             "Summarise the following text passage for a text-adventure campaign. "
@@ -3837,7 +3966,11 @@ class ZorkEmulator:
                 try:
                     result = await gpt.turbo_completion(
                         condense_system, summary_text,
-                        max_tokens=target_tokens_per + 50, temperature=0.2,
+                        max_tokens=min(
+                            cls.ATTACHMENT_SUMMARY_MAX_TOKENS,
+                            max(2_048, target_tokens_per + 256),
+                        ),
+                        temperature=0.2,
                     )
                     result = (result or "").strip()
                     if guard not in result:
