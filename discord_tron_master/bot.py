@@ -83,14 +83,23 @@ class DiscordBot:
             raise e
 
     async def find_channel(self, channel_id):
+        channel = self.bot.get_channel(channel_id)
+        if channel is not None:
+            return channel
+        for private_channel in getattr(self.bot, "private_channels", []) or []:
+            if getattr(private_channel, "id", None) == channel_id:
+                return private_channel
         for guild in self.bot.guilds:
             for channel in guild.channels:
                 if isinstance(channel, discord.TextChannel):
                     if channel.id == channel_id:
                         return channel
-        thread = self.bot.get_channel(channel_id)
-        if thread is not None:
-            return thread
+        try:
+            fetched = await self.bot.fetch_channel(channel_id)
+            if fetched is not None:
+                return fetched
+        except Exception:
+            pass
 
         return None
 
