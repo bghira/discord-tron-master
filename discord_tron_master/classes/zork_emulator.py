@@ -413,6 +413,7 @@ class ZorkEmulator:
         "  * private: actor-only context. Use this for DM/private-channel turns unless the action clearly becomes public.\n"
         "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
+        "  * Phone/text/SMS activity is private by default to the acting player. If they text or message someone off-scene, use private or limited unless they explicitly show or read it aloud to others.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
         "  * If TURN_VISIBILITY_DEFAULT is local, keep routine room-level interaction local unless it clearly becomes public.\n"
         "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
@@ -512,6 +513,7 @@ class ZorkEmulator:
         "sms_schedule is invisible to players at scheduling time. Do NOT narrate the delayed SMS as already received in the current response.\n"
         "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
         "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
+        "SMS privacy rule: do NOT leave literal player command lines like 'I text X ...' in narration or shared room context; the SMS log is the canonical record.\n"
         "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
     )
     MEMORY_TOOL_PROMPT = (
@@ -530,6 +532,7 @@ class ZorkEmulator:
         "- Default behavior: call memory_search first.\n"
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
         "use sms_write when sending or replying. Use sms_schedule for delayed replies.\n"
+        "- Phone/text/SMS turns should normally be private or limited, not local/public, unless the player explicitly shares the content out loud.\n"
         "- CRITICAL SMS RULE: When an NPC replies via text/phone, you MUST call sms_write to record the NPC's reply "
         "BEFORE outputting final narration. Both sides of a conversation must be in the SMS log. "
         "If you narrate an NPC texting back but don't sms_write it, the reply is lost permanently.\n"
@@ -9401,10 +9404,19 @@ class ZorkEmulator:
             text,
             flags=re.IGNORECASE,
         )
-        if not m:
-            return None
-        recipient = str(m.group(1) or "").strip().strip("\"'` ")
-        message = str(m.group(2) or "").strip()
+        if m:
+            recipient = str(m.group(1) or "").strip().strip("\"'` ")
+            message = str(m.group(2) or "").strip()
+        else:
+            m = re.match(
+                r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?([^\s:\n]{1,80})\s+(.+?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if not m:
+                return None
+            recipient = str(m.group(1) or "").strip().strip("\"'` ")
+            message = str(m.group(2) or "").strip()
         if (
             len(message) >= 2
             and message[0] == message[-1]
@@ -9414,6 +9426,56 @@ class ZorkEmulator:
         if not recipient or not message:
             return None
         return recipient[:80], message[:500]
+
+    @staticmethod
+    def _is_private_phone_command_line(value: object) -> bool:
+        text = " ".join(str(value or "").strip().split())
+        if not text:
+            return False
+        return bool(
+            re.match(
+                r"^(?:i\s+)?(?:send\s+)?(?:sms|text|message)\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    @classmethod
+    def _redact_private_phone_command_lines(
+        cls,
+        text: str,
+    ) -> Tuple[str, bool]:
+        if not text:
+            return "", False
+        kept_lines: List[str] = []
+        redacted = False
+        for raw_line in str(text).splitlines():
+            if cls._is_private_phone_command_line(raw_line):
+                redacted = True
+                continue
+            kept_lines.append(raw_line)
+        return "\n".join(kept_lines).strip(), redacted
+
+    @classmethod
+    def _force_private_visibility_for_phone_activity(
+        cls,
+        visibility: Dict[str, object],
+        *,
+        actor_slug: str,
+        actor_user_id: Optional[int],
+    ) -> Dict[str, object]:
+        reason = cls._trim_text(str(visibility.get("reason") or "").strip(), 240)
+        return {
+            "scope": "private",
+            "actor_player_slug": actor_slug or None,
+            "actor_user_id": actor_user_id,
+            "visible_player_slugs": [actor_slug] if actor_slug else [],
+            "visible_user_ids": [actor_user_id] if actor_user_id is not None else [],
+            "location_key": None,
+            "aware_npc_slugs": [],
+            "reason": reason or "Private phone/SMS activity is actor-only unless explicitly shared.",
+            "source": "auto-private-phone",
+        }
 
     @classmethod
     def _sms_write(
@@ -11426,12 +11488,14 @@ class ZorkEmulator:
                         characters = cls.get_campaign_characters(campaign)
                         return cls.format_roster(characters)
 
+                    sms_activity_detected = False
                     is_ooc_action = bool(
                         re.match(r"\s*\[OOC\b", action or "", re.IGNORECASE)
                     )
                     if not is_ooc_action:
                         sms_intent = cls._extract_inline_sms_intent(action)
                         if sms_intent is not None:
+                            sms_activity_detected = True
                             sms_recipient, sms_message = sms_intent
                             campaign_state_sms = cls.get_campaign_state(campaign)
                             game_time_sms = cls._extract_game_time_snapshot(
@@ -12588,6 +12652,7 @@ class ZorkEmulator:
                             _zork_log("SMS READ AUGMENTED RESPONSE", response)
 
                         elif tool_name == "sms_write":
+                            sms_activity_detected = True
                             thread = str(
                                 first_payload.get("thread")
                                 or first_payload.get("contact")
@@ -12655,6 +12720,7 @@ class ZorkEmulator:
                             _zork_log("SMS WRITE AUGMENTED RESPONSE", response)
 
                         elif tool_name == "sms_schedule":
+                            sms_activity_detected = True
                             thread = str(
                                 first_payload.get("thread")
                                 or first_payload.get("contact")
@@ -13478,6 +13544,25 @@ class ZorkEmulator:
                         turn_visibility,
                         is_private_context=(getattr(ctx, "guild", None) is None),
                     )
+                    stored_player_action, private_phone_redacted = (
+                        cls._redact_private_phone_command_lines(action)
+                    )
+                    if sms_activity_detected or private_phone_redacted:
+                        turn_visibility = cls._force_private_visibility_for_phone_activity(
+                            turn_visibility,
+                            actor_slug=str(
+                                turn_visibility.get("actor_player_slug")
+                                or cls._player_slug_key(
+                                    player_state.get("character_name")
+                                )
+                                or ""
+                            ).strip(),
+                            actor_user_id=ctx.author.id,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "private_phone_redacted",
+                        )
 
                     _planning_tools_used = bool(
                         {"plot_plan", "chapter_plan", "consequence_log"}
@@ -14082,12 +14167,12 @@ class ZorkEmulator:
                     # Don't store OOC meta-messages in turn history.
                     _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
                     player_turn = None
-                    if not _is_ooc:
+                    if not _is_ooc and stored_player_action:
                         player_turn = ZorkTurn(
                             campaign_id=campaign.id,
                             user_id=ctx.author.id,
                             kind="player",
-                            content=action,
+                            content=stored_player_action,
                             channel_id=ctx.channel.id,
                             meta_json=player_turn_meta,
                         )
