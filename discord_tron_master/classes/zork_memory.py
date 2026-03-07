@@ -357,6 +357,11 @@ class ZorkMemory:
         try:
             query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
+            visibility_scope_raw = str(visibility_scope or "").strip().lower()
+            viewer_slug_key = cls._normalize_slug(viewer_player_slug)
+            viewer_location_key_clean = str(viewer_location_key or "").strip().lower()
+            participant_slug_key = cls._normalize_slug(participant_slug)
+            aware_npc_slug_key = cls._normalize_slug(aware_npc_slug)
             sql = [
                 "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
                 "FROM turn_embeddings te",
@@ -364,7 +369,6 @@ class ZorkMemory:
             ]
             params: List[object] = [campaign_id]
 
-            viewer_slug_key = cls._normalize_slug(viewer_player_slug)
             visibility_clauses: List[str] = []
             if viewer_user_id is not None:
                 visibility_clauses.append(
@@ -387,27 +391,61 @@ class ZorkMemory:
                     "AND (te.visibility_scope = 'public' OR " + " OR ".join(visibility_clauses) + ")"
                 )
 
-            participant_slug_key = cls._normalize_slug(participant_slug)
             if participant_slug_key:
                 sql.append(
                     "AND (te.actor_player_slug = ? OR EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp2 WHERE tvp2.turn_id = te.turn_id AND tvp2.player_slug = ?))"
                 )
                 params.extend([participant_slug_key, participant_slug_key])
 
-            aware_npc_slug_key = cls._normalize_slug(aware_npc_slug)
             if aware_npc_slug_key:
                 sql.append(
                     "AND EXISTS (SELECT 1 FROM turn_embedding_aware_npcs tan WHERE tan.turn_id = te.turn_id AND tan.npc_slug = ?)"
                 )
                 params.append(aware_npc_slug_key)
 
-            visibility_scope_raw = str(visibility_scope or "").strip().lower()
             if visibility_scope_raw in {"public", "private", "limited", "local"}:
                 visibility_scope_key = cls._normalize_visibility_scope(visibility_scope_raw)
                 sql.append("AND te.visibility_scope = ?")
                 params.append(visibility_scope_key)
 
             rows = conn.execute("\n".join(sql), tuple(params)).fetchall()
+            legacy_turn_ids: set[int] = set()
+            if (
+                not visibility_scope_raw
+                and not participant_slug_key
+                and not aware_npc_slug_key
+            ):
+                legacy_sql = [
+                    "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
+                    "FROM turn_embeddings te",
+                    "WHERE te.campaign_id = ?",
+                    "AND te.visibility_scope = 'public'",
+                    "AND COALESCE(te.actor_player_slug, '') = ''",
+                    "AND COALESCE(te.location_key, '') = ''",
+                    "AND NOT EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id)",
+                ]
+                legacy_params: List[object] = [campaign_id]
+                legacy_rows = conn.execute(
+                    "\n".join(legacy_sql), tuple(legacy_params)
+                ).fetchall()
+                existing_turn_ids = set()
+                for row in rows:
+                    try:
+                        existing_turn_ids.add(int(row[0]))
+                    except Exception:
+                        continue
+                merged_rows = list(rows)
+                for legacy_row in legacy_rows:
+                    try:
+                        legacy_turn_id = int(legacy_row[0])
+                    except Exception:
+                        continue
+                    if legacy_turn_id in existing_turn_ids:
+                        continue
+                    existing_turn_ids.add(legacy_turn_id)
+                    legacy_turn_ids.add(legacy_turn_id)
+                    merged_rows.append(legacy_row)
+                rows = merged_rows
             if not rows:
                 return []
 
@@ -431,8 +469,13 @@ class ZorkMemory:
                         "content": str(content or ""),
                         "score": score,
                         "actor_player_slug": str(actor_player_slug or ""),
-                        "visibility_scope": str(row_visibility_scope or "public"),
+                        "visibility_scope": (
+                            "legacy-unlabeled"
+                            if int(turn_id) in legacy_turn_ids
+                            else str(row_visibility_scope or "public")
+                        ),
                         "location_key": str(location_key or ""),
+                        "legacy_visibility_unlabeled": int(turn_id) in legacy_turn_ids,
                     }
                 )
 

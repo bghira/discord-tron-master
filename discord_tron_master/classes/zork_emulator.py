@@ -357,7 +357,7 @@ class ZorkEmulator:
         "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- RECENT_TURNS is already filtered to what the acting player plausibly knows. Hidden/private turns from other players are omitted.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
-        "- TURN_VISIBILITY_DEFAULT tells you whether this turn should default to shared/public context or private context.\n"
+        "- TURN_VISIBILITY_DEFAULT tells you whether this turn should default to public, local, or private context.\n"
         "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
         "- Use source payload to bias queries: rulebook docs are key-snippet indexes (browse with source_browse first), story docs are narrative scenes, generic docs are mixed/loose notes.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
@@ -409,11 +409,12 @@ class ZorkEmulator:
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- TURN VISIBILITY RULES:\n"
         "  * Use turn_visibility when a turn should not fully enter every other player's RECENT_TURNS context.\n"
-        "  * public: obvious shared action/conversation; everyone nearby can know it.\n"
+        "  * public: use only for campaign-wide announcements, reminders, alarms, or changes all players should know even outside the room.\n"
         "  * private: actor-only context. Use this for DM/private-channel turns unless the action clearly becomes public.\n"
+        "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
-        "  * local: players in the same location_key/room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
+        "  * If TURN_VISIBILITY_DEFAULT is local, keep routine room-level interaction local unless it clearly becomes public.\n"
         "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
         "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
         "- Information boundaries: NPCs should not reference facts outside what they plausibly know. "
@@ -2132,7 +2133,17 @@ class ZorkEmulator:
         )
         actor_slug = str((actor_entry or {}).get("slug") or "").strip()
         actor_user_id = (actor_entry or {}).get("user_id")
-        scope = "private" if is_private_context else "public"
+        actor_state = cls.get_player_state(actor) if actor is not None else {}
+        actor_location_key = cls._room_key_from_player_state(actor_state)
+        scope = (
+            "private"
+            if is_private_context
+            else (
+                "local"
+                if actor_location_key and actor_location_key.lower() != "unknown-room"
+                else "public"
+            )
+        )
         visible_player_slugs = [actor_slug] if actor_slug else []
         visible_user_ids = [actor_user_id] if actor_user_id is not None else []
         if scope == "public":
@@ -2145,7 +2156,11 @@ class ZorkEmulator:
             "visible_player_slugs": visible_player_slugs,
             "visible_user_ids": visible_user_ids,
             "aware_npc_slugs": [],
-            "source": "dm-default" if is_private_context else "public-default",
+            "source": (
+                "dm-default"
+                if is_private_context
+                else ("local-default" if scope == "local" else "public-default")
+            ),
         }
 
     @classmethod
@@ -2236,6 +2251,21 @@ class ZorkEmulator:
             "reason": reason or None,
             "source": "model",
         }
+
+    @staticmethod
+    def _default_prompt_turn_visibility(
+        requested_default: str,
+        player_state: Dict[str, object],
+    ) -> str:
+        default_clean = str(requested_default or "").strip().lower()
+        if default_clean == "private":
+            return "private"
+        location_key = ZorkEmulator._room_key_from_player_state(player_state)
+        return (
+            "local"
+            if location_key and location_key.lower() != "unknown-room"
+            else "public"
+        )
 
     @classmethod
     def _turn_visible_to_viewer(
@@ -10708,11 +10738,15 @@ class ZorkEmulator:
             "location": player_state.get("location"),
             "room_summary": player_state.get("room_summary"),
         }
+        effective_turn_visibility_default = cls._default_prompt_turn_visibility(
+            turn_visibility_default,
+            player_state,
+        )
         user_prompt = (
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
             f"IS_NEW_PLAYER: {str(is_new_player).lower()}\n"
-            f"TURN_VISIBILITY_DEFAULT: {turn_visibility_default}\n"
+            f"TURN_VISIBILITY_DEFAULT: {effective_turn_visibility_default}\n"
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
