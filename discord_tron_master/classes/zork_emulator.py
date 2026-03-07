@@ -221,12 +221,15 @@ class ZorkEmulator:
         TURN_TIME_INDEX_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
+    PRIVATE_CONTEXT_STATE_KEY = "_active_private_context"
+    UNREAD_SMS_LINE_PREFIXES = ("📨 unread sms:", "unread sms:")
 
     _locks: Dict[int, asyncio.Lock] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
     _pending_timers: Dict[int, dict] = {}  # campaign_id -> timer context dict
     _pending_sms_tasks: Dict[int, set] = {}  # campaign_id -> set[asyncio.Task]
+    _turn_ephemeral_notices: Dict[Tuple[int, int], List[str]] = {}
     PROCESSING_EMOJI = "🤔"
     MAIN_PARTY_TOKEN = "main party"
     NEW_PATH_TOKEN = "new path"
@@ -414,6 +417,8 @@ class ZorkEmulator:
         "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
         "  * Phone/text/SMS activity is private by default to the acting player. If they text or message someone off-scene, use private or limited unless they explicitly show or read it aloud to others.\n"
+        "  * When a player starts a whisper, pull-aside, or private word, move that exchange into private or limited context immediately and keep it there until they clearly rejoin the room or a different conversation.\n"
+        "  * Do not dump the contents of a brand-new whisper into public/local narration before privacy is established. First establish the aside, then continue the private exchange on later turns.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
         "  * If TURN_VISIBILITY_DEFAULT is local, keep routine room-level interaction local unless it clearly becomes public.\n"
         "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
@@ -1841,7 +1846,9 @@ class ZorkEmulator:
             details.append("SEEN BY: public")
         elif scope == "local":
             details.append("SEEN BY: local")
-        else:
+        elif scope == "private":
+            details.append("SEEN BY: private")
+        elif scope == "limited":
             raw_player_slugs = visibility.get("visible_player_slugs")
             names: List[str] = []
             if isinstance(raw_player_slugs, list):
@@ -1849,10 +1856,13 @@ class ZorkEmulator:
                     slug = cls._player_slug_key(item)
                     if slug:
                         names.append(slug)
-            if names:
-                details.append(f"SEEN BY: {', '.join(names)}")
-            else:
-                details.append("SEEN BY: limited")
+            details.append(f"SEEN BY: limited ({', '.join(names)})" if names else "SEEN BY: limited")
+        else:
+            details.append(f"SEEN BY: {scope}")
+
+        context_key = str(visibility.get("context_key") or "").strip()
+        if context_key and scope in {"private", "limited"}:
+            details.append(f"PRIVATE THREAD: {context_key}")
 
         raw_npc_slugs = visibility.get("aware_npc_slugs")
         npc_slugs: List[str] = []
@@ -2165,6 +2175,7 @@ class ZorkEmulator:
                 and actor_location_key.lower() != "unknown-room"
                 else None
             ),
+            "context_key": None,
             "aware_npc_slugs": [],
             "source": (
                 "dm-default"
@@ -2259,6 +2270,7 @@ class ZorkEmulator:
             "visible_player_slugs": visible_player_slugs,
             "visible_user_ids": visible_user_ids,
             "location_key": location_key or None,
+            "context_key": str(raw_visibility.get("context_key") or "").strip() or None,
             "aware_npc_slugs": aware_npc_slugs,
             "reason": reason or None,
             "source": "model",
@@ -2286,14 +2298,49 @@ class ZorkEmulator:
         viewer_user_id: int,
         viewer_slug: str,
         viewer_location_key: str,
+        viewer_private_context_key: str = "",
     ) -> bool:
-        if turn.user_id == viewer_user_id:
-            return True
         meta = cls._safe_turn_meta(turn)
+        if bool(meta.get("suppress_context")):
+            return False
         visibility = meta.get("visibility")
         if not isinstance(visibility, dict):
+            if turn.user_id == viewer_user_id:
+                return True
             return True
         scope = str(visibility.get("scope") or "").strip().lower()
+        context_key = str(
+            visibility.get("context_key") or meta.get("context_key") or ""
+        ).strip()
+        if scope in {"private", "limited"} and context_key:
+            raw_user_ids = visibility.get("visible_user_ids")
+            user_ids = set()
+            if isinstance(raw_user_ids, list):
+                user_ids = {
+                    int(item)
+                    for item in raw_user_ids
+                    if isinstance(item, int) or str(item).isdigit()
+                }
+            raw_player_slugs = visibility.get("visible_player_slugs")
+            player_slugs = set()
+            if isinstance(raw_player_slugs, list):
+                player_slugs = {
+                    cls._player_slug_key(item)
+                    for item in raw_player_slugs
+                    if cls._player_slug_key(item)
+                }
+            is_participant = (
+                turn.user_id == viewer_user_id
+                or viewer_user_id in user_ids
+                or bool(viewer_slug and viewer_slug in player_slugs)
+            )
+            return bool(
+                is_participant
+                and viewer_private_context_key
+                and viewer_private_context_key == context_key
+            )
+        if turn.user_id == viewer_user_id:
+            return True
         if scope in {"", "public"}:
             return True
         if scope == "local":
@@ -6646,10 +6693,304 @@ class ZorkEmulator:
         return cleaned
 
     @classmethod
+    def _strip_ephemeral_context_lines(cls, text: str) -> str:
+        if not text:
+            return ""
+        kept_lines = []
+        for line in str(text).splitlines():
+            stripped = line.strip().lower()
+            if any(stripped.startswith(p) for p in cls._INVENTORY_LINE_PREFIXES):
+                continue
+            if any(stripped.startswith(p) for p in cls.UNREAD_SMS_LINE_PREFIXES):
+                continue
+            if stripped.startswith("\u23f0"):
+                continue
+            kept_lines.append(line)
+        return "\n".join(kept_lines).strip()
+
+    @classmethod
     def _strip_inventory_mentions(cls, text: str) -> str:
         if not text:
             return ""
-        return cls._strip_inventory_from_narration(text)
+        return cls._strip_ephemeral_context_lines(text)
+
+    @classmethod
+    def _set_turn_ephemeral_notices(
+        cls,
+        campaign_id: int,
+        user_id: int,
+        notices: List[str],
+    ) -> None:
+        cleaned = []
+        seen = set()
+        for item in notices or []:
+            text = " ".join(str(item or "").split()).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            cleaned.append(text[:500])
+        key = (int(campaign_id), int(user_id))
+        if cleaned:
+            cls._turn_ephemeral_notices[key] = cleaned
+        else:
+            cls._turn_ephemeral_notices.pop(key, None)
+
+    @classmethod
+    def pop_turn_ephemeral_notices(
+        cls,
+        campaign_id: int,
+        user_id: int,
+    ) -> List[str]:
+        return list(cls._turn_ephemeral_notices.pop((int(campaign_id), int(user_id)), []))
+
+    @staticmethod
+    def _private_context_key(*parts: object) -> str:
+        cleaned = []
+        for part in parts:
+            text = re.sub(r"[^a-z0-9]+", "-", str(part or "").strip().lower()).strip("-")
+            if text:
+                cleaned.append(text[:80])
+        return ":".join(cleaned)[:240]
+
+    @classmethod
+    def _active_private_context_from_state(
+        cls, player_state: Dict[str, object]
+    ) -> Optional[Dict[str, object]]:
+        if not isinstance(player_state, dict):
+            return None
+        raw = player_state.get(cls.PRIVATE_CONTEXT_STATE_KEY)
+        if not isinstance(raw, dict):
+            return None
+        context_key = str(raw.get("context_key") or "").strip()
+        scope = str(raw.get("scope") or "").strip().lower()
+        if not context_key or scope not in {"private", "limited"}:
+            return None
+        out = dict(raw)
+        out["context_key"] = context_key
+        out["scope"] = scope
+        return out
+
+    @classmethod
+    def _action_leaves_private_context(
+        cls,
+        action: str,
+        active_context: Optional[Dict[str, object]],
+    ) -> bool:
+        text = " ".join(str(action or "").strip().lower().split())
+        if not text or not active_context:
+            return False
+        if cls._is_private_phone_command_line(text):
+            return False
+        if re.search(
+            r"\b(?:go|walk|head|return|leave|exit|join|approach|cross|back to|turn back to|out loud|to everyone|announce)\b",
+            text,
+            re.IGNORECASE,
+        ):
+            return True
+        target_name = str(active_context.get("target_name") or "").strip().lower()
+        if target_name and target_name not in text and re.search(r"\b(?:ask|tell|say|talk)\b", text, re.IGNORECASE):
+            return True
+        return False
+
+    @classmethod
+    def _is_private_engagement_setup_action(cls, action: str) -> bool:
+        text = " ".join(str(action or "").strip().lower().split())
+        if not text:
+            return False
+        if cls._is_private_phone_command_line(text):
+            return False
+        return bool(
+            re.search(
+                r"\b(?:whisper|murmur|lean in|lower my voice|lower your voice|quietly to|under my breath|private word|pull .* aside|take .* aside|step aside with)\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
+    @classmethod
+    def _private_setup_warning_needed(cls, action: str) -> bool:
+        if not cls._is_private_engagement_setup_action(action):
+            return False
+        text = str(action or "").strip()
+        sentence_count = len(
+            [seg for seg in re.split(r"(?<=[.!?])\s+", text) if seg.strip()]
+        )
+        if sentence_count > 1:
+            return True
+        if text.count('"') >= 2 or text.count("'") >= 2:
+            return True
+        return len(text) > 180
+
+    @classmethod
+    def _resolve_private_context_target(
+        cls,
+        campaign: ZorkCampaign,
+        actor: Optional[ZorkPlayer],
+        action: str,
+    ) -> Optional[Dict[str, object]]:
+        text = str(action or "")
+        if not text:
+            return None
+        actor_user_id = getattr(actor, "user_id", None)
+        mention_match = re.search(r"<@!?(\d+)>", text)
+        registry = cls._campaign_player_registry(campaign.id)
+        by_user_id = registry.get("by_user_id", {})
+        if mention_match:
+            try:
+                target_user_id = int(mention_match.group(1))
+            except (TypeError, ValueError):
+                target_user_id = None
+            if target_user_id and target_user_id != actor_user_id:
+                entry = by_user_id.get(target_user_id)
+                if entry is not None:
+                    return {
+                        "kind": "player",
+                        "target_user_id": target_user_id,
+                        "target_slug": str(entry.get("slug") or "").strip(),
+                        "target_name": str(entry.get("name") or "").strip(),
+                    }
+        text_norm = cls._normalize_match_text(text)
+        for user_id, entry in by_user_id.items():
+            if actor_user_id is not None and int(user_id) == int(actor_user_id):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            if cls._normalize_match_text(name) in text_norm:
+                return {
+                    "kind": "player",
+                    "target_user_id": int(user_id),
+                    "target_slug": str(entry.get("slug") or "").strip(),
+                    "target_name": name,
+                }
+        characters = cls.get_campaign_characters(campaign)
+        if isinstance(characters, dict):
+            for slug, payload in characters.items():
+                if not isinstance(payload, dict):
+                    continue
+                name = str(payload.get("name") or "").strip()
+                candidates = [str(slug or "").strip(), name]
+                for candidate in candidates:
+                    candidate_norm = cls._normalize_match_text(candidate)
+                    if candidate_norm and candidate_norm in text_norm:
+                        return {
+                            "kind": "npc",
+                            "target_slug": str(slug or "").strip(),
+                            "target_name": name or str(slug or "").strip(),
+                        }
+        return None
+
+    @classmethod
+    def _derive_private_context_candidate(
+        cls,
+        campaign: ZorkCampaign,
+        actor: Optional[ZorkPlayer],
+        player_state: Dict[str, object],
+        action: str,
+    ) -> Optional[Dict[str, object]]:
+        active_context = cls._active_private_context_from_state(player_state)
+        if cls._action_leaves_private_context(action, active_context):
+            return None
+        actor_slug = cls._player_slug_key(player_state.get("character_name")) or (
+            f"player-{getattr(actor, 'user_id', '')}" if actor is not None else ""
+        )
+        location_key = cls._room_key_from_player_state(player_state)
+        if active_context and not cls._is_private_engagement_setup_action(action):
+            carried = dict(active_context)
+            carried["engagement"] = "continue"
+            return carried
+        if not cls._is_private_engagement_setup_action(action):
+            return None
+        target = cls._resolve_private_context_target(campaign, actor, action)
+        if target and target.get("kind") == "player":
+            target_slug = str(target.get("target_slug") or "").strip()
+            scope = "limited"
+            context_key = cls._private_context_key(
+                "limited",
+                location_key or "room",
+                actor_slug,
+                target_slug,
+            )
+        else:
+            target_slug = str((target or {}).get("target_slug") or "").strip()
+            scope = "private"
+            context_key = cls._private_context_key(
+                "private",
+                location_key or "room",
+                actor_slug,
+                target_slug or "aside",
+            )
+        target_name = str((target or {}).get("target_name") or "").strip()
+        return {
+            "scope": scope,
+            "context_key": context_key,
+            "location_key": location_key or None,
+            "target_name": target_name or None,
+            "target_slug": target_slug or None,
+            "target_user_id": (target or {}).get("target_user_id"),
+            "engagement": "start",
+            "warning": cls._private_setup_warning_needed(action),
+        }
+
+    @classmethod
+    def _apply_private_context_candidate(
+        cls,
+        turn_visibility: Dict[str, object],
+        candidate: Optional[Dict[str, object]],
+    ) -> Dict[str, object]:
+        if not candidate:
+            return turn_visibility
+        merged = dict(turn_visibility or {})
+        merged["scope"] = str(candidate.get("scope") or merged.get("scope") or "private")
+        merged["context_key"] = str(candidate.get("context_key") or "").strip() or None
+        location_key = str(candidate.get("location_key") or "").strip()
+        if location_key:
+            merged["location_key"] = location_key
+        reason = " ".join(str(merged.get("reason") or "").split()).strip()
+        if not reason:
+            target_name = str(candidate.get("target_name") or "").strip()
+            if target_name:
+                merged["reason"] = f"Private exchange with {target_name}"
+            else:
+                merged["reason"] = "Private exchange"
+        if merged.get("scope") == "limited":
+            visible_slugs = list(merged.get("visible_player_slugs") or [])
+            target_slug = str(candidate.get("target_slug") or "").strip()
+            if target_slug and target_slug not in visible_slugs:
+                visible_slugs.append(target_slug)
+            merged["visible_player_slugs"] = visible_slugs
+            visible_user_ids = list(merged.get("visible_user_ids") or [])
+            target_user_id = candidate.get("target_user_id")
+            if isinstance(target_user_id, int) and target_user_id not in visible_user_ids:
+                visible_user_ids.append(target_user_id)
+            merged["visible_user_ids"] = visible_user_ids
+        return merged
+
+    @classmethod
+    def _persist_private_context_state(
+        cls,
+        player_state: Dict[str, object],
+        turn_visibility: Dict[str, object],
+        action: str,
+        candidate: Optional[Dict[str, object]],
+    ) -> None:
+        if not isinstance(player_state, dict):
+            return
+        active_context = cls._active_private_context_from_state(player_state)
+        scope = str(turn_visibility.get("scope") or "").strip().lower()
+        context_key = str(turn_visibility.get("context_key") or "").strip()
+        if context_key and scope in {"private", "limited"}:
+            payload = {
+                "scope": scope,
+                "context_key": context_key,
+                "location_key": str(turn_visibility.get("location_key") or "").strip() or None,
+                "target_name": str((candidate or {}).get("target_name") or (active_context or {}).get("target_name") or "").strip() or None,
+                "target_slug": str((candidate or {}).get("target_slug") or (active_context or {}).get("target_slug") or "").strip() or None,
+            }
+            player_state[cls.PRIVATE_CONTEXT_STATE_KEY] = payload
+            return
+        if cls._action_leaves_private_context(action, active_context) or scope in {"public", "local"}:
+            player_state.pop(cls.PRIVATE_CONTEXT_STATE_KEY, None)
 
     _REASONING_PREFIXES = re.compile(
         r"^(I need to |I should |I'll |Let me |I want to |I will |First,? I |"
@@ -9434,6 +9775,12 @@ class ZorkEmulator:
             return False
         return bool(
             re.match(
+                r"^(?:i\s+)?(?:(?:send|check|read|open|view|look\s+at)\s+)?"
+                r"(?:(?:my|the)\s+)?(?:phone|sms|texts?|messages?)\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+            or re.match(
                 r"^(?:i\s+)?(?:send\s+)?(?:sms|text|message)\b",
                 text,
                 flags=re.IGNORECASE,
@@ -10673,6 +11020,19 @@ class ZorkEmulator:
             player_state.get("character_name")
         )
         _viewer_location_key = cls._room_key_from_player_state(player_state).lower()
+        _stored_private_context = cls._active_private_context_from_state(player_state)
+        if cls._action_leaves_private_context(action, _stored_private_context):
+            _viewer_private_context = None
+        else:
+            _viewer_private_context = cls._derive_private_context_candidate(
+                campaign,
+                player,
+                player_state,
+                action,
+            ) or _stored_private_context
+        _viewer_private_context_key = str(
+            (_viewer_private_context or {}).get("context_key") or ""
+        ).strip()
 
         for turn in turns:
             content = (turn.content or "").strip()
@@ -10683,6 +11043,7 @@ class ZorkEmulator:
                 player.user_id,
                 _viewer_slug,
                 _viewer_location_key,
+                _viewer_private_context_key,
             ):
                 continue
             turn_prefix = cls._turn_context_prefix(turn, state)
@@ -10707,16 +11068,7 @@ class ZorkEmulator:
                 # Skip error/fallback narrations.
                 if content.lower() in _ERROR_PHRASES:
                     continue
-                # Strip timer countdown and inventory lines from context.
-                clipped_lines = []
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("\u23f0"):
-                        continue
-                    if stripped.lower().startswith("inventory:"):
-                        continue
-                    clipped_lines.append(line)
-                clipped = "\n".join(clipped_lines).strip()
+                clipped = cls._strip_ephemeral_context_lines(content)
                 clipped = cls._strip_narration_footer(clipped)
                 if not clipped:
                     continue
@@ -10830,6 +11182,7 @@ class ZorkEmulator:
             f"ATTENTION_WINDOW_SECONDS: {cls.ATTENTION_WINDOW_SECONDS}\n"
             f"CURRENTLY_ATTENTIVE_PLAYERS: {cls._dump_json(_currently_attentive)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
+            f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
@@ -11114,6 +11467,7 @@ class ZorkEmulator:
                     player = cls.get_or_create_player(
                         campaign_id, ctx.author.id, campaign=campaign
                     )
+                    cls._set_turn_ephemeral_notices(campaign_id, ctx.author.id, [])
                     cls.record_player_message(player, channel=ctx.channel)
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
@@ -12523,6 +12877,7 @@ class ZorkEmulator:
                             _zork_log("CONSEQUENCE LOG AUGMENTED RESPONSE", response)
 
                         elif tool_name == "sms_list":
+                            sms_activity_detected = True
                             wildcard = str(
                                 first_payload.get("wildcard")
                                 or first_payload.get("query")
@@ -12566,6 +12921,7 @@ class ZorkEmulator:
                             _zork_log("SMS LIST AUGMENTED RESPONSE", response)
 
                         elif tool_name == "sms_read":
+                            sms_activity_detected = True
                             thread = str(
                                 first_payload.get("thread")
                                 or first_payload.get("contact")
@@ -13544,6 +13900,17 @@ class ZorkEmulator:
                         turn_visibility,
                         is_private_context=(getattr(ctx, "guild", None) is None),
                     )
+                    private_context_candidate = cls._derive_private_context_candidate(
+                        campaign,
+                        player,
+                        player_state,
+                        action,
+                    )
+                    if private_context_candidate is not None:
+                        turn_visibility = cls._apply_private_context_candidate(
+                            turn_visibility,
+                            private_context_candidate,
+                        )
                     stored_player_action, private_phone_redacted = (
                         cls._redact_private_phone_command_lines(action)
                     )
@@ -13563,6 +13930,23 @@ class ZorkEmulator:
                             campaign_state,
                             "private_phone_redacted",
                         )
+                    suppress_recent_context = bool(
+                        sms_activity_detected or private_phone_redacted
+                    )
+                    ephemeral_notices: List[str] = []
+                    if (
+                        private_context_candidate is not None
+                        and bool(private_context_candidate.get("warning"))
+                    ):
+                        ephemeral_notices.append(
+                            "Warning: if you include the real whisper/private content in the same setup message, it may leak before the aside is fully established. Use one short setup turn first, then continue once the reply keeps it private."
+                        )
+                    cls._persist_private_context_state(
+                        player_state,
+                        turn_visibility,
+                        action,
+                        private_context_candidate,
+                    )
 
                     _planning_tools_used = bool(
                         {"plot_plan", "chapter_plan", "consequence_log"}
@@ -14073,14 +14457,18 @@ class ZorkEmulator:
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
 
-                    narration = cls._strip_narration_footer(narration)
+                    clean_narration = cls._strip_ephemeral_context_lines(
+                        cls._strip_narration_footer(narration)
+                    )
+                    persisted_narration = clean_narration
+                    display_narration = clean_narration
                     inventory_line = (
                         cls._format_inventory(player_state) or "Inventory: empty"
                     )
-                    if narration:
-                        narration = f"{narration}\n\n{inventory_line}"
+                    if display_narration:
+                        display_narration = f"{display_narration}\n\n{inventory_line}"
                     else:
-                        narration = inventory_line
+                        display_narration = inventory_line
 
                     post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     calendar_event_notifications = cls._calendar_collect_fired_events(
@@ -14096,7 +14484,7 @@ class ZorkEmulator:
                         game_time=post_turn_game_time,
                     )
                     if sms_notice:
-                        narration = f"{narration}\n\n{sms_notice}"
+                        display_narration = f"{display_narration}\n\n{sms_notice}"
                         cls._increment_auto_fix_counter(
                             campaign_state, "sms_unread_notice"
                         )
@@ -14111,8 +14499,8 @@ class ZorkEmulator:
                                 interrupt_hint = "act to prevent!"
                         else:
                             interrupt_hint = "unavoidable"
-                        narration = (
-                            f"{narration}\n\n"
+                        display_narration = (
+                            f"{display_narration}\n\n"
                             f"\u23f0 <t:{expiry_ts}:R>: {event_hint} ({interrupt_hint})"
                         )
 
@@ -14142,14 +14530,21 @@ class ZorkEmulator:
                                     ),
                                 }
 
-                    campaign.last_narration = narration
+                    campaign.last_narration = persisted_narration
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
+                    cls._set_turn_ephemeral_notices(
+                        campaign.id,
+                        ctx.author.id,
+                        ephemeral_notices,
+                    )
                     player_turn_meta = cls._dump_json(
                         {
                             "game_time": pre_turn_game_time,
                             "visibility": turn_visibility,
                             "location_key": cls._room_key_from_player_state(player_state),
+                            "context_key": turn_visibility.get("context_key"),
+                            "suppress_context": suppress_recent_context,
                         }
                     )
                     narrator_turn_meta_payload = {
@@ -14159,6 +14554,8 @@ class ZorkEmulator:
                             player_state.get("character_name")
                         ),
                         "location_key": cls._room_key_from_player_state(player_state),
+                        "context_key": turn_visibility.get("context_key"),
+                        "suppress_context": suppress_recent_context,
                     }
                     if reasoning:
                         narrator_turn_meta_payload["reasoning"] = reasoning
@@ -14181,7 +14578,7 @@ class ZorkEmulator:
                         campaign_id=campaign.id,
                         user_id=ctx.author.id,
                         kind="narrator",
-                        content=narration,
+                        content=persisted_narration,
                         channel_id=ctx.channel.id,
                         meta_json=narrator_turn_meta,
                     )
@@ -14205,19 +14602,20 @@ class ZorkEmulator:
 
                     # Fire-and-forget: embed the narrator turn for memory search.
                     try:
-                        ZorkMemory.store_turn_embedding(
-                            narrator_turn.id,
-                            campaign.id,
-                            ctx.author.id,
-                            "narrator",
-                            narration,
-                            metadata=cls._turn_embedding_metadata(
-                                visibility=turn_visibility,
-                                actor_player_slug=player_state.get("character_name"),
-                                location_key=cls._room_key_from_player_state(player_state),
-                                channel_id=ctx.channel.id,
-                            ),
-                        )
+                        if not suppress_recent_context:
+                            ZorkMemory.store_turn_embedding(
+                                narrator_turn.id,
+                                campaign.id,
+                                ctx.author.id,
+                                "narrator",
+                                persisted_narration,
+                                metadata=cls._turn_embedding_metadata(
+                                    visibility=turn_visibility,
+                                    actor_player_slug=player_state.get("character_name"),
+                                    location_key=cls._room_key_from_player_state(player_state),
+                                    channel_id=ctx.channel.id,
+                                ),
+                            )
                     except Exception:
                         logger.debug(
                             "Zork memory embedding skipped for turn %s",
@@ -14280,7 +14678,7 @@ class ZorkEmulator:
                             )
                         )
 
-                    return narration
+                    return display_narration
         finally:
             if should_clear_claim:
                 cls._clear_inflight_turn(campaign_id, ctx.author.id)

@@ -227,8 +227,10 @@ class Zork(commands.Cog):
         return out
 
     async def _send_action_reply(
-        self, ctx_like, narration: str, campaign_id: int = None
+        self, ctx_like, narration: str, campaign_id: int = None, notices: list[str] | None = None
     ):
+        for notice in notices or []:
+            await DiscordBot.send_large_message(ctx_like, f"[Notice] {notice}")
         narration = self._filter_narration(narration)
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:
@@ -480,8 +482,11 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
+            notices = ZorkEmulator.pop_turn_ephemeral_notices(
+                campaign_id, message.author.id
+            )
             msg = await self._send_action_reply(
-                message, narration, campaign_id=campaign_id
+                message, narration, campaign_id=campaign_id, notices=notices
             )
             if msg is not None:
                 with app.app_context():
@@ -582,7 +587,12 @@ class Zork(commands.Cog):
             )
             if narration is None:
                 return
-            msg = await self._send_action_reply(ctx, narration, campaign_id=campaign_id)
+            notices = ZorkEmulator.pop_turn_ephemeral_notices(
+                campaign_id, ctx.author.id
+            )
+            msg = await self._send_action_reply(
+                ctx, narration, campaign_id=campaign_id, notices=notices
+            )
             if msg is not None:
                 with app.app_context():
                     ZorkEmulator.record_turn_message_ids(
