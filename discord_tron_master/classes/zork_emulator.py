@@ -6985,6 +6985,70 @@ class ZorkEmulator:
         if cls._action_leaves_private_context(action, active_context) or scope in {"public", "local"}:
             player_state.pop(cls.PRIVATE_CONTEXT_STATE_KEY, None)
 
+    @classmethod
+    def _infer_aware_npc_slugs(
+        cls,
+        campaign: ZorkCampaign,
+        player_state: Dict[str, object],
+        turn_visibility: Dict[str, object],
+        *,
+        narration_text: str = "",
+        summary_update: object = None,
+        private_context_candidate: Optional[Dict[str, object]] = None,
+    ) -> List[str]:
+        seen: set[str] = set()
+        out: List[str] = []
+
+        def _add(slug: object) -> None:
+            text = str(slug or "").strip()
+            if not text or text in seen:
+                return
+            seen.add(text)
+            out.append(text)
+
+        raw_existing = turn_visibility.get("aware_npc_slugs")
+        if isinstance(raw_existing, list):
+            for item in raw_existing:
+                _add(item)
+        if out:
+            return out
+
+        candidate_slug = str((private_context_candidate or {}).get("target_slug") or "").strip()
+        if candidate_slug:
+            _add(candidate_slug)
+        if out:
+            return out
+
+        combined_text = cls._normalize_match_text(
+            f"{str(narration_text or '')}\n{str(summary_update or '')}"
+        )
+        characters = cls.get_campaign_characters(campaign)
+        same_scene_slugs: List[str] = []
+        if isinstance(characters, dict):
+            for slug, payload in characters.items():
+                if not isinstance(payload, dict) or payload.get("deceased_reason"):
+                    continue
+                char_name = str(payload.get("name") or slug or "").strip()
+                char_state = {
+                    "location": payload.get("location"),
+                    "room_title": payload.get("room_title"),
+                    "room_summary": payload.get("room_summary"),
+                    "room_id": payload.get("room_id"),
+                }
+                if cls._same_scene(player_state, char_state):
+                    same_scene_slugs.append(str(slug))
+                if combined_text:
+                    for candidate in (slug, char_name):
+                        candidate_norm = cls._normalize_match_text(candidate)
+                        if candidate_norm and candidate_norm in combined_text:
+                            _add(slug)
+                            break
+        if out:
+            return out
+        if str(turn_visibility.get("scope") or "").strip().lower() in {"private", "limited"} and len(same_scene_slugs) == 1:
+            _add(same_scene_slugs[0])
+        return out
+
     _REASONING_PREFIXES = re.compile(
         r"^(I need to |I should |I'll |Let me |I want to |I will |First,? I |"
         r"Now I |My plan |Step \d|To respond|Before I |I must )",
@@ -14003,6 +14067,16 @@ class ZorkEmulator:
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
+                    inferred_aware_npc_slugs = cls._infer_aware_npc_slugs(
+                        campaign,
+                        player_state,
+                        turn_visibility,
+                        narration_text=raw_narration,
+                        summary_update=summary_update,
+                        private_context_candidate=private_context_candidate,
+                    )
+                    if inferred_aware_npc_slugs:
+                        turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
 
                     _zork_log(
                         f"TURN RESULT campaign={campaign.id}",
