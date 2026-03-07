@@ -1,5 +1,6 @@
 from discord.ext import commands
 import datetime
+import io
 import logging
 import shlex
 import discord
@@ -116,6 +117,31 @@ class Zork(commands.Cog):
             i += 1
         label = " ".join(label_tokens).strip() or None
         return "ingest", label
+
+    def _source_material_export_text(
+        self,
+        document_key: str,
+        units: list[str],
+    ) -> str:
+        clean_units = [str(unit or "").strip() for unit in units if str(unit or "").strip()]
+        if not clean_units:
+            return ""
+        sample = "\n".join(clean_units[:6])
+        inferred_format = ZorkEmulator._source_material_format_heuristic(sample)
+        if inferred_format == ZorkEmulator.SOURCE_MATERIAL_FORMAT_RULEBOOK:
+            return "\n".join(clean_units).strip()
+        if inferred_format == ZorkEmulator.SOURCE_MATERIAL_FORMAT_STORY:
+            return "\n\n".join(clean_units).strip()
+        if str(document_key or "").strip().lower() == "message":
+            return "\n\n".join(clean_units).strip()
+        return "\n\n".join(clean_units).strip()
+
+    def _source_material_export_filename(self, document_key: str) -> str:
+        key = str(document_key or "").strip().lower()
+        if not key:
+            key = "source-material"
+        key = ZorkMemory._normalize_source_document_key(key) or "source-material"
+        return f"{key[:180]}.txt"
 
     def _get_private_dm_binding(self, user_id: int) -> dict | None:
         binding = self.config.get_zork_private_dm(user_id)
@@ -582,6 +608,7 @@ class Zork(commands.Cog):
             "format is auto-detected as story/rulebook/generic.\n"
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
+            f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
@@ -1360,6 +1387,78 @@ class Zork(commands.Cog):
             )
             return
         await ctx.send(message_text or "No source-material changes were made.")
+
+    @zork.command(name="source-material-export")
+    async def zork_source_material_export(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+            export_rows: list[tuple[str, str, str]] = []
+            for row in docs:
+                document_key = str(row.get("document_key") or "").strip()
+                if not document_key:
+                    continue
+                units = ZorkMemory.get_source_material_document_units(
+                    campaign.id,
+                    document_key,
+                )
+                export_text = self._source_material_export_text(document_key, units)
+                if not export_text:
+                    continue
+                export_rows.append(
+                    (
+                        document_key,
+                        self._source_material_export_filename(document_key),
+                        export_text,
+                    )
+                )
+            export_rows.sort(
+                key=lambda row: (0 if row[0].strip().lower() == "message" else 1, row[0])
+            )
+
+        if not export_rows:
+            await ctx.send("No source-material documents are stored for this campaign.")
+            return
+
+        batch_size = 10
+        sent = 0
+        for start in range(0, len(export_rows), batch_size):
+            batch = export_rows[start : start + batch_size]
+            files: list[discord.File] = []
+            for _, filename, export_text in batch:
+                payload = export_text.encode("utf-8")
+                files.append(
+                    discord.File(
+                        fp=io.BytesIO(payload),
+                        filename=filename,
+                    )
+                )
+            content = None
+            if start == 0:
+                content = (
+                    f"Source-material export for `{campaign.name}` "
+                    f"({len(export_rows)} document(s))."
+                )
+            await ctx.send(content=content, files=files)
+            sent += len(batch)
+
+        if sent <= 0:
+            await ctx.send("Source-material export produced no files.")
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):

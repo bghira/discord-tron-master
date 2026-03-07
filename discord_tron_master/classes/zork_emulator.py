@@ -755,31 +755,35 @@ class ZorkEmulator:
         "Set period based on hour: 5-11=morning, 12-16=afternoon, 17-20=evening, 21-4=night.\n\n"
         "You may also return a calendar_update key (object) to manage scheduled events:\n"
         '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
-        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str, "known_by": [str, ...]} '
+        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str, "known_by": [str, ...], "target_player": str|int (optional), "target_players": [str|int, ...] (optional)} '
         "and each remove entry is a string matching an event name.\n"
         "HARNESS BEHAVIOR:\n"
         "- The harness converts add entries into absolute due dates and stores fire_day + fire_hour (the exact in-game deadline).\n"
         "- known_by is optional. If provided, reminders are only injected when at least one known character is in the active scene.\n"
         "- Keep known_by to character names from PARTY_SNAPSHOT / WORLD_CHARACTERS. Omit known_by for globally-known events.\n"
+        "- target_player / target_players are optional player-specific targets. These may be a Discord ID, a Discord mention, a player slug, or a PARTY_SNAPSHOT-style string such as '<@123> (Rigby)'.\n"
+        "- If no target_player(s) are provided, the event is treated as global.\n"
         "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
         "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events, including hour-level countdowns near deadline.\n"
         "- CALENDAR_REMINDERS are sparse urgency signals. Do NOT echo them every turn; only surface them in narration when relevant to the current action/scene, when the player asks, or when the event is immediate.\n"
+        "- When a calendar event reaches its fire point, the harness may notify the shared channel and/or affected players directly.\n"
         "CALENDAR EVENT LIFECYCLE:\n"
         "Events should progress through phases based on fire_day vs CURRENT_GAME_TIME.day:\n"
         "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
         "signs/clues reference it).\n"
         "2. IMMINENT — event is today or tomorrow. Actively warn the player: NPCs urge action, "
         "the environment reflects urgency. Narrate pressure to act. The player should feel they need to DO something.\n"
-        "3. OVERDUE — current day is past fire_day. Do NOT remove the event. "
+        "3. OVERDUE — current day is past fire_day. The harness treats it as fired/overdue and may allow administrative cleanup later. "
         "Narrate consequences escalating. "
         "NPCs express disappointment, opportunities narrow, penalties mount. "
-        "The event stays on the calendar as a visible reminder of what the player neglected.\n"
+        "The event may stay on the calendar as a visible reminder of what the player neglected.\n"
         "4. RESOLVED — ONLY remove an event when the player has DIRECTLY DEALT WITH IT "
         "(attended, completed, deliberately abandoned) and the outcome has been narrated. "
-        "Do NOT silently prune events. Do NOT remove events just because they are overdue.\n\n"
+        "Do NOT silently prune future events.\n\n"
         "CRITICAL — calendar_update.remove rules:\n"
         "- ONLY remove an event when it has been RESOLVED through player action in the current narration.\n"
-        "- NEVER remove events because time passed or they feel old. Overdue events stay and get worse.\n"
+        "- Future events should not be removed just because time passed or they feel old.\n"
+        "- Fired / overdue events may be removed when the narration clearly treats them as no longer pending or as administrative cleanup.\n"
         "- If you are unsure whether an event should be removed, do NOT remove it.\n"
         "Use calendar events for approaching deadlines, NPC appointments, world events, "
         "and anything with narrative timing pressure.\n"
@@ -2336,14 +2340,22 @@ class ZorkEmulator:
         *,
         exclude_user_id: Optional[int] = None,
         observed_at: Optional[datetime.datetime] = None,
+        candidate_user_ids: Optional[List[int]] = None,
     ) -> List[int]:
         now_dt = observed_at or cls._now()
         if now_dt.tzinfo is not None:
             now_dt = now_dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        allowed_user_ids = (
+            {int(user_id) for user_id in candidate_user_ids if user_id is not None}
+            if isinstance(candidate_user_ids, list)
+            else None
+        )
         rows = ZorkPlayer.query.filter_by(campaign_id=campaign_id).all()
         out: List[int] = []
         for row in rows:
             if exclude_user_id is not None and row.user_id == exclude_user_id:
+                continue
+            if allowed_user_ids is not None and row.user_id not in allowed_user_ids:
                 continue
             stats = cls.get_player_statistics(row)
             if (
@@ -2400,6 +2412,86 @@ class ZorkEmulator:
                     user_id,
                     exc_info=True,
                 )
+
+    @classmethod
+    async def _send_calendar_event_notifications(
+        cls,
+        *,
+        campaign_id: int,
+        campaign_name: str,
+        notifications: List[Dict[str, object]],
+        preferred_channel_id: Optional[int] = None,
+    ) -> None:
+        if not notifications:
+            return
+        bot_instance = DiscordBot.get_instance()
+        if bot_instance is None or bot_instance.bot is None:
+            return
+
+        main_channel_id = None
+        app = AppConfig.get_flask()
+        if app is not None:
+            with app.app_context():
+                main_channel_id = cls._primary_campaign_channel_id(
+                    campaign_id,
+                    preferred_channel_id=preferred_channel_id,
+                )
+
+        main_channel = None
+        if main_channel_id is not None:
+            try:
+                main_channel = await bot_instance.find_channel(int(main_channel_id))
+            except Exception:
+                main_channel = None
+
+        for notification in notifications:
+            summary = cls._calendar_event_notification_summary(notification)
+            scope = str(notification.get("scope") or "global").strip().lower()
+            target_user_ids = [
+                int(user_id)
+                for user_id in (notification.get("target_user_ids") or [])
+                if user_id is not None
+            ]
+            if scope == "global" and main_channel is not None:
+                try:
+                    await DiscordBot.send_large_message(
+                        main_channel,
+                        f"**[Calendar Event]** {summary}",
+                    )
+                except Exception:
+                    logger.debug(
+                        "Zork: failed to send calendar notice to main channel for campaign %s",
+                        campaign_id,
+                        exc_info=True,
+                    )
+
+            dm_targets: List[int] = []
+            if app is not None:
+                with app.app_context():
+                    dm_targets = cls._recent_private_dm_notification_targets(
+                        campaign_id,
+                        candidate_user_ids=target_user_ids,
+                    )
+            if not dm_targets:
+                continue
+            dm_message = (
+                f"**[Calendar Event Notice]** `{campaign_name}`\n"
+                f"{summary}"
+            )
+            for user_id in dm_targets:
+                try:
+                    user = bot_instance.bot.get_user(user_id)
+                    if user is None:
+                        user = await bot_instance.bot.fetch_user(user_id)
+                    if user is None:
+                        continue
+                    await DiscordBot.send_large_message(user, dm_message)
+                except Exception:
+                    logger.debug(
+                        "Zork: failed to send calendar DM notice to user %s",
+                        user_id,
+                        exc_info=True,
+                    )
 
     @classmethod
     def _get_preset_campaign(cls, normalized_name: str) -> Optional[dict]:
@@ -7802,8 +7894,20 @@ class ZorkEmulator:
             "description": str(event.get("description") or "")[:200],
             "known_by": cls._calendar_known_by_from_event(event),
         }
+        target_players = cls._calendar_target_tokens_from_event(event)
+        if target_players:
+            normalized["target_players"] = target_players
         for key in ("created_day", "created_hour"):
             raw = event.get(key)
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                normalized[key] = int(raw)
+        for key in ("fired_notice_key", "fired_notice_day", "fired_notice_hour"):
+            raw = event.get(key)
+            if raw is None:
+                continue
+            if key == "fired_notice_key":
+                normalized[key] = str(raw)[:120]
+                continue
             if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                 normalized[key] = int(raw)
         return normalized
@@ -9412,6 +9516,25 @@ class ZorkEmulator:
                     "cancelled",
                     "abandoned",
                     "closed out",
+                    "already departed",
+                    "already left",
+                    "already en route",
+                    "already on the way",
+                    "cleared from your schedule",
+                    "off your schedule",
+                    "no longer pending",
+                    "overdue done",
+                )
+                cleanup_cues = (
+                    "remove from calendar",
+                    "remove it from calendar",
+                    "take it off the calendar",
+                    "take it off calendar",
+                    "clear it from the calendar",
+                    "clear from your schedule",
+                    "overdue",
+                    "already",
+                    "done",
                 )
                 premature_cues = (
                     "arrives",
@@ -9425,8 +9548,25 @@ class ZorkEmulator:
                     "not back yet",
                 )
                 has_completion = any(cue in context_text for cue in completion_cues)
+                has_cleanup_intent = any(cue in context_text for cue in cleanup_cues)
                 has_premature = any(cue in context_text for cue in premature_cues)
-                if name_mentioned and has_completion and not has_premature:
+                fire_day = event.get("fire_day")
+                fire_hour = event.get("fire_hour")
+                event_is_past = False
+                if isinstance(fire_day, (int, float)) and isinstance(fire_hour, (int, float)):
+                    fire_day_int = int(fire_day)
+                    fire_hour_int = int(fire_hour)
+                    event_is_past = (
+                        fire_day_int < day_int
+                        or (fire_day_int == day_int and fire_hour_int <= hour_int)
+                    )
+                if event_is_past:
+                    allowed_remove_set.add(name_key)
+                elif (
+                    name_mentioned
+                    and not has_premature
+                    and (has_completion or (event_is_past and has_cleanup_intent))
+                ):
                     allowed_remove_set.add(name_key)
                 else:
                     blocked_removals.append(name_raw)
@@ -9485,6 +9625,9 @@ class ZorkEmulator:
                     "description": str(entry.get("description") or "")[:200],
                     "known_by": cls._calendar_known_by_from_event(entry),
                 }
+                target_players = cls._calendar_target_tokens_from_event(entry)
+                if target_players:
+                    event["target_players"] = target_players
                 calendar.append(event)
 
         # Allow re-adds to update existing events.
@@ -9941,6 +10084,266 @@ class ZorkEmulator:
             if len(out) >= 24:
                 break
         return out
+
+    @classmethod
+    def _calendar_target_tokens_from_event(cls, event: object) -> List[str]:
+        if not isinstance(event, dict):
+            return []
+        raw_values: List[object] = []
+        for key in (
+            "target_players",
+            "target_player",
+            "targets",
+            "target",
+            "players",
+            "player",
+            "player_id",
+            "user_id",
+            "target_user_id",
+            "target_user_ids",
+            "who",
+        ):
+            raw_value = event.get(key)
+            if isinstance(raw_value, list):
+                raw_values.extend(raw_value)
+            elif raw_value is not None:
+                raw_values.append(raw_value)
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = re.sub(r"\s+", " ", text.lower())[:160]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(text[:160])
+            if len(out) >= 12:
+                break
+        return out
+
+    @classmethod
+    def _calendar_player_aliases_from_registry_entry(
+        cls,
+        entry: Dict[str, object],
+    ) -> set[str]:
+        aliases: set[str] = set()
+
+        def _add(raw: object) -> None:
+            text = " ".join(str(raw or "").strip().lower().split())
+            if text:
+                aliases.add(text[:160])
+
+        user_id = entry.get("user_id")
+        if isinstance(user_id, int):
+            _add(user_id)
+            _add(f"<@{user_id}>")
+            _add(f"<@!{user_id}>")
+        name = str(entry.get("name") or "").strip()
+        slug = str(entry.get("slug") or "").strip()
+        mention = str(entry.get("discord_mention") or "").strip()
+        if name:
+            _add(name)
+        if slug:
+            _add(slug)
+        if mention:
+            _add(mention)
+        if mention and name:
+            _add(f"{mention} ({name})")
+            _add(f"{mention} {name}")
+        if name:
+            normalized_name = cls._player_slug_key(name)
+            if normalized_name:
+                _add(normalized_name)
+        return aliases
+
+    @classmethod
+    def _resolve_calendar_target_user_ids(
+        cls,
+        campaign_id: int,
+        event: object,
+    ) -> List[int]:
+        tokens = cls._calendar_target_tokens_from_event(event)
+        if not tokens:
+            return []
+        registry = cls._campaign_player_registry(campaign_id)
+        by_user_id = registry.get("by_user_id", {})
+        resolved: List[int] = []
+        for raw_token in tokens:
+            token = str(raw_token or "").strip()
+            if not token:
+                continue
+            mention_match = re.search(r"<@!?(\d+)>", token)
+            numeric_match = re.fullmatch(r"\d{4,32}", token)
+            candidate_user_ids: List[int] = []
+            if mention_match:
+                candidate_user_ids.append(int(mention_match.group(1)))
+            elif numeric_match:
+                candidate_user_ids.append(int(token))
+            normalized = " ".join(token.lower().split())
+            normalized_slug = cls._player_slug_key(token)
+            for user_id, entry in by_user_id.items():
+                if not isinstance(user_id, int):
+                    continue
+                if user_id in candidate_user_ids:
+                    continue
+                aliases = cls._calendar_player_aliases_from_registry_entry(entry)
+                if normalized in aliases or (normalized_slug and normalized_slug in aliases):
+                    candidate_user_ids.append(user_id)
+                    continue
+                if normalized:
+                    for alias in aliases:
+                        if alias and (normalized in alias or alias in normalized):
+                            candidate_user_ids.append(user_id)
+                            break
+            for user_id in candidate_user_ids:
+                if user_id in by_user_id and user_id not in resolved:
+                    resolved.append(user_id)
+        return resolved[:8]
+
+    @classmethod
+    def _calendar_event_scope(cls, campaign_id: int, event: object) -> str:
+        return "global" if not cls._resolve_calendar_target_user_ids(campaign_id, event) else "player"
+
+    @classmethod
+    def _calendar_event_notification_targets(
+        cls,
+        campaign_id: int,
+        event: object,
+    ) -> List[int]:
+        explicit_targets = cls._resolve_calendar_target_user_ids(campaign_id, event)
+        if explicit_targets:
+            return explicit_targets
+        return [
+            int(row.user_id)
+            for row in ZorkPlayer.query.filter_by(campaign_id=campaign_id).all()
+            if getattr(row, "user_id", None) is not None
+        ]
+
+    @classmethod
+    def _calendar_event_key(cls, event: Dict[str, object]) -> str:
+        name = str(event.get("name", "")).strip().lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", name).strip("-")[:80] or "event"
+        fire_day = cls._coerce_non_negative_int(event.get("fire_day", 1), default=1) or 1
+        fire_hour = min(23, max(0, cls._coerce_non_negative_int(event.get("fire_hour", 23), default=23)))
+        return f"{slug}:{fire_day}:{fire_hour}"
+
+    @classmethod
+    def _calendar_collect_fired_events(
+        cls,
+        campaign_id: int,
+        campaign_state: Dict[str, object],
+        *,
+        from_time: Dict[str, int],
+        to_time: Dict[str, int],
+    ) -> List[Dict[str, object]]:
+        if not isinstance(campaign_state, dict):
+            return []
+        raw_calendar = campaign_state.get("calendar")
+        if not isinstance(raw_calendar, list) or not raw_calendar:
+            return []
+        current_day = cls._coerce_non_negative_int(to_time.get("day", 1), default=1) or 1
+        current_hour = min(23, max(0, cls._coerce_non_negative_int(to_time.get("hour", 8), default=8)))
+        from_abs = cls._game_time_to_total_minutes(from_time)
+        to_abs = cls._game_time_to_total_minutes(to_time)
+        if to_abs <= 0:
+            return []
+        notifications: List[Dict[str, object]] = []
+        changed = False
+        for raw_event in raw_calendar:
+            if not isinstance(raw_event, dict):
+                continue
+            normalized = cls._calendar_normalize_event(
+                raw_event,
+                current_day=current_day,
+                current_hour=current_hour,
+            )
+            if normalized is None:
+                continue
+            event_key = cls._calendar_event_key(normalized)
+            if raw_event.get("fired_notice_key") == event_key:
+                continue
+            fire_day = cls._coerce_non_negative_int(normalized.get("fire_day", current_day), default=current_day)
+            fire_hour = min(23, max(0, cls._coerce_non_negative_int(normalized.get("fire_hour", 23), default=23)))
+            due_abs = (((max(1, fire_day) - 1) * 24) + fire_hour) * 60
+            if due_abs > to_abs:
+                continue
+            if due_abs > from_abs:
+                status = "fired"
+            elif due_abs <= from_abs:
+                status = "overdue"
+            else:
+                status = "fired"
+            raw_event["fired_notice_key"] = event_key
+            raw_event["fired_notice_day"] = current_day
+            raw_event["fired_notice_hour"] = current_hour
+            changed = True
+            notifications.append(
+                {
+                    "name": str(normalized.get("name") or "Unknown event"),
+                    "description": str(normalized.get("description") or "").strip(),
+                    "fire_day": fire_day,
+                    "fire_hour": fire_hour,
+                    "status": status,
+                    "scope": cls._calendar_event_scope(campaign_id, raw_event),
+                    "target_user_ids": cls._calendar_event_notification_targets(campaign_id, raw_event),
+                }
+            )
+        if changed:
+            campaign_state["calendar"] = raw_calendar
+        return notifications
+
+    @classmethod
+    def _calendar_event_notification_summary(
+        cls,
+        notification: Dict[str, object],
+    ) -> str:
+        name = str(notification.get("name") or "Unknown event").strip()
+        fire_day = cls._coerce_non_negative_int(notification.get("fire_day", 1), default=1) or 1
+        fire_hour = min(23, max(0, cls._coerce_non_negative_int(notification.get("fire_hour", 23), default=23)))
+        status = str(notification.get("status") or "fired").strip().lower()
+        description = " ".join(str(notification.get("description") or "").split())
+        if status == "overdue":
+            lead = f"Calendar event overdue: {name} (was due Day {fire_day}, {fire_hour:02d}:00)."
+        else:
+            lead = f"Calendar event fired: {name} (Day {fire_day}, {fire_hour:02d}:00)."
+        if description:
+            return cls._trim_text(f"{lead} {description}", 280)
+        return lead
+
+    @classmethod
+    def _primary_campaign_channel_id(
+        cls,
+        campaign_id: int,
+        preferred_channel_id: Optional[int] = None,
+    ) -> Optional[int]:
+        candidate_ids: List[int] = []
+        if preferred_channel_id is not None:
+            candidate_ids.append(int(preferred_channel_id))
+        rows = ZorkChannel.query.filter_by(active_campaign_id=campaign_id).all()
+        for row in rows:
+            channel_id = getattr(row, "channel_id", None)
+            if channel_id is None:
+                continue
+            channel_id = int(channel_id)
+            if channel_id not in candidate_ids:
+                candidate_ids.append(channel_id)
+        recent_rows = (
+            ZorkTurn.query.filter_by(campaign_id=campaign_id)
+            .filter(ZorkTurn.channel_id.isnot(None))
+            .order_by(ZorkTurn.id.desc())
+            .limit(20)
+            .all()
+        )
+        for row in recent_rows:
+            channel_id = getattr(row, "channel_id", None)
+            if channel_id is None:
+                continue
+            channel_id = int(channel_id)
+            if channel_id not in candidate_ids:
+                candidate_ids.append(channel_id)
+        return candidate_ids[0] if candidate_ids else None
 
     @classmethod
     def _active_scene_character_names(
@@ -13465,6 +13868,12 @@ class ZorkEmulator:
                         narration = inventory_line
 
                     post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+                    calendar_event_notifications = cls._calendar_collect_fired_events(
+                        campaign.id,
+                        campaign_state,
+                        from_time=pre_turn_game_time,
+                        to_time=post_turn_game_time,
+                    )
                     sms_notice = cls._sms_unread_hourly_notification(
                         campaign_state,
                         actor_id=ctx.author.id,
@@ -13641,6 +14050,19 @@ class ZorkEmulator:
                                 ),
                             )
                         )
+                    if calendar_event_notifications:
+                        asyncio.ensure_future(
+                            cls._send_calendar_event_notifications(
+                                campaign_id=campaign.id,
+                                campaign_name=campaign.name,
+                                notifications=calendar_event_notifications,
+                                preferred_channel_id=(
+                                    int(ctx.channel.id)
+                                    if getattr(ctx, "guild", None) is not None
+                                    else None
+                                ),
+                            )
+                        )
 
                     return narration
         finally:
@@ -13732,12 +14154,15 @@ class ZorkEmulator:
         if app is None:
             return
         timed_narrator_turn_id = None
+        calendar_event_notifications: List[Dict[str, object]] = []
+        campaign_name_for_notifications = f"campaign-{campaign_id}"
         lock = cls._get_lock(campaign_id)
         async with lock:
             with app.app_context():
                 campaign = ZorkCampaign.query.get(campaign_id)
                 if campaign is None:
                     return
+                campaign_name_for_notifications = str(campaign.name or campaign_name_for_notifications)
                 if not cls.is_timed_events_enabled(campaign):
                     return
 
@@ -14103,11 +14528,18 @@ class ZorkEmulator:
                     active_player.xp += xp_awarded
 
                 narration = cls._strip_narration_footer(narration)
+                post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+                calendar_event_notifications = cls._calendar_collect_fired_events(
+                    campaign.id,
+                    campaign_state,
+                    from_time=pre_turn_game_time,
+                    to_time=post_turn_game_time,
+                )
                 campaign.last_narration = narration
                 campaign.updated = db.func.now()
                 active_player.updated = db.func.now()
                 timed_turn_meta_payload = {
-                    "game_time": cls._extract_game_time_snapshot(campaign_state),
+                    "game_time": post_turn_game_time,
                     "visibility": turn_visibility,
                     "actor_player_slug": cls._player_slug_key(
                         player_state.get("character_name")
@@ -14184,6 +14616,15 @@ class ZorkEmulator:
                             "Zork: failed to record timed event message ID",
                             exc_info=True,
                         )
+        if calendar_event_notifications:
+            asyncio.ensure_future(
+                cls._send_calendar_event_notifications(
+                    campaign_id=campaign_id,
+                    campaign_name=campaign_name_for_notifications,
+                    notifications=calendar_event_notifications,
+                    preferred_channel_id=channel_id,
+                )
+            )
 
     @classmethod
     async def generate_map(cls, ctx, command_prefix: str = "!") -> str:
