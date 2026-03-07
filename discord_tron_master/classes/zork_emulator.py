@@ -84,6 +84,9 @@ class ZorkEmulator:
     PLAYER_STATS_TIMERS_MISSED_KEY = "timers_missed"
     PLAYER_STATS_ATTENTION_SECONDS_KEY = "attention_seconds"
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
+    PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY = "last_message_context"
+    PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY = "last_message_channel_id"
+    PRIVATE_DM_TIME_JUMP_NOTIFY_MINUTES = 30
     ATTACHMENT_MAX_BYTES = 500_000
     TURN_ATTACHMENT_INLINE_BYTES = 10_000
     ATTACHMENT_CHUNK_TOKENS = 50_000      # minimum tokens per chunk
@@ -1877,6 +1880,8 @@ class ZorkEmulator:
             cls.PLAYER_STATS_TIMERS_MISSED_KEY: 0,
             cls.PLAYER_STATS_ATTENTION_SECONDS_KEY: 0,
             cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY: None,
+            cls.PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY: None,
+            cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY: None,
         }
 
     @classmethod
@@ -1908,6 +1913,18 @@ class ZorkEmulator:
             stats[cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY] = cls._format_utc_timestamp(
                 last_message_at
             )
+        context = str(
+            raw_stats.get(cls.PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY) or ""
+        ).strip().lower()
+        if context in {"dm", "guild"}:
+            stats[cls.PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY] = context
+        raw_channel_id = raw_stats.get(cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY)
+        try:
+            stats[cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY] = (
+                int(raw_channel_id) if raw_channel_id is not None else None
+            )
+        except (TypeError, ValueError):
+            stats[cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY] = None
         return stats
 
     @classmethod
@@ -1926,6 +1943,7 @@ class ZorkEmulator:
         cls,
         player: ZorkPlayer,
         observed_at: Optional[datetime.datetime] = None,
+        channel: object = None,
     ) -> Dict[str, object]:
         now_dt = observed_at or cls._now()
         if now_dt.tzinfo is not None:
@@ -1952,6 +1970,18 @@ class ZorkEmulator:
             + 1
         )
         stats[cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY] = cls._format_utc_timestamp(now_dt)
+        if channel is not None:
+            channel_guild = getattr(channel, "guild", None)
+            stats[cls.PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY] = (
+                "dm" if channel_guild is None else "guild"
+            )
+            channel_id = getattr(channel, "id", None)
+            try:
+                stats[cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY] = (
+                    int(channel_id) if channel_id is not None else None
+                )
+            except (TypeError, ValueError):
+                stats[cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY] = None
 
         player_state = cls._set_player_stats_on_state(player_state, stats)
         player.state_json = cls._dump_json(player_state)
@@ -2256,6 +2286,120 @@ class ZorkEmulator:
             "location_key": str(location_key or "").strip(),
             "channel_id": channel_id,
         }
+
+    @classmethod
+    def _format_game_time_label(cls, game_time: Dict[str, int]) -> str:
+        snapshot = (
+            game_time
+            if isinstance(game_time, dict)
+            else cls._extract_game_time_snapshot({"game_time": game_time})
+        )
+        canonical = cls._game_time_from_total_minutes(
+            cls._game_time_to_total_minutes(snapshot)
+        )
+        return str(
+            canonical.get("date_label")
+            or f"Day {canonical.get('day', 1)}, {str(canonical.get('period') or 'time').title()}"
+        ).strip()
+
+    @classmethod
+    def _brief_event_summary(
+        cls,
+        *,
+        action_text: str,
+        summary_update: object,
+        narration_text: str,
+    ) -> str:
+        summary = " ".join(str(summary_update or "").strip().split())
+        if summary:
+            return cls._trim_text(summary, 260)
+        narration_lines = []
+        for line in str(narration_text or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.lower().startswith("inventory:"):
+                continue
+            if stripped.startswith("\u23f0"):
+                continue
+            narration_lines.append(stripped)
+            if len(narration_lines) >= 2:
+                break
+        if narration_lines:
+            return cls._trim_text(" ".join(narration_lines), 260)
+        return cls._trim_text(" ".join(str(action_text or "").strip().split()), 180)
+
+    @classmethod
+    def _recent_private_dm_notification_targets(
+        cls,
+        campaign_id: int,
+        *,
+        exclude_user_id: Optional[int] = None,
+        observed_at: Optional[datetime.datetime] = None,
+    ) -> List[int]:
+        now_dt = observed_at or cls._now()
+        if now_dt.tzinfo is not None:
+            now_dt = now_dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        rows = ZorkPlayer.query.filter_by(campaign_id=campaign_id).all()
+        out: List[int] = []
+        for row in rows:
+            if exclude_user_id is not None and row.user_id == exclude_user_id:
+                continue
+            stats = cls.get_player_statistics(row)
+            if (
+                str(stats.get(cls.PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY) or "").strip().lower()
+                != "dm"
+            ):
+                continue
+            last_message_at = cls._parse_utc_timestamp(
+                stats.get(cls.PLAYER_STATS_LAST_MESSAGE_AT_KEY)
+            )
+            if last_message_at is None:
+                continue
+            age_seconds = int((now_dt - last_message_at).total_seconds())
+            if age_seconds < 0 or age_seconds > cls.ATTENTION_WINDOW_SECONDS:
+                continue
+            out.append(row.user_id)
+        return out
+
+    @classmethod
+    async def _send_private_dm_time_jump_notifications(
+        cls,
+        *,
+        campaign_name: str,
+        recipient_user_ids: List[int],
+        from_time: Dict[str, int],
+        to_time: Dict[str, int],
+        delta_minutes: int,
+        event_summary: str,
+    ) -> None:
+        if not recipient_user_ids:
+            return
+        bot_instance = DiscordBot.get_instance()
+        if bot_instance is None or bot_instance.bot is None:
+            return
+        from_label = cls._format_game_time_label(from_time)
+        to_label = cls._format_game_time_label(to_time)
+        message = (
+            f"**[Time Jump Notice]** `{campaign_name}` advanced by about {delta_minutes} in-world minutes.\n"
+            f"From: {from_label}\n"
+            f"To: {to_label}\n"
+            f"Cause: {event_summary}"
+        )
+        for user_id in recipient_user_ids:
+            try:
+                user = bot_instance.bot.get_user(user_id)
+                if user is None:
+                    user = await bot_instance.bot.fetch_user(user_id)
+                if user is None:
+                    continue
+                await DiscordBot.send_large_message(user, message)
+            except Exception:
+                logger.debug(
+                    "Zork: failed to send DM time-jump notification to user %s",
+                    user_id,
+                    exc_info=True,
+                )
 
     @classmethod
     def _get_preset_campaign(cls, normalized_name: str) -> Optional[dict]:
@@ -10379,7 +10523,7 @@ class ZorkEmulator:
                     player = cls.get_or_create_player(
                         campaign_id, ctx.author.id, campaign=campaign
                     )
-                    cls.record_player_message(player)
+                    cls.record_player_message(player, channel=ctx.channel)
                     player.last_active = db.func.now()
                     player.updated = db.func.now()
                     db.session.commit()
@@ -10390,6 +10534,14 @@ class ZorkEmulator:
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
+                    if (
+                        getattr(ctx, "guild", None) is None
+                        and action_clean in ("time skip", "time-skip", "timeskip")
+                    ):
+                        return (
+                            "Time skips are disabled in private DMs. "
+                            "Use the main campaign thread or channel for shared time jumps."
+                        )
 
                     # Intercepted commands that don't count as player actions
                     # should not interrupt timers.
@@ -13340,6 +13492,32 @@ class ZorkEmulator:
                             f"\u23f0 <t:{expiry_ts}:R>: {event_hint} ({interrupt_hint})"
                         )
 
+                    time_jump_notification = None
+                    if _turn_is_public and getattr(ctx, "guild", None) is not None:
+                        delta_minutes = max(
+                            0,
+                            cls._game_time_to_total_minutes(post_turn_game_time)
+                            - cls._game_time_to_total_minutes(pre_turn_game_time),
+                        )
+                        if delta_minutes >= cls.PRIVATE_DM_TIME_JUMP_NOTIFY_MINUTES:
+                            recipients = cls._recent_private_dm_notification_targets(
+                                campaign.id,
+                                exclude_user_id=ctx.author.id,
+                            )
+                            if recipients:
+                                time_jump_notification = {
+                                    "campaign_name": campaign.name,
+                                    "recipient_user_ids": recipients,
+                                    "from_time": pre_turn_game_time,
+                                    "to_time": post_turn_game_time,
+                                    "delta_minutes": delta_minutes,
+                                    "event_summary": cls._brief_event_summary(
+                                        action_text=action,
+                                        summary_update=summary_update,
+                                        narration_text=raw_narration,
+                                    ),
+                                }
+
                     campaign.last_narration = narration
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
@@ -13438,6 +13616,31 @@ class ZorkEmulator:
                                 campaign_id=campaign.id,
                                 room_key=cls._room_key_from_player_state(player_state),
                             )
+
+                    if isinstance(time_jump_notification, dict):
+                        asyncio.ensure_future(
+                            cls._send_private_dm_time_jump_notifications(
+                                campaign_name=str(
+                                    time_jump_notification.get("campaign_name") or campaign.name
+                                ),
+                                recipient_user_ids=list(
+                                    time_jump_notification.get("recipient_user_ids") or []
+                                ),
+                                from_time=dict(
+                                    time_jump_notification.get("from_time") or {}
+                                ),
+                                to_time=dict(
+                                    time_jump_notification.get("to_time") or {}
+                                ),
+                                delta_minutes=int(
+                                    time_jump_notification.get("delta_minutes") or 0
+                                ),
+                                event_summary=str(
+                                    time_jump_notification.get("event_summary")
+                                    or "Shared time advanced."
+                                ),
+                            )
+                        )
 
                     return narration
         finally:

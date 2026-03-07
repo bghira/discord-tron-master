@@ -81,8 +81,6 @@ CREATE TABLE IF NOT EXISTS turn_embeddings (
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_te_campaign ON turn_embeddings(campaign_id);
-CREATE INDEX IF NOT EXISTS idx_te_campaign_visibility ON turn_embeddings(campaign_id, visibility_scope);
-CREATE INDEX IF NOT EXISTS idx_te_campaign_actor ON turn_embeddings(campaign_id, actor_player_slug);
 
 CREATE TABLE IF NOT EXISTS manual_memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
