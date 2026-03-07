@@ -299,6 +299,7 @@ class ZorkEmulator:
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
         '- story_progression: object (optional; on-rails intent hint only. Keys: "advance" (bool), "target" ("hold"|"next-scene"|"next-chapter"), "reason" (short string). Use this when a subplot beat or scene outcome should push the main outlined story forward and you are not setting explicit state_update.current_chapter/current_scene.)\n'
+        '- turn_visibility: object (optional; who should get this turn in future prompt context. Keys: "scope" ("public"|"private"|"limited"), "player_slugs" (array of stable player slugs from PARTY_SNAPSHOT/CURRENTLY_ATTENTIVE_PLAYERS), "npc_slugs" (array of WORLD_CHARACTERS slugs who overheard/noticed), and optional "reason". This changes prompt visibility only; it does NOT change shared world state.)\n'
         "- scene_image_prompt: string (optional; include whenever the visible scene changes in a meaningful way: entering a room, newly visible characters/objects, reveals, or strong visual shifts)\n"
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
@@ -351,7 +352,9 @@ class ZorkEmulator:
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
         "- Keep diction plain and direct; prioritize immediate consequences and available choices.\n"
         "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
+        "- RECENT_TURNS is already filtered to what the acting player plausibly knows. Hidden/private turns from other players are omitted.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
+        "- TURN_VISIBILITY_DEFAULT tells you whether this turn should default to shared/public context or private context.\n"
         "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
         "- Use source payload to bias queries: rulebook docs are key-snippet indexes (browse with source_browse first), story docs are narrative scenes, generic docs are mixed/loose notes.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
@@ -401,6 +404,13 @@ class ZorkEmulator:
         "Use the name_generate tool to get real culturally-appropriate names when introducing new NPCs.\n"
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
+        "- TURN VISIBILITY RULES:\n"
+        "  * Use turn_visibility when a turn should not fully enter every other player's RECENT_TURNS context.\n"
+        "  * public: obvious shared action/conversation; everyone nearby can know it.\n"
+        "  * private: actor-only context. Use this for DM/private-channel turns unless the action clearly becomes public.\n"
+        "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
+        "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
+        "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
         "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
         "- Information boundaries: NPCs should not reference facts outside what they plausibly know. "
         "Use relationships[*].knows_about/doesnt_know where present to enforce this.\n"
@@ -505,6 +515,10 @@ class ZorkEmulator:
         "No other keys alongside tool_call except optional 'category'. You may provide one or more queries.\n"
         "Optional category scope example:\n"
         '{"tool_call": "memory_search", "category": "char:marcus-blackwell", "queries": ["penthouse", "deal"]}\n'
+        "Interaction/awareness category examples:\n"
+        '{"tool_call": "memory_search", "category": "interaction:rigby", "queries": ["argument", "deal", "kiss"]}\n'
+        '{"tool_call": "memory_search", "category": "awareness:monet-trask", "queries": ["overheard", "promise", "secret"]}\n'
+        '{"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
         "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
         "\nTOOL USAGE POLICY (HIGH PRIORITY):\n"
         "- On MOST turns, call at least one tool BEFORE final narration/state JSON.\n"
@@ -1792,14 +1806,52 @@ class ZorkEmulator:
         if not isinstance(index, dict):
             index = {}
         entry = index.get(str(turn_number))
+        prefix = f"[TURN #{turn_number}]"
         if isinstance(entry, dict):
             day = cls._coerce_non_negative_int(entry.get("day", 1), default=1) or 1
             hour = cls._coerce_non_negative_int(entry.get("hour", 0), default=0)
             minute = cls._coerce_non_negative_int(entry.get("minute", 0), default=0)
             hour = min(23, max(0, hour))
             minute = min(59, max(0, minute))
-            return f"[TURN #{turn_number} | Day {day} {hour:02d}:{minute:02d}]"
-        return f"[TURN #{turn_number}]"
+            prefix = f"[TURN #{turn_number} | Day {day} {hour:02d}:{minute:02d}]"
+
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        if not isinstance(visibility, dict):
+            return prefix
+
+        scope = str(visibility.get("scope") or "").strip().lower()
+        if not scope:
+            return prefix
+
+        details: List[str] = []
+        if scope == "public":
+            details.append("SEEN BY: public")
+        else:
+            raw_player_slugs = visibility.get("visible_player_slugs")
+            names: List[str] = []
+            if isinstance(raw_player_slugs, list):
+                for item in raw_player_slugs[:6]:
+                    slug = cls._player_slug_key(item)
+                    if slug:
+                        names.append(slug)
+            if names:
+                details.append(f"SEEN BY: {', '.join(names)}")
+            else:
+                details.append("SEEN BY: limited")
+
+        raw_npc_slugs = visibility.get("aware_npc_slugs")
+        npc_slugs: List[str] = []
+        if isinstance(raw_npc_slugs, list):
+            for item in raw_npc_slugs[:6]:
+                slug = str(item or "").strip()
+                if slug:
+                    npc_slugs.append(slug)
+        if npc_slugs:
+            details.append(f"NPCS AWARE: {', '.join(npc_slugs)}")
+        if not details:
+            return prefix
+        return f"{prefix[:-1]} | {' | '.join(details)}]"
 
     @staticmethod
     def _normalize_timer_interrupt_scope(value: object) -> str:
@@ -1955,11 +2007,13 @@ class ZorkEmulator:
             if since_seconds < 0 or since_seconds > cls.ATTENTION_WINDOW_SECONDS:
                 continue
             name = str(player_state.get("character_name") or "").strip()
+            player_slug = cls._player_slug_key(name) or f"player-{row.user_id}"
             out.append(
                 {
                     "user_id": row.user_id,
                     "discord_mention": f"<@{row.user_id}>",
                     "name": name or None,
+                    "player_slug": player_slug,
                     "seconds_since_last_message": since_seconds,
                     "attention_seconds_total": cls._coerce_non_negative_int(
                         stats.get(cls.PLAYER_STATS_ATTENTION_SECONDS_KEY), 0
@@ -1990,6 +2044,218 @@ class ZorkEmulator:
         name = re.sub(r"[^a-zA-Z0-9 _-]", "", name)
         normalized = name.lower()[:64]
         return normalized if normalized else "main"
+
+    @staticmethod
+    def _player_slug_key(value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:64]
+
+    @classmethod
+    def _campaign_player_registry(cls, campaign_id: int) -> Dict[str, Dict[object, Dict[str, object]]]:
+        by_user_id: Dict[int, Dict[str, object]] = {}
+        by_slug: Dict[str, Dict[str, object]] = {}
+        players = ZorkPlayer.query.filter_by(campaign_id=campaign_id).all()
+        for row in players:
+            state = cls.get_player_state(row)
+            fallback_name = f"Adventurer-{str(row.user_id)[-4:]}"
+            name = str(state.get("character_name") or fallback_name).strip()
+            slug = cls._player_slug_key(name) or f"player-{row.user_id}"
+            entry = {
+                "user_id": row.user_id,
+                "name": name,
+                "slug": slug,
+                "discord_mention": f"<@{row.user_id}>",
+            }
+            by_user_id[row.user_id] = entry
+            by_slug[slug] = entry
+        return {"by_user_id": by_user_id, "by_slug": by_slug}
+
+    @staticmethod
+    def _safe_turn_meta(turn: ZorkTurn) -> Dict[str, object]:
+        try:
+            meta = json.loads(turn.meta_json or "{}")
+        except Exception:
+            meta = {}
+        return meta if isinstance(meta, dict) else {}
+
+    @classmethod
+    def _default_turn_visibility_meta(
+        cls,
+        campaign: ZorkCampaign,
+        actor: Optional[ZorkPlayer],
+        is_private_context: bool,
+    ) -> Dict[str, object]:
+        registry = cls._campaign_player_registry(campaign.id)
+        actor_entry = (
+            registry.get("by_user_id", {}).get(actor.user_id)
+            if actor is not None
+            else None
+        )
+        actor_slug = str((actor_entry or {}).get("slug") or "").strip()
+        actor_user_id = (actor_entry or {}).get("user_id")
+        scope = "private" if is_private_context else "public"
+        visible_player_slugs = [actor_slug] if actor_slug else []
+        visible_user_ids = [actor_user_id] if actor_user_id is not None else []
+        if scope == "public":
+            visible_player_slugs = []
+            visible_user_ids = []
+        return {
+            "scope": scope,
+            "actor_player_slug": actor_slug or None,
+            "actor_user_id": actor_user_id,
+            "visible_player_slugs": visible_player_slugs,
+            "visible_user_ids": visible_user_ids,
+            "aware_npc_slugs": [],
+            "source": "dm-default" if is_private_context else "public-default",
+        }
+
+    @classmethod
+    def _normalize_turn_visibility(
+        cls,
+        campaign: ZorkCampaign,
+        actor: Optional[ZorkPlayer],
+        raw_visibility: object,
+        *,
+        is_private_context: bool,
+    ) -> Dict[str, object]:
+        default_meta = cls._default_turn_visibility_meta(
+            campaign, actor, is_private_context
+        )
+        if not isinstance(raw_visibility, dict):
+            return default_meta
+
+        scope = str(raw_visibility.get("scope") or "").strip().lower()
+        if scope not in {"public", "private", "limited"}:
+            scope = str(default_meta.get("scope") or "public")
+
+        registry = cls._campaign_player_registry(campaign.id)
+        by_slug = registry.get("by_slug", {})
+        actor_slug = str(default_meta.get("actor_player_slug") or "").strip()
+        visible_player_slugs: List[str] = []
+        visible_user_ids: List[int] = []
+
+        raw_player_slugs = raw_visibility.get("player_slugs")
+        if isinstance(raw_player_slugs, list):
+            player_items = raw_player_slugs
+        elif isinstance(raw_player_slugs, str):
+            player_items = [raw_player_slugs]
+        else:
+            player_items = []
+
+        seen_player_slugs: set[str] = set()
+        for item in player_items:
+            slug = cls._player_slug_key(item)
+            if not slug or slug in seen_player_slugs:
+                continue
+            resolved = by_slug.get(slug)
+            if resolved is None:
+                continue
+            seen_player_slugs.add(slug)
+            visible_player_slugs.append(slug)
+            resolved_user_id = resolved.get("user_id")
+            if isinstance(resolved_user_id, int):
+                visible_user_ids.append(resolved_user_id)
+
+        if scope in {"private", "limited"} and actor_slug:
+            if actor_slug not in seen_player_slugs:
+                visible_player_slugs.insert(0, actor_slug)
+                seen_player_slugs.add(actor_slug)
+            actor_user_id = default_meta.get("actor_user_id")
+            if isinstance(actor_user_id, int) and actor_user_id not in visible_user_ids:
+                visible_user_ids.insert(0, actor_user_id)
+
+        aware_npc_slugs: List[str] = []
+        characters = cls.get_campaign_characters(campaign)
+        raw_npc_slugs = raw_visibility.get("npc_slugs")
+        if isinstance(raw_npc_slugs, list):
+            npc_items = raw_npc_slugs
+        elif isinstance(raw_npc_slugs, str):
+            npc_items = [raw_npc_slugs]
+        else:
+            npc_items = []
+        seen_npc_slugs: set[str] = set()
+        for item in npc_items:
+            slug = str(item or "").strip()
+            if not slug or slug in seen_npc_slugs:
+                continue
+            if isinstance(characters, dict) and cls._resolve_existing_character_slug(
+                characters, slug
+            ):
+                resolved_slug = cls._resolve_existing_character_slug(characters, slug)
+                if resolved_slug and resolved_slug not in seen_npc_slugs:
+                    aware_npc_slugs.append(resolved_slug)
+                    seen_npc_slugs.add(resolved_slug)
+
+        reason = cls._trim_text(str(raw_visibility.get("reason") or "").strip(), 240)
+        return {
+            "scope": scope,
+            "actor_player_slug": actor_slug or None,
+            "actor_user_id": default_meta.get("actor_user_id"),
+            "visible_player_slugs": visible_player_slugs,
+            "visible_user_ids": visible_user_ids,
+            "aware_npc_slugs": aware_npc_slugs,
+            "reason": reason or None,
+            "source": "model",
+        }
+
+    @classmethod
+    def _turn_visible_to_viewer(
+        cls,
+        turn: ZorkTurn,
+        viewer_user_id: int,
+        viewer_slug: str,
+    ) -> bool:
+        if turn.user_id == viewer_user_id:
+            return True
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        if not isinstance(visibility, dict):
+            return True
+        scope = str(visibility.get("scope") or "").strip().lower()
+        if scope in {"", "public"}:
+            return True
+
+        raw_user_ids = visibility.get("visible_user_ids")
+        user_ids = set()
+        if isinstance(raw_user_ids, list):
+            for item in raw_user_ids:
+                try:
+                    user_ids.add(int(item))
+                except (TypeError, ValueError):
+                    continue
+        if viewer_user_id in user_ids:
+            return True
+
+        raw_player_slugs = visibility.get("visible_player_slugs")
+        player_slugs = set()
+        if isinstance(raw_player_slugs, list):
+            for item in raw_player_slugs:
+                slug = cls._player_slug_key(item)
+                if slug:
+                    player_slugs.add(slug)
+        return bool(viewer_slug and viewer_slug in player_slugs)
+
+    @classmethod
+    def _turn_embedding_metadata(
+        cls,
+        *,
+        visibility: Optional[Dict[str, object]],
+        actor_player_slug: object,
+        location_key: object,
+        channel_id: object,
+    ) -> Dict[str, object]:
+        visibility = visibility if isinstance(visibility, dict) else {}
+        return {
+            "actor_player_slug": cls._player_slug_key(actor_player_slug),
+            "visibility_scope": str(visibility.get("scope") or "public").strip().lower(),
+            "visible_player_slugs": list(visibility.get("visible_player_slugs") or []),
+            "visible_user_ids": list(visibility.get("visible_user_ids") or []),
+            "aware_npc_slugs": list(visibility.get("aware_npc_slugs") or []),
+            "location_key": str(location_key or "").strip(),
+            "channel_id": channel_id,
+        }
 
     @classmethod
     def _get_preset_campaign(cls, normalized_name: str) -> Optional[dict]:
@@ -5633,6 +5899,7 @@ class ZorkEmulator:
                 continue
             fallback_name = f"Adventurer-{str(entry.user_id)[-4:]}"
             display_name = str(state.get("character_name") or fallback_name).strip()
+            player_slug = cls._player_slug_key(display_name) or f"player-{entry.user_id}"
             persona = str(state.get("persona") or "").strip()
             if persona:
                 persona = cls._trim_text(persona, cls.MAX_PERSONA_PROMPT_CHARS)
@@ -5646,8 +5913,10 @@ class ZorkEmulator:
                 ]
             out.append(
                 {
+                    "user_id": entry.user_id,
                     "discord_mention": f"<@{entry.user_id}>",
                     "name": display_name,
+                    "player_slug": player_slug,
                     "is_actor": entry.user_id == actor.user_id,
                     "level": entry.level,
                     "persona": persona,
@@ -9620,6 +9889,7 @@ class ZorkEmulator:
         party_snapshot: Optional[List[Dict[str, object]]] = None,
         is_new_player: bool = False,
         turn_attachment_context: Optional[str] = None,
+        turn_visibility_default: str = "public",
     ) -> Tuple[str, str]:
         summary = cls._strip_inventory_mentions(campaign.summary or "")
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
@@ -9659,23 +9929,30 @@ class ZorkEmulator:
             "a hollow silence answers",
             "the world shifts, but nothing clear emerges",
         )
-        # Build user_id → character_name map for turn labels.
+        _player_registry = cls._campaign_player_registry(campaign.id)
         _player_names: Dict[int, str] = {}
-        _turn_user_ids = {t.user_id for t in turns if t.user_id is not None}
-        if _turn_user_ids:
-            _all_players = ZorkPlayer.query.filter(
-                ZorkPlayer.campaign_id == campaign.id,
-                ZorkPlayer.user_id.in_(_turn_user_ids),
-            ).all()
-            for p in _all_players:
-                ps = cls.get_player_state(p)
-                name = ps.get("character_name") or ""
-                if name:
-                    _player_names[p.user_id] = name
+        _player_slugs: Dict[int, str] = {}
+        for raw_user_id, info in _player_registry.get("by_user_id", {}).items():
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                continue
+            name = str(info.get("name") or "").strip()
+            slug = str(info.get("slug") or "").strip()
+            if name:
+                _player_names[user_id] = name
+            if slug:
+                _player_slugs[user_id] = slug
+
+        _viewer_slug = _player_slugs.get(player.user_id) or cls._player_slug_key(
+            player_state.get("character_name")
+        )
 
         for turn in turns:
             content = (turn.content or "").strip()
             if not content:
+                continue
+            if not cls._turn_visible_to_viewer(turn, player.user_id, _viewer_slug):
                 continue
             turn_prefix = cls._turn_context_prefix(turn, state)
             if turn.kind == "player":
@@ -9807,6 +10084,7 @@ class ZorkEmulator:
             f"CAMPAIGN: {campaign.name}\n"
             f"PLAYER_ID: {player.user_id}\n"
             f"IS_NEW_PLAYER: {str(is_new_player).lower()}\n"
+            f"TURN_VISIBILITY_DEFAULT: {turn_visibility_default}\n"
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
             f"WORLD_SUMMARY: {summary}\n"
@@ -10166,7 +10444,14 @@ class ZorkEmulator:
                                     content=interrupt_note,
                                     channel_id=ctx.channel.id,
                                     meta_json=cls._dump_json(
-                                        {"game_time": interrupt_turn_time}
+                                        {
+                                            "game_time": interrupt_turn_time,
+                                            "visibility": cls._default_turn_visibility_meta(
+                                                campaign,
+                                                player,
+                                                getattr(ctx, "guild", None) is None,
+                                            ),
+                                        }
                                     ),
                                 )
                                 db.session.add(timer_interrupt_turn)
@@ -10332,7 +10617,16 @@ class ZorkEmulator:
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                         quick_state = cls.get_campaign_state(campaign)
                         quick_time = cls._extract_game_time_snapshot(quick_state)
-                        quick_turn_meta = cls._dump_json({"game_time": quick_time})
+                        quick_turn_meta = cls._dump_json(
+                            {
+                                "game_time": quick_time,
+                                "visibility": cls._default_turn_visibility_meta(
+                                    campaign,
+                                    player,
+                                    getattr(ctx, "guild", None) is None,
+                                ),
+                            }
+                        )
                         look_player_turn = ZorkTurn(
                             campaign_id=campaign.id,
                             user_id=ctx.author.id,
@@ -10366,7 +10660,16 @@ class ZorkEmulator:
                         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                         quick_state = cls.get_campaign_state(campaign)
                         quick_time = cls._extract_game_time_snapshot(quick_state)
-                        quick_turn_meta = cls._dump_json({"game_time": quick_time})
+                        quick_turn_meta = cls._dump_json(
+                            {
+                                "game_time": quick_time,
+                                "visibility": cls._default_turn_visibility_meta(
+                                    campaign,
+                                    player,
+                                    getattr(ctx, "guild", None) is None,
+                                ),
+                            }
+                        )
                         inv_player_turn = ZorkTurn(
                             campaign_id=campaign.id,
                             user_id=ctx.author.id,
@@ -10490,6 +10793,11 @@ class ZorkEmulator:
                         party_snapshot=party_snapshot,
                         is_new_player=is_new_player,
                         turn_attachment_context=turn_attachment_context,
+                        turn_visibility_default=(
+                            "private"
+                            if getattr(ctx, "guild", None) is None
+                            else "public"
+                        ),
                     )
                     memory_lookup_enabled = (
                         "memory_lookup_enabled: true" in user_prompt.lower()
@@ -10682,6 +10990,27 @@ class ZorkEmulator:
                             category_scope = " ".join(
                                 str(first_payload.get("category") or "").strip().lower().split()
                             )
+                            interaction_participant_slug = None
+                            awareness_npc_slug = None
+                            visibility_scope_filter = None
+                            structured_turn_scope = False
+                            if category_scope in {"interaction", "interactions"}:
+                                structured_turn_scope = True
+                            elif category_scope.startswith("interaction:"):
+                                structured_turn_scope = True
+                                interaction_participant_slug = cls._player_slug_key(
+                                    category_scope.split(":", 1)[1]
+                                )
+                            elif category_scope.startswith("awareness:"):
+                                structured_turn_scope = True
+                                awareness_npc_slug = str(
+                                    category_scope.split(":", 1)[1] or ""
+                                ).strip()
+                            elif category_scope.startswith("visibility:"):
+                                structured_turn_scope = True
+                                visibility_scope_filter = str(
+                                    category_scope.split(":", 1)[1] or ""
+                                ).strip().lower()
                             source_docs = ZorkMemory.list_source_material_documents(
                                 campaign.id,
                                 limit=cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
@@ -10718,6 +11047,15 @@ class ZorkEmulator:
                                     "MEMORY SEARCH",
                                     f"queries={queries}\ncategory={category_scope or '(none)'}",
                                 )
+                                try:
+                                    backfilled = ZorkMemory.backfill_campaign(campaign.id)
+                                except Exception:
+                                    backfilled = 0
+                                if backfilled:
+                                    _zork_log(
+                                        "MEMORY BACKFILL",
+                                        f"campaign={campaign.id} refreshed_turns={backfilled}",
+                                    )
                                 seen_turn_ids = set()
                                 for query in queries:
                                     logger.info(
@@ -10726,32 +11064,61 @@ class ZorkEmulator:
                                         query,
                                     )
                                     results = ZorkMemory.search(
-                                        query, campaign.id, top_k=5
+                                        query,
+                                        campaign.id,
+                                        top_k=5,
+                                        viewer_user_id=player.user_id,
+                                        viewer_player_slug=cls._player_slug_key(
+                                            player_state.get("character_name")
+                                        ),
+                                        participant_slug=interaction_participant_slug,
+                                        aware_npc_slug=awareness_npc_slug,
+                                        visibility_scope=visibility_scope_filter,
                                     )
                                     if results:
                                         _zork_log(
                                             f"MEMORY SCORES query={query!r}",
                                             "\n".join(
-                                                f"  turn={tid} score={s:.3f} {c[:80]}"
-                                                for tid, _, c, s in results
+                                                "  turn="
+                                                f"{int(row.get('turn_id') or 0)} "
+                                                f"score={float(row.get('score') or 0.0):.3f} "
+                                                f"scope={str(row.get('visibility_scope') or 'public')} "
+                                                f"actor={str(row.get('actor_player_slug') or '-') or '-'} "
+                                                f"{str(row.get('content') or '')[:80]}"
+                                                for row in results
                                             ),
                                         )
                                     # Keep only results above relevance threshold.
                                     relevant = [
-                                        (turn_id, kind, content, score)
-                                        for turn_id, kind, content, score in results
-                                        if score >= 0.35 and turn_id not in seen_turn_ids
+                                        row
+                                        for row in results
+                                        if float(row.get("score") or 0.0) >= 0.35
+                                        and int(row.get("turn_id") or 0) not in seen_turn_ids
                                     ]
                                     # Sort chronologically so the model sees events in order.
-                                    relevant.sort(key=lambda t: t[0])
+                                    relevant.sort(key=lambda row: int(row.get("turn_id") or 0))
                                     recall_lines = []
-                                    for turn_id, kind, content, score in relevant:
+                                    for row in relevant:
+                                        turn_id = int(row.get("turn_id") or 0)
+                                        kind = str(row.get("kind") or "")
+                                        content = str(row.get("content") or "")
+                                        score = float(row.get("score") or 0.0)
+                                        actor_slug = str(row.get("actor_player_slug") or "").strip()
+                                        turn_scope = str(row.get("visibility_scope") or "public").strip()
+                                        location_key = str(row.get("location_key") or "").strip()
                                         seen_turn_ids.add(turn_id)
+                                        meta_bits = [f"relevance {score:.2f}"]
+                                        if actor_slug:
+                                            meta_bits.append(f"actor {actor_slug}")
+                                        if turn_scope and turn_scope != "public":
+                                            meta_bits.append(f"visibility {turn_scope}")
+                                        if location_key:
+                                            meta_bits.append(f"location {location_key}")
                                         recall_lines.append(
-                                            f"- [{kind} turn {turn_id}, relevance {score:.2f}]: {content[:300]}"
+                                            f"- [{kind} turn {turn_id}, {', '.join(meta_bits)}]: {content[:300]}"
                                         )
                                     manual_lines = []
-                                    if category_scope and not source_scope:
+                                    if category_scope and not source_scope and not structured_turn_scope:
                                         manual_hits = ZorkMemory.search_manual_memories(
                                             query,
                                             campaign.id,
@@ -10879,6 +11246,12 @@ class ZorkEmulator:
                                 '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
                                 "- To search inside one curated category after term discovery:\n"
                                 '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
+                                "- To search narrator memories for interactions involving a player slug:\n"
+                                '  {"tool_call": "memory_search", "category": "interaction:player-slug", "queries": ["argument", "kiss", "deal"]}\n'
+                                "- To search for turns noticed by a specific NPC slug:\n"
+                                '  {"tool_call": "memory_search", "category": "awareness:npc-slug", "queries": ["overheard", "promise", "threat"]}\n'
+                                "- To restrict narrator-memory recall by visibility scope:\n"
+                                '  {"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
                                 "- To inspect off-scene SMS communications:\n"
                                 '  {"tool_call": "sms_list", "wildcard": "*"}\n'
                                 '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
@@ -10957,6 +11330,15 @@ class ZorkEmulator:
                                 tool_result_block = (
                                     "MEMORY_TURN_RESULT: turn not found in this campaign.\n"
                                     "Try another hit turn_id from MEMORY_RECALL, or run memory_search again."
+                                )
+                            elif not cls._turn_visible_to_viewer(
+                                target_turn,
+                                player.user_id,
+                                cls._player_slug_key(player_state.get("character_name")),
+                            ):
+                                tool_result_block = (
+                                    "MEMORY_TURN_RESULT: that turn exists, but it is not visible to this player.\n"
+                                    "Use a different hit from MEMORY_RECALL."
                                 )
                             else:
                                 full_text = (target_turn.content or "").strip()
@@ -11940,6 +12322,7 @@ class ZorkEmulator:
                     xp_awarded = 0
                     player_state_update = {}
                     story_progression = None
+                    turn_visibility = None
                     scene_image_prompt = None
                     character_updates = {}
                     give_item = None
@@ -11974,6 +12357,7 @@ class ZorkEmulator:
                             story_progression = cls._normalize_story_progression(
                                 payload.get("story_progression")
                             )
+                            turn_visibility = payload.get("turn_visibility")
                             scene_image_prompt = payload.get("scene_image_prompt")
                             character_updates = (
                                 payload.get("character_updates", {}) or {}
@@ -12099,6 +12483,7 @@ class ZorkEmulator:
                                         story_progression = cls._normalize_story_progression(
                                             payload.get("story_progression")
                                         )
+                                        turn_visibility = payload.get("turn_visibility")
                                         scene_image_prompt = payload.get(
                                             "scene_image_prompt"
                                         )
@@ -12180,6 +12565,7 @@ class ZorkEmulator:
                                         story_progression = cls._normalize_story_progression(
                                             _rp.get("story_progression")
                                         )
+                                        turn_visibility = _rp.get("turn_visibility")
                                         scene_image_prompt = _rp.get("scene_image_prompt")
                                         character_updates = _rp.get("character_updates", {}) or {}
                                         give_item = _rp.get("give_item")
@@ -12266,6 +12652,7 @@ class ZorkEmulator:
                                     story_progression = cls._normalize_story_progression(
                                         _repair_payload.get("story_progression")
                                     )
+                                    turn_visibility = _repair_payload.get("turn_visibility")
                                     scene_image_prompt = _repair_payload.get(
                                         "scene_image_prompt"
                                     )
@@ -12331,6 +12718,7 @@ class ZorkEmulator:
                                     story_progression = cls._normalize_story_progression(
                                         _clock_payload.get("story_progression")
                                     )
+                                    turn_visibility = _clock_payload.get("turn_visibility")
                                     scene_image_prompt = _clock_payload.get("scene_image_prompt")
                                     character_updates = _clock_payload.get("character_updates", {}) or {}
                                     give_item = _clock_payload.get("give_item")
@@ -12390,6 +12778,7 @@ class ZorkEmulator:
                                     story_progression = cls._normalize_story_progression(
                                         _anti_payload.get("story_progression")
                                     )
+                                    turn_visibility = _anti_payload.get("turn_visibility")
                                     scene_image_prompt = _anti_payload.get("scene_image_prompt")
                                     character_updates = _anti_payload.get("character_updates", {}) or {}
                                     give_item = _anti_payload.get("give_item")
@@ -12397,6 +12786,13 @@ class ZorkEmulator:
                                     anti_echo_retry_count += 1
                                 except Exception:
                                     pass
+
+                    turn_visibility = cls._normalize_turn_visibility(
+                        campaign,
+                        player,
+                        turn_visibility,
+                        is_private_context=(getattr(ctx, "guild", None) is None),
+                    )
 
                     _planning_tools_used = bool(
                         {"plot_plan", "chapter_plan", "consequence_log"}
@@ -12467,6 +12863,7 @@ class ZorkEmulator:
                         f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
                         f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
                         f"--- STORY PROGRESSION ---\n{json.dumps(story_progression, indent=2)}\n\n"
+                        f"--- TURN VISIBILITY ---\n{json.dumps(turn_visibility, indent=2)}\n\n"
                         f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
                         f"--- XP AWARDED ---\n{xp_awarded}\n"
                         f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
@@ -12712,10 +13109,20 @@ class ZorkEmulator:
                         )
                         campaign.state_json = cls._dump_json(campaign_state)
 
+                    _turn_is_public = (
+                        str((turn_visibility or {}).get("scope") or "").strip().lower()
+                        == "public"
+                    )
+
                     if summary_update:
                         summary_update = summary_update.strip()
                         summary_update = cls._strip_inventory_mentions(summary_update)
-                        if cls._should_keep_summary_update(
+                        if not _turn_is_public:
+                            _zork_log(
+                                f"SUMMARY FILTERED (private turn) campaign={campaign.id}",
+                                summary_update,
+                            )
+                        elif cls._should_keep_summary_update(
                             summary_update,
                             state_update=state_update,
                             player_state_update=player_state_update,
@@ -12937,9 +13344,19 @@ class ZorkEmulator:
                     campaign.updated = db.func.now()
                     player.updated = db.func.now()
                     player_turn_meta = cls._dump_json(
-                        {"game_time": pre_turn_game_time}
+                        {
+                            "game_time": pre_turn_game_time,
+                            "visibility": turn_visibility,
+                        }
                     )
-                    narrator_turn_meta_payload = {"game_time": post_turn_game_time}
+                    narrator_turn_meta_payload = {
+                        "game_time": post_turn_game_time,
+                        "visibility": turn_visibility,
+                        "actor_player_slug": cls._player_slug_key(
+                            player_state.get("character_name")
+                        ),
+                        "location_key": cls._room_key_from_player_state(player_state),
+                    }
                     if reasoning:
                         narrator_turn_meta_payload["reasoning"] = reasoning
                     narrator_turn_meta = cls._dump_json(narrator_turn_meta_payload)
@@ -12991,6 +13408,12 @@ class ZorkEmulator:
                             ctx.author.id,
                             "narrator",
                             narration,
+                            metadata=cls._turn_embedding_metadata(
+                                visibility=turn_visibility,
+                                actor_player_slug=player_state.get("character_name"),
+                                location_key=cls._room_key_from_player_state(player_state),
+                                channel_id=ctx.channel.id,
+                            ),
                         )
                     except Exception:
                         logger.debug(
@@ -13159,12 +13582,18 @@ class ZorkEmulator:
                 db.session.commit()
                 action = f"[SYSTEM EVENT - TIMED]: {event_description}"
                 turns = cls.get_recent_turns(campaign_id)
+                timer_is_private_context = (
+                    ZorkChannel.query.filter_by(channel_id=channel_id).first() is None
+                )
                 system_prompt, user_prompt = cls.build_prompt(
                     campaign,
                     active_player,
                     action,
                     turns,
                     is_new_player=False,
+                    turn_visibility_default=(
+                        "private" if timer_is_private_context else "public"
+                    ),
                 )
 
                 gpt = GPT()
@@ -13181,6 +13610,7 @@ class ZorkEmulator:
                 summary_update = None
                 xp_awarded = 0
                 player_state_update = {}
+                turn_visibility = None
                 character_updates = {}
                 calendar_update = None
 
@@ -13202,6 +13632,7 @@ class ZorkEmulator:
                         player_state_update = (
                             payload.get("player_state_update", {}) or {}
                         )
+                        turn_visibility = payload.get("turn_visibility")
                         character_updates = payload.get("character_updates", {}) or {}
                         calendar_update = payload.get("calendar_update")
                     except json.JSONDecodeError as e:
@@ -13238,6 +13669,7 @@ class ZorkEmulator:
                                     player_state_update = (
                                         payload.get("player_state_update", {}) or {}
                                     )
+                                    turn_visibility = payload.get("turn_visibility")
                                     character_updates = (
                                         payload.get("character_updates", {}) or {}
                                     )
@@ -13277,6 +13709,12 @@ class ZorkEmulator:
                             "calendar_update": calendar_update,
                         }
                     ) or "The world shifts, but nothing clear emerges."
+                turn_visibility = cls._normalize_turn_visibility(
+                    campaign,
+                    active_player,
+                    turn_visibility,
+                    is_private_context=timer_is_private_context,
+                )
                 if (
                     " ".join(str(narration or "").lower().split())
                     == "the world shifts, but nothing clear emerges."
@@ -13373,10 +13811,20 @@ class ZorkEmulator:
                     )
                     campaign.state_json = cls._dump_json(campaign_state)
 
+                _turn_is_public = (
+                    str((turn_visibility or {}).get("scope") or "").strip().lower()
+                    == "public"
+                )
+
                 if summary_update:
                     summary_update = summary_update.strip()
                     summary_update = cls._strip_inventory_mentions(summary_update)
-                    if cls._should_keep_summary_update(
+                    if not _turn_is_public:
+                        _zork_log(
+                            f"SUMMARY FILTERED (private timed event) campaign={campaign.id}",
+                            summary_update,
+                        )
+                    elif cls._should_keep_summary_update(
                         summary_update,
                         state_update=state_update,
                         player_state_update=player_state_update,
@@ -13456,7 +13904,12 @@ class ZorkEmulator:
                 campaign.updated = db.func.now()
                 active_player.updated = db.func.now()
                 timed_turn_meta_payload = {
-                    "game_time": cls._extract_game_time_snapshot(campaign_state)
+                    "game_time": cls._extract_game_time_snapshot(campaign_state),
+                    "visibility": turn_visibility,
+                    "actor_player_slug": cls._player_slug_key(
+                        player_state.get("character_name")
+                    ),
+                    "location_key": cls._room_key_from_player_state(player_state),
                 }
                 if reasoning:
                     timed_turn_meta_payload["reasoning"] = reasoning
@@ -13480,6 +13933,26 @@ class ZorkEmulator:
                 db.session.commit()
 
                 cls._create_snapshot(narrator_turn, campaign)
+                try:
+                    ZorkMemory.store_turn_embedding(
+                        narrator_turn.id,
+                        campaign.id,
+                        active_player.user_id,
+                        "narrator",
+                        narration,
+                        metadata=cls._turn_embedding_metadata(
+                            visibility=turn_visibility,
+                            actor_player_slug=player_state.get("character_name"),
+                            location_key=cls._room_key_from_player_state(player_state),
+                            channel_id=channel_id,
+                        ),
+                    )
+                except Exception:
+                    logger.debug(
+                        "Zork memory embedding skipped for timed turn %s",
+                        narrator_turn.id,
+                        exc_info=True,
+                    )
 
                 target_user_id = active_player.user_id
                 timed_narrator_turn_id = narrator_turn.id

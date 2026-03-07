@@ -12,6 +12,7 @@ import sqlite3
 import struct
 import threading
 import hashlib
+import json
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,15 @@ CREATE TABLE IF NOT EXISTS turn_embeddings (
     kind         TEXT    NOT NULL,
     content      TEXT    NOT NULL,
     embedding    BLOB    NOT NULL,
+    actor_player_slug TEXT,
+    visibility_scope  TEXT NOT NULL DEFAULT 'public',
+    location_key      TEXT,
+    channel_id        INTEGER,
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_te_campaign ON turn_embeddings(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_te_campaign_visibility ON turn_embeddings(campaign_id, visibility_scope);
+CREATE INDEX IF NOT EXISTS idx_te_campaign_actor ON turn_embeddings(campaign_id, actor_player_slug);
 
 CREATE TABLE IF NOT EXISTS manual_memories (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +109,26 @@ CREATE TABLE IF NOT EXISTS source_material_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_sm_campaign ON source_material_chunks(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_sm_campaign_doc ON source_material_chunks(campaign_id, document_key);
+
+CREATE TABLE IF NOT EXISTS turn_embedding_visible_players (
+    turn_id      INTEGER NOT NULL,
+    campaign_id  INTEGER NOT NULL,
+    user_id      INTEGER,
+    player_slug  TEXT,
+    PRIMARY KEY (turn_id, user_id, player_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_tevp_campaign_slug ON turn_embedding_visible_players(campaign_id, player_slug);
+CREATE INDEX IF NOT EXISTS idx_tevp_campaign_user ON turn_embedding_visible_players(campaign_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_tevp_turn ON turn_embedding_visible_players(turn_id);
+
+CREATE TABLE IF NOT EXISTS turn_embedding_aware_npcs (
+    turn_id      INTEGER NOT NULL,
+    campaign_id  INTEGER NOT NULL,
+    npc_slug     TEXT NOT NULL,
+    PRIMARY KEY (turn_id, npc_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_tean_campaign_npc ON turn_embedding_aware_npcs(campaign_id, npc_slug);
+CREATE INDEX IF NOT EXISTS idx_tean_turn ON turn_embedding_aware_npcs(turn_id);
 """
 
 
@@ -119,8 +146,72 @@ class ZorkMemory:
         conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA_SQL)
+        cls._ensure_turn_embedding_schema(conn)
         cls._conn_local.conn = conn
         return conn
+
+    @classmethod
+    def _ensure_turn_embedding_schema(cls, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(turn_embeddings)").fetchall()
+        existing = {str(row[1] or "").strip() for row in rows}
+        alter_statements = []
+        if "actor_player_slug" not in existing:
+            alter_statements.append(
+                "ALTER TABLE turn_embeddings ADD COLUMN actor_player_slug TEXT"
+            )
+        if "visibility_scope" not in existing:
+            alter_statements.append(
+                "ALTER TABLE turn_embeddings ADD COLUMN visibility_scope TEXT NOT NULL DEFAULT 'public'"
+            )
+        if "location_key" not in existing:
+            alter_statements.append(
+                "ALTER TABLE turn_embeddings ADD COLUMN location_key TEXT"
+            )
+        if "channel_id" not in existing:
+            alter_statements.append(
+                "ALTER TABLE turn_embeddings ADD COLUMN channel_id INTEGER"
+            )
+        for statement in alter_statements:
+            conn.execute(statement)
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_te_campaign_visibility ON turn_embeddings(campaign_id, visibility_scope);
+            CREATE INDEX IF NOT EXISTS idx_te_campaign_actor ON turn_embeddings(campaign_id, actor_player_slug);
+            CREATE TABLE IF NOT EXISTS turn_embedding_visible_players (
+                turn_id      INTEGER NOT NULL,
+                campaign_id  INTEGER NOT NULL,
+                user_id      INTEGER,
+                player_slug  TEXT,
+                PRIMARY KEY (turn_id, user_id, player_slug)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tevp_campaign_slug ON turn_embedding_visible_players(campaign_id, player_slug);
+            CREATE INDEX IF NOT EXISTS idx_tevp_campaign_user ON turn_embedding_visible_players(campaign_id, user_id);
+            CREATE INDEX IF NOT EXISTS idx_tevp_turn ON turn_embedding_visible_players(turn_id);
+            CREATE TABLE IF NOT EXISTS turn_embedding_aware_npcs (
+                turn_id      INTEGER NOT NULL,
+                campaign_id  INTEGER NOT NULL,
+                npc_slug     TEXT NOT NULL,
+                PRIMARY KEY (turn_id, npc_slug)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tean_campaign_npc ON turn_embedding_aware_npcs(campaign_id, npc_slug);
+            CREATE INDEX IF NOT EXISTS idx_tean_turn ON turn_embedding_aware_npcs(turn_id);
+            """
+        )
+        conn.commit()
+
+    @staticmethod
+    def _normalize_slug(value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:80]
+
+    @staticmethod
+    def _normalize_visibility_scope(value: object) -> str:
+        scope = str(value or "").strip().lower()
+        if scope in {"private", "limited"}:
+            return scope
+        return "public"
 
     @classmethod
     def semantic_similarity(cls, text_a: str, text_b: str) -> Optional[float]:
@@ -148,17 +239,93 @@ class ZorkMemory:
         user_id: Optional[int],
         kind: str,
         content: str,
+        metadata: Optional[Dict[str, object]] = None,
     ) -> None:
         """Compute embedding for *content* and INSERT OR IGNORE into SQLite."""
         try:
             blob = _embed(content)
             conn = cls._get_conn()
-            conn.execute(
-                "INSERT OR IGNORE INTO turn_embeddings "
-                "(turn_id, campaign_id, user_id, kind, content, embedding) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (turn_id, campaign_id, user_id, kind, content, blob),
+            metadata = metadata if isinstance(metadata, dict) else {}
+            actor_player_slug = cls._normalize_slug(
+                metadata.get("actor_player_slug")
+            ) or None
+            visibility_scope = cls._normalize_visibility_scope(
+                metadata.get("visibility_scope")
             )
+            location_key = " ".join(str(metadata.get("location_key") or "").split())[:160] or None
+            channel_id = metadata.get("channel_id")
+            try:
+                channel_id = int(channel_id) if channel_id is not None else None
+            except (TypeError, ValueError):
+                channel_id = None
+            conn.execute(
+                "INSERT OR REPLACE INTO turn_embeddings "
+                "(turn_id, campaign_id, user_id, kind, content, embedding, actor_player_slug, visibility_scope, location_key, channel_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    turn_id,
+                    campaign_id,
+                    user_id,
+                    kind,
+                    content,
+                    blob,
+                    actor_player_slug,
+                    visibility_scope,
+                    location_key,
+                    channel_id,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM turn_embedding_visible_players WHERE turn_id = ?",
+                (turn_id,),
+            )
+            conn.execute(
+                "DELETE FROM turn_embedding_aware_npcs WHERE turn_id = ?",
+                (turn_id,),
+            )
+            visible_user_ids_raw = metadata.get("visible_user_ids")
+            visible_user_ids = []
+            if isinstance(visible_user_ids_raw, list):
+                for item in visible_user_ids_raw:
+                    try:
+                        visible_user_ids.append(int(item))
+                    except (TypeError, ValueError):
+                        visible_user_ids.append(None)
+            visible_player_slugs_raw = metadata.get("visible_player_slugs")
+            visible_player_slugs = []
+            if isinstance(visible_player_slugs_raw, list):
+                for item in visible_player_slugs_raw:
+                    slug = cls._normalize_slug(item)
+                    if slug:
+                        visible_player_slugs.append(slug)
+            row_count = max(len(visible_user_ids), len(visible_player_slugs))
+            for idx in range(row_count):
+                row_user_id = visible_user_ids[idx] if idx < len(visible_user_ids) else None
+                row_slug = visible_player_slugs[idx] if idx < len(visible_player_slugs) else None
+                if row_user_id is None and not row_slug:
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO turn_embedding_visible_players
+                    (turn_id, campaign_id, user_id, player_slug)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (turn_id, campaign_id, row_user_id, row_slug),
+                )
+            aware_npc_slugs_raw = metadata.get("aware_npc_slugs")
+            if isinstance(aware_npc_slugs_raw, list):
+                for item in aware_npc_slugs_raw:
+                    npc_slug = cls._normalize_slug(item)
+                    if not npc_slug:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO turn_embedding_aware_npcs
+                        (turn_id, campaign_id, npc_slug)
+                        VALUES (?, ?, ?)
+                        """,
+                        (turn_id, campaign_id, npc_slug),
+                    )
             conn.commit()
         except Exception:
             logger.exception(
@@ -175,33 +342,96 @@ class ZorkMemory:
         query: str,
         campaign_id: int,
         top_k: int = 5,
-    ) -> List[Tuple[int, str, str, float]]:
+        *,
+        viewer_user_id: Optional[int] = None,
+        viewer_player_slug: Optional[str] = None,
+        participant_slug: Optional[str] = None,
+        aware_npc_slug: Optional[str] = None,
+        visibility_scope: Optional[str] = None,
+    ) -> List[Dict[str, object]]:
         """Return the *top_k* most similar turns for *campaign_id*.
 
-        Returns a list of ``(turn_id, kind, content, score)`` tuples sorted
-        by descending cosine similarity.
+        Returns dict rows sorted by descending cosine similarity.
         """
         import numpy as np
 
         try:
             query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
-            rows = conn.execute(
-                "SELECT turn_id, kind, content, embedding "
-                "FROM turn_embeddings WHERE campaign_id = ?",
-                (campaign_id,),
-            ).fetchall()
+            sql = [
+                "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
+                "FROM turn_embeddings te",
+                "WHERE te.campaign_id = ?",
+            ]
+            params: List[object] = [campaign_id]
+
+            viewer_slug_key = cls._normalize_slug(viewer_player_slug)
+            visibility_clauses: List[str] = []
+            if viewer_user_id is not None:
+                visibility_clauses.append(
+                    "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.user_id = ?)"
+                )
+                params.append(int(viewer_user_id))
+            if viewer_slug_key:
+                visibility_clauses.append(
+                    "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.player_slug = ?)"
+                )
+                params.append(viewer_slug_key)
+            if visibility_clauses:
+                sql.append(
+                    "AND (te.visibility_scope = 'public' OR " + " OR ".join(visibility_clauses) + ")"
+                )
+
+            participant_slug_key = cls._normalize_slug(participant_slug)
+            if participant_slug_key:
+                sql.append(
+                    "AND (te.actor_player_slug = ? OR EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp2 WHERE tvp2.turn_id = te.turn_id AND tvp2.player_slug = ?))"
+                )
+                params.extend([participant_slug_key, participant_slug_key])
+
+            aware_npc_slug_key = cls._normalize_slug(aware_npc_slug)
+            if aware_npc_slug_key:
+                sql.append(
+                    "AND EXISTS (SELECT 1 FROM turn_embedding_aware_npcs tan WHERE tan.turn_id = te.turn_id AND tan.npc_slug = ?)"
+                )
+                params.append(aware_npc_slug_key)
+
+            visibility_scope_raw = str(visibility_scope or "").strip().lower()
+            if visibility_scope_raw in {"public", "private", "limited"}:
+                visibility_scope_key = cls._normalize_visibility_scope(visibility_scope_raw)
+                sql.append("AND te.visibility_scope = ?")
+                params.append(visibility_scope_key)
+
+            rows = conn.execute("\n".join(sql), tuple(params)).fetchall()
             if not rows:
                 return []
 
-            scored: List[Tuple[int, str, str, float]] = []
-            for turn_id, kind, content, blob in rows:
+            scored: List[Dict[str, object]] = []
+            for (
+                turn_id,
+                kind,
+                content,
+                blob,
+                actor_player_slug,
+                row_visibility_scope,
+                location_key,
+            ) in rows:
                 vec = _bytes_to_vector(blob)
                 # Both vectors are already L2-normalised → dot == cosine sim.
                 score = float(np.dot(query_vec, vec))
-                scored.append((turn_id, kind, content, score))
+                scored.append(
+                    {
+                        "turn_id": int(turn_id),
+                        "kind": str(kind or ""),
+                        "content": str(content or ""),
+                        "score": score,
+                        "actor_player_slug": str(actor_player_slug or ""),
+                        "visibility_scope": str(row_visibility_scope or "public"),
+                        "location_key": str(location_key or ""),
+                    }
+                )
 
-            scored.sort(key=lambda t: t[3], reverse=True)
+            scored.sort(key=lambda t: float(t.get("score") or 0.0), reverse=True)
             return scored[:top_k]
         except Exception:
             logger.exception("Zork memory: search failed for campaign %s", campaign_id)
@@ -1039,7 +1269,7 @@ class ZorkMemory:
         Returns the number of newly embedded turns.
         """
         from discord_tron_master.classes.app_config import AppConfig
-        from discord_tron_master.models.zork import ZorkTurn
+        from discord_tron_master.models.zork import ZorkTurn, ZorkPlayer
 
         app = AppConfig.get_flask()
         if app is None:
@@ -1051,21 +1281,71 @@ class ZorkMemory:
                 .order_by(ZorkTurn.id.asc())
                 .all()
             )
+            players = ZorkPlayer.query.filter_by(campaign_id=campaign_id).all()
+            player_names: Dict[int, str] = {}
+            for row in players:
+                try:
+                    state = json.loads(row.state_json or "{}")
+                except Exception:
+                    state = {}
+                if not isinstance(state, dict):
+                    state = {}
+                name = str(state.get("character_name") or "").strip()
+                if name:
+                    player_names[row.user_id] = name
 
         conn = cls._get_conn()
-        existing = set()
+        existing: Dict[int, Dict[str, object]] = {}
         for row in conn.execute(
-            "SELECT turn_id FROM turn_embeddings WHERE campaign_id = ?",
+            """
+            SELECT turn_id, actor_player_slug, visibility_scope
+            FROM turn_embeddings
+            WHERE campaign_id = ?
+            """,
             (campaign_id,),
         ).fetchall():
-            existing.add(row[0])
+            existing[int(row[0])] = {
+                "actor_player_slug": str(row[1] or ""),
+                "visibility_scope": str(row[2] or ""),
+            }
 
         count = 0
         for turn in turns:
-            if turn.id in existing:
+            existing_row = existing.get(turn.id) or {}
+            try:
+                turn_meta = json.loads(turn.meta_json or "{}")
+            except Exception:
+                turn_meta = {}
+            if not isinstance(turn_meta, dict):
+                turn_meta = {}
+            visibility = turn_meta.get("visibility")
+            if not isinstance(visibility, dict):
+                visibility = {}
+            actor_name = str(turn_meta.get("actor_player_slug") or "").strip()
+            if not actor_name:
+                actor_name = player_names.get(turn.user_id or 0, "")
+            needs_refresh = (
+                turn.id not in existing
+                or not str(existing_row.get("actor_player_slug") or "").strip()
+                or not str(existing_row.get("visibility_scope") or "").strip()
+            )
+            if not needs_refresh:
                 continue
             cls.store_turn_embedding(
-                turn.id, campaign_id, turn.user_id, turn.kind, turn.content
+                turn.id,
+                campaign_id,
+                turn.user_id,
+                turn.kind,
+                turn.content,
+                metadata={
+                    "actor_player_slug": actor_name,
+                    "visibility_scope": visibility.get("scope"),
+                    "visible_player_slugs": visibility.get("visible_player_slugs") or [],
+                    "visible_user_ids": visibility.get("visible_user_ids") or [],
+                    "aware_npc_slugs": visibility.get("aware_npc_slugs") or [],
+                    "location_key": turn_meta.get("location_key"),
+                    "channel_id": turn.channel_id,
+                },
             )
             count += 1
         return count
