@@ -108,6 +108,16 @@ def _find_first_key(value, target_key: str):
     return None
 
 
+def _channel_log_label(channel) -> str:
+    if channel is None:
+        return "unknown-channel"
+    channel_name = getattr(channel, "name", None)
+    if not isinstance(channel_name, str) or not channel_name.strip():
+        channel_name = type(channel).__name__
+    channel_id = getattr(channel, "id", None)
+    return f"{channel_name} ({channel_id})"
+
+
 def _extract_primary_image_url(arguments: Dict):
     if not isinstance(arguments, dict):
         return None
@@ -485,7 +495,7 @@ async def send_image(
                 embed = get_image_embed(image_data)
             await channel.send(content=arguments["message"], embed=embed)
         except Exception as e:
-            logger.error(f"Error sending message to {channel.name} ({channel.id}): {e}")
+            logger.error(f"Error sending message to {_channel_log_label(channel)}: {e}")
             return {"success": False, "result": str(e)}
         return {"success": True, "result": "Message sent."}
     return {"success": False, "result": "Channel not found."}
@@ -496,12 +506,18 @@ async def delete_message(
 ):
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
     if channel is not None:
+        message_id = data.get("message_id")
+        if not message_id:
+            return {
+                "success": True,
+                "result": "Message deletion skipped because no message_id was provided.",
+            }
         try:
-            message = await channel.fetch_message(data["message_id"])
+            message = await channel.fetch_message(message_id)
             await message.delete()
         except Exception as e:
             logger.warning(
-                f"Could not delete message in {channel.name} ({channel.id}), another bot likely got to it already. Dang!"
+                f"Could not delete message in {_channel_log_label(channel)}, another bot likely got to it already. Dang! ({e})"
             )
             return {"success": True, "result": "Message deleted, but not by us."}
         return {"success": True, "result": "Message deleted."}
