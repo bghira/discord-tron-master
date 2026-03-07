@@ -207,7 +207,7 @@ class ZorkMemory:
     @staticmethod
     def _normalize_visibility_scope(value: object) -> str:
         scope = str(value or "").strip().lower()
-        if scope in {"private", "limited"}:
+        if scope in {"private", "limited", "local"}:
             return scope
         return "public"
 
@@ -343,6 +343,7 @@ class ZorkMemory:
         *,
         viewer_user_id: Optional[int] = None,
         viewer_player_slug: Optional[str] = None,
+        viewer_location_key: Optional[str] = None,
         participant_slug: Optional[str] = None,
         aware_npc_slug: Optional[str] = None,
         visibility_scope: Optional[str] = None,
@@ -375,6 +376,12 @@ class ZorkMemory:
                     "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.player_slug = ?)"
                 )
                 params.append(viewer_slug_key)
+            viewer_location_key_clean = str(viewer_location_key or "").strip().lower()
+            if viewer_location_key_clean:
+                visibility_clauses.append(
+                    "(te.visibility_scope = 'local' AND LOWER(te.location_key) = ?)"
+                )
+                params.append(viewer_location_key_clean)
             if visibility_clauses:
                 sql.append(
                     "AND (te.visibility_scope = 'public' OR " + " OR ".join(visibility_clauses) + ")"
@@ -395,7 +402,7 @@ class ZorkMemory:
                 params.append(aware_npc_slug_key)
 
             visibility_scope_raw = str(visibility_scope or "").strip().lower()
-            if visibility_scope_raw in {"public", "private", "limited"}:
+            if visibility_scope_raw in {"public", "private", "limited", "local"}:
                 visibility_scope_key = cls._normalize_visibility_scope(visibility_scope_raw)
                 sql.append("AND te.visibility_scope = ?")
                 params.append(visibility_scope_key)

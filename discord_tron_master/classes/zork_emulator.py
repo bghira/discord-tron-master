@@ -302,7 +302,7 @@ class ZorkEmulator:
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
         '- story_progression: object (optional; on-rails intent hint only. Keys: "advance" (bool), "target" ("hold"|"next-scene"|"next-chapter"), "reason" (short string). Use this when a subplot beat or scene outcome should push the main outlined story forward and you are not setting explicit state_update.current_chapter/current_scene.)\n'
-        '- turn_visibility: object (optional; who should get this turn in future prompt context. Keys: "scope" ("public"|"private"|"limited"), "player_slugs" (array of stable player slugs from PARTY_SNAPSHOT/CURRENTLY_ATTENTIVE_PLAYERS), "npc_slugs" (array of WORLD_CHARACTERS slugs who overheard/noticed), and optional "reason". This changes prompt visibility only; it does NOT change shared world state.)\n'
+        '- turn_visibility: object (optional; who should get this turn in future prompt context. Keys: "scope" ("public"|"private"|"limited"|"local"), "player_slugs" (array of stable player slugs from PARTY_SNAPSHOT/CURRENTLY_ATTENTIVE_PLAYERS), "npc_slugs" (array of WORLD_CHARACTERS slugs who overheard/noticed), and optional "reason". This changes prompt visibility only; it does NOT change shared world state.)\n'
         "- scene_image_prompt: string (optional; include whenever the visible scene changes in a meaningful way: entering a room, newly visible characters/objects, reveals, or strong visual shifts)\n"
         "- set_timer_delay: integer (optional; 30-300 seconds, see TIMED EVENTS SYSTEM below)\n"
         "- set_timer_event: string (optional; what happens when the timer expires)\n"
@@ -412,6 +412,7 @@ class ZorkEmulator:
         "  * public: obvious shared action/conversation; everyone nearby can know it.\n"
         "  * private: actor-only context. Use this for DM/private-channel turns unless the action clearly becomes public.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
+        "  * local: players in the same location_key/room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
         "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
         "- Before writing NPC dialogue, consult that NPC's speech_style and match it. Do not drift into generic voice.\n"
@@ -1834,6 +1835,8 @@ class ZorkEmulator:
         details: List[str] = []
         if scope == "public":
             details.append("SEEN BY: public")
+        elif scope == "local":
+            details.append("SEEN BY: local")
         else:
             raw_player_slugs = visibility.get("visible_player_slugs")
             names: List[str] = []
@@ -2161,7 +2164,7 @@ class ZorkEmulator:
             return default_meta
 
         scope = str(raw_visibility.get("scope") or "").strip().lower()
-        if scope not in {"public", "private", "limited"}:
+        if scope not in {"public", "private", "limited", "local"}:
             scope = str(default_meta.get("scope") or "public")
 
         registry = cls._campaign_player_registry(campaign.id)
@@ -2192,7 +2195,7 @@ class ZorkEmulator:
             if isinstance(resolved_user_id, int):
                 visible_user_ids.append(resolved_user_id)
 
-        if scope in {"private", "limited"} and actor_slug:
+        if scope in {"private", "limited", "local"} and actor_slug:
             if actor_slug not in seen_player_slugs:
                 visible_player_slugs.insert(0, actor_slug)
                 seen_player_slugs.add(actor_slug)
@@ -2240,6 +2243,7 @@ class ZorkEmulator:
         turn: ZorkTurn,
         viewer_user_id: int,
         viewer_slug: str,
+        viewer_location_key: str,
     ) -> bool:
         if turn.user_id == viewer_user_id:
             return True
@@ -2250,6 +2254,10 @@ class ZorkEmulator:
         scope = str(visibility.get("scope") or "").strip().lower()
         if scope in {"", "public"}:
             return True
+        if scope == "local":
+            turn_location_key = str(meta.get("location_key") or "").strip().lower()
+            if viewer_location_key and turn_location_key and viewer_location_key == turn_location_key:
+                return True
 
         raw_user_ids = visibility.get("visible_user_ids")
         user_ids = set()
@@ -10561,12 +10569,18 @@ class ZorkEmulator:
         _viewer_slug = _player_slugs.get(player.user_id) or cls._player_slug_key(
             player_state.get("character_name")
         )
+        _viewer_location_key = cls._room_key_from_player_state(player_state).lower()
 
         for turn in turns:
             content = (turn.content or "").strip()
             if not content:
                 continue
-            if not cls._turn_visible_to_viewer(turn, player.user_id, _viewer_slug):
+            if not cls._turn_visible_to_viewer(
+                turn,
+                player.user_id,
+                _viewer_slug,
+                _viewer_location_key,
+            ):
                 continue
             turn_prefix = cls._turn_context_prefix(turn, state)
             if turn.kind == "player":
@@ -11693,6 +11707,9 @@ class ZorkEmulator:
                                         viewer_player_slug=cls._player_slug_key(
                                             player_state.get("character_name")
                                         ),
+                                        viewer_location_key=cls._room_key_from_player_state(
+                                            player_state
+                                        ),
                                         participant_slug=interaction_participant_slug,
                                         aware_npc_slug=awareness_npc_slug,
                                         visibility_scope=visibility_scope_filter,
@@ -11957,6 +11974,7 @@ class ZorkEmulator:
                                 target_turn,
                                 player.user_id,
                                 cls._player_slug_key(player_state.get("character_name")),
+                                cls._room_key_from_player_state(player_state).lower(),
                             ):
                                 tool_result_block = (
                                     "MEMORY_TURN_RESULT: that turn exists, but it is not visible to this player.\n"
@@ -14001,6 +14019,7 @@ class ZorkEmulator:
                         {
                             "game_time": pre_turn_game_time,
                             "visibility": turn_visibility,
+                            "location_key": cls._room_key_from_player_state(player_state),
                         }
                     )
                     narrator_turn_meta_payload = {
