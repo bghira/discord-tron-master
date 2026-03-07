@@ -2312,33 +2312,43 @@ class ZorkEmulator:
         context_key = str(
             visibility.get("context_key") or meta.get("context_key") or ""
         ).strip()
+        raw_user_ids = visibility.get("visible_user_ids")
+        user_ids = set()
+        if isinstance(raw_user_ids, list):
+            for item in raw_user_ids:
+                try:
+                    user_ids.add(int(item))
+                except (TypeError, ValueError):
+                    continue
+        raw_player_slugs = visibility.get("visible_player_slugs")
+        player_slugs = set()
+        if isinstance(raw_player_slugs, list):
+            for item in raw_player_slugs:
+                slug = cls._player_slug_key(item)
+                if slug:
+                    player_slugs.add(slug)
+        has_explicit_participants = bool(user_ids or player_slugs)
+        is_participant = (
+            turn.user_id == viewer_user_id
+            or viewer_user_id in user_ids
+            or bool(viewer_slug and viewer_slug in player_slugs)
+        )
         if scope in {"private", "limited"} and context_key:
-            raw_user_ids = visibility.get("visible_user_ids")
-            user_ids = set()
-            if isinstance(raw_user_ids, list):
-                user_ids = {
-                    int(item)
-                    for item in raw_user_ids
-                    if isinstance(item, int) or str(item).isdigit()
-                }
-            raw_player_slugs = visibility.get("visible_player_slugs")
-            player_slugs = set()
-            if isinstance(raw_player_slugs, list):
-                player_slugs = {
-                    cls._player_slug_key(item)
-                    for item in raw_player_slugs
-                    if cls._player_slug_key(item)
-                }
-            is_participant = (
-                turn.user_id == viewer_user_id
-                or viewer_user_id in user_ids
-                or bool(viewer_slug and viewer_slug in player_slugs)
-            )
             return bool(
                 is_participant
                 and viewer_private_context_key
                 and viewer_private_context_key == context_key
             )
+        if scope in {"private", "limited"}:
+            if has_explicit_participants and not is_participant:
+                return False
+            if has_explicit_participants:
+                viewer_is_only_user = bool(user_ids) and user_ids == {viewer_user_id}
+                viewer_is_only_slug = bool(player_slugs) and viewer_slug and player_slugs == {viewer_slug}
+                if viewer_is_only_user or viewer_is_only_slug:
+                    return False
+                return is_participant
+            return False
         if turn.user_id == viewer_user_id:
             return True
         if scope in {"", "public"}:
@@ -2349,25 +2359,8 @@ class ZorkEmulator:
             ).strip().lower()
             if viewer_location_key and turn_location_key and viewer_location_key == turn_location_key:
                 return True
-
-        raw_user_ids = visibility.get("visible_user_ids")
-        user_ids = set()
-        if isinstance(raw_user_ids, list):
-            for item in raw_user_ids:
-                try:
-                    user_ids.add(int(item))
-                except (TypeError, ValueError):
-                    continue
         if viewer_user_id in user_ids:
             return True
-
-        raw_player_slugs = visibility.get("visible_player_slugs")
-        player_slugs = set()
-        if isinstance(raw_player_slugs, list):
-            for item in raw_player_slugs:
-                slug = cls._player_slug_key(item)
-                if slug:
-                    player_slugs.add(slug)
         return bool(viewer_slug and viewer_slug in player_slugs)
 
     @classmethod
@@ -13926,8 +13919,9 @@ class ZorkEmulator:
                             ).strip(),
                             actor_user_id=ctx.author.id,
                         )
+                        _pre_counter_campaign_state = cls.get_campaign_state(campaign)
                         cls._increment_auto_fix_counter(
-                            campaign_state,
+                            _pre_counter_campaign_state,
                             "private_phone_redacted",
                         )
                     suppress_recent_context = bool(
