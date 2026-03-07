@@ -2155,6 +2155,13 @@ class ZorkEmulator:
             "actor_user_id": actor_user_id,
             "visible_player_slugs": visible_player_slugs,
             "visible_user_ids": visible_user_ids,
+            "location_key": (
+                actor_location_key
+                if scope == "local"
+                and actor_location_key
+                and actor_location_key.lower() != "unknown-room"
+                else None
+            ),
             "aware_npc_slugs": [],
             "source": (
                 "dm-default"
@@ -2241,12 +2248,14 @@ class ZorkEmulator:
                     seen_npc_slugs.add(resolved_slug)
 
         reason = cls._trim_text(str(raw_visibility.get("reason") or "").strip(), 240)
+        location_key = str(default_meta.get("location_key") or "").strip()
         return {
             "scope": scope,
             "actor_player_slug": actor_slug or None,
             "actor_user_id": default_meta.get("actor_user_id"),
             "visible_player_slugs": visible_player_slugs,
             "visible_user_ids": visible_user_ids,
+            "location_key": location_key or None,
             "aware_npc_slugs": aware_npc_slugs,
             "reason": reason or None,
             "source": "model",
@@ -2285,7 +2294,9 @@ class ZorkEmulator:
         if scope in {"", "public"}:
             return True
         if scope == "local":
-            turn_location_key = str(meta.get("location_key") or "").strip().lower()
+            turn_location_key = str(
+                visibility.get("location_key") or meta.get("location_key") or ""
+            ).strip().lower()
             if viewer_location_key and turn_location_key and viewer_location_key == turn_location_key:
                 return True
 
