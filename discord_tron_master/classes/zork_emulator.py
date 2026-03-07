@@ -3454,6 +3454,67 @@ class ZorkEmulator:
         return cleaned
 
     @classmethod
+    def _rulebook_line_key(cls, line: object) -> str:
+        text = str(line or "").strip()
+        if not text:
+            return ""
+        match = re.match(r"^([A-Z][A-Z0-9-]{1,80}):\s+\S", text)
+        if not match:
+            return ""
+        return str(match.group(1) or "").strip().upper()
+
+    @classmethod
+    def _canonical_seed_rulebook_lines(
+        cls,
+        campaign_id: int,
+        source_payload: dict,
+    ) -> list[str]:
+        docs = source_payload.get("docs") or []
+        out: list[str] = []
+        seen_keys: set[str] = set()
+        auto_key = ZorkMemory._normalize_source_document_key(
+            cls.AUTO_RULEBOOK_DOCUMENT_LABEL
+        )
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            doc_key = str(doc.get("document_key") or "").strip()
+            doc_label = str(doc.get("document_label") or "").strip()
+            doc_format = str(doc.get("format") or "").strip().lower()
+            if doc_format != cls.SOURCE_MATERIAL_FORMAT_RULEBOOK:
+                continue
+            if doc_label == cls.AUTO_RULEBOOK_DOCUMENT_LABEL or doc_key == auto_key:
+                continue
+            units = ZorkMemory.get_source_material_document_units(campaign_id, doc_key)
+            for unit in units:
+                compact = re.sub(r"\s+", " ", str(unit or "").strip()).strip()
+                key = cls._rulebook_line_key(compact)
+                if not key or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out.append(compact[:8000])
+        return out
+
+    @classmethod
+    def _merge_generated_rulebook_lines(
+        cls,
+        campaign_id: int,
+        source_payload: dict,
+        generated_lines: list[str],
+    ) -> list[str]:
+        canonical_lines = cls._canonical_seed_rulebook_lines(campaign_id, source_payload)
+        merged: list[str] = list(canonical_lines)
+        seen_keys = {cls._rulebook_line_key(line) for line in canonical_lines if cls._rulebook_line_key(line)}
+        for line in generated_lines:
+            compact = re.sub(r"\s+", " ", str(line or "").strip()).strip()
+            key = cls._rulebook_line_key(compact)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(compact[:8000])
+        return merged
+
+    @classmethod
     def _auto_rulebook_source_index_hint(cls, source_payload: dict) -> str:
         if not source_payload.get("available"):
             return ""
@@ -3521,6 +3582,7 @@ class ZorkEmulator:
             "Convert story summaries, plot chapters, character notes, and attachment prose into reusable rules and facts.\n"
             "Do not write scripts or scene transcripts. Do not rely on adjacent lines for context.\n"
             "Use these category families when relevant: TONE, SCENE, SETTING, CHAR, PLOT, INTERACTION, GM-RULE, and venue-specific tags such as BLUE-ROOM or RED-ROOM.\n"
+            "Existing non-auto rulebook source docs are canonical. If an existing source doc already defines a KEY, do not rewrite or replace that KEY. Only add missing keys or new non-conflicting facts.\n"
             "Required coverage:\n"
             "- TONE, TONE-RULES, SCENE-OPENING, SETTING-[MAIN]\n"
             "- For each named character: CHAR-[NAME], CHAR-[NAME]-PERSONALITY, CHAR-[NAME]-DIALOGUE\n"
@@ -3540,7 +3602,7 @@ class ZorkEmulator:
             f"{source_index_hint}"
             "Use the chosen storyline, expanded world JSON, and any detailed attachment summary below.\n"
             "If the attachment summary is a story-generator prompt or setup note, translate it into concise retrievable rulebook facts instead of copying it as prose.\n"
-            "If existing source docs contain canonical facts, merge them faithfully into this synthesized rulebook.\n\n"
+            "If existing source docs contain canonical facts, merge them faithfully into this synthesized rulebook. Existing user-provided rulebook facts always win conflicts by KEY; only supplement them.\n\n"
             f"Chosen storyline:\n{json.dumps(chosen, indent=2)}\n\n"
             f"Expanded world JSON:\n{json.dumps(world, indent=2)}\n\n"
             f"Detailed attachment summary:\n{attachment_summary or '(none)'}\n"
@@ -3564,6 +3626,11 @@ class ZorkEmulator:
             return 0, ""
         _zork_log("SETUP RULEBOOK RAW RESPONSE", response or "(empty)")
         normalized_lines = cls._normalize_generated_rulebook_lines(response or "")
+        normalized_lines = cls._merge_generated_rulebook_lines(
+            campaign.id,
+            source_payload,
+            normalized_lines,
+        )
         if not normalized_lines:
             return 0, ""
         stored_ok, stored_msg = await cls.ingest_source_material_text(

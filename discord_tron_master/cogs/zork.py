@@ -1386,7 +1386,11 @@ class Zork(commands.Cog):
                 f"or `{prefix}zork source-material --clear`."
             )
             return
-        await ctx.send(message_text or "No source-material changes were made.")
+        await DiscordBot.send_large_message(
+            ctx,
+            message_text or "No source-material changes were made.",
+            max_chars=3900,
+        )
 
     @zork.command(name="source-material-export")
     async def zork_source_material_export(self, ctx):
