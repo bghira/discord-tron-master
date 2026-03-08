@@ -6807,6 +6807,14 @@ class ZorkEmulator:
             return ""
         if len(text) <= max_chars:
             return text
+        return text[:max_chars]
+
+    @classmethod
+    def _trim_text_tail(cls, text: str, max_chars: int) -> str:
+        if text is None:
+            return ""
+        if len(text) <= max_chars:
+            return text
         return text[-max_chars:]
 
     @classmethod
@@ -6816,7 +6824,7 @@ class ZorkEmulator:
             return existing or ""
         update = update.strip()
         if not existing:
-            return cls._trim_text(update, cls.MAX_SUMMARY_CHARS)
+            return cls._trim_text_tail(update, cls.MAX_SUMMARY_CHARS)
         # Deduplicate: skip lines that already appear (substring match).
         existing_lower = existing.lower()
         new_lines = []
@@ -6830,7 +6838,7 @@ class ZorkEmulator:
         if not new_lines:
             return existing
         merged = f"{existing}\n{chr(10).join(new_lines)}"
-        return cls._trim_text(merged, cls.MAX_SUMMARY_CHARS)
+        return cls._trim_text_tail(merged, cls.MAX_SUMMARY_CHARS)
 
     @classmethod
     def _summary_has_durable_keywords(cls, text: str) -> bool:
