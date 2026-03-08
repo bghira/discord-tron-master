@@ -2554,8 +2554,6 @@ class ZorkEmulator:
             for item in list(visibility.get("aware_npc_slugs") or [])
             if str(item or "").strip()
         }
-        if aware_npc_slugs and requested_npc_slugs and aware_npc_slugs.intersection(requested_npc_slugs):
-            return True
 
         visible_player_slugs = {
             cls._player_slug_key(item)
