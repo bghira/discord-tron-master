@@ -284,7 +284,7 @@ class ZorkEmulator:
         "dark humor, and adult situations when appropriate to the story and player actions.\n\n"
         "Return ONLY valid JSON with these keys:\n"
         "- reasoning: string (first key in final turn JSON; concise internal grounding for this turn: what evidence/context you used, which actors are involved, and why the chosen outcome follows)\n"
-        "- narration: string (what the player sees)\n"
+        '- narration: string|null (what the player sees; may be null when scene_output is provided and should be treated as the compatibility render)\n'
         '- scene_output: object (preferred structured scene packet for this turn. Keys: "location_key" (string, optional), "context_key" (string, optional), '
         '"beats" (array), and optional "rendered_text". Each beat object MUST begin with "reasoning" and include: '
         '"type", "speaker", "actors", "listeners", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
@@ -629,21 +629,6 @@ class ZorkEmulator:
         "Review the returned names against your character concept — ethnicity, sound, mood, setting — "
         "and pick the best fit. Call again with different origins if none work.\n"
         "IMPORTANT: ALWAYS use this tool when creating new original NPCs. Do not invent names from your training data.\n"
-        "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
-        "- List SMS threads:\n"
-        '{"tool_call": "sms_list", "wildcard": "*"}\n'
-        "- Read one thread:\n"
-        '{"tool_call": "sms_read", "thread": "saul", "limit": 20}\n'
-        "- Write/send an SMS entry:\n"
-        '{"tool_call": "sms_write", "thread": "saul", "from": "Dale", "to": "Saul", "message": "Meet me at Dock 9."}\n'
-        "For NPC replies, immediately call sms_write again with from/to swapped:\n"
-        '{"tool_call": "sms_write", "thread": "saul", "from": "Saul", "to": "Dale", "message": "On my way."}\n'
-        "- Schedule a delayed incoming SMS (hidden until delivered, always uninterruptible):\n"
-        '{"tool_call": "sms_schedule", "thread": "saul", "from": "Saul", "to": "Dale", "message": "Traffic. 10 min.", "delay_seconds": 120}\n'
-        "sms_schedule is invisible to players at scheduling time. Do NOT narrate the delayed SMS as already received in the current response.\n"
-        "Use a stable contact thread slug for both directions (e.g. always `elizabeth` for Deshawn<->Elizabeth), not per-sender thread names.\n"
-        "SMS continuity rule: do NOT leak scene context into SMS content unless the SMS explicitly mentions it.\n"
-        "NPC SMS responses/knowledge must be limited to what that thread and established continuity plausibly reveal.\n"
         "\nPlanning tools:\n"
         "- Use plot_plan for long-running setups/payoffs:\n"
         '{"tool_call": "plot_plan", "plans": [{"thread": "thread-slug", "setup": "...", "intended_payoff": "...", "target_turns": 12, "dependencies": ["dep1"]}]}\n'
@@ -655,18 +640,14 @@ class ZorkEmulator:
         "Example: to recall Marcus and Anastasia, use:\n"
         '{"tool_call": "memory_search", "queries": ["Marcus", "Anastasia"]}\n'
         'NOT: {"tool_call": "memory_search", "queries": ["Marcus Anastasia relationship"]}\n'
-        "USE memory_search AGGRESSIVELY — it is cheap and fast. Prefer searching too often over guessing.\n"
-        "You MUST use memory_search on MOST turns. Specifically:\n"
-        "- ANY time a character, NPC, or named entity appears or is mentioned — even if they were in recent turns. "
-        "Memory may contain richer detail than the truncated recent context.\n"
-        "- ANY time the player references past events, locations, objects, or conversations.\n"
-        "- ANY time you are about to narrate a scene involving an established NPC — search their name first.\n"
-        "- ANY time you need to describe a location the player has visited before.\n"
-        "- At the START of most turns, search for the current location and any NPCs present to refresh your context.\n"
-        "- When the player asks questions, investigates, or examines something — search for related terms.\n"
-        "- When you are unsure about ANY detail from earlier in the campaign.\n"
-        "The cost of an unnecessary search is zero. The cost of hallucinating a detail is broken continuity.\n"
-        "When in doubt, SEARCH. Do not guess, improvise, or rely solely on loaded RECENT_TURNS.\n"
+        "USE memory_search AGGRESSIVELY when deeper or older continuity matters.\n"
+        "You SHOULD use memory_search often, especially:\n"
+        "- when a character, NPC, or named entity appears and older context may matter\n"
+        "- when the player references past events, locations, objects, or conversations\n"
+        "- when describing a revisited location or established NPC\n"
+        "- when the player investigates, asks questions, or you are unsure about earlier campaign facts\n"
+        "Do not call memory_search reflexively after every recent_turns. Use it when it will materially improve continuity.\n"
+        "When in doubt between guessing and searching, search.\n"
         "IMPORTANT: Memories are stored as narrator event text (e.g. what happened in a scene). "
         "Queries are matched by semantic similarity against these narration snippets. "
         "Use short, concrete keyword queries with names and places — e.g. "
@@ -750,11 +731,20 @@ class ZorkEmulator:
         "Return ONLY:\n"
         '{"tool_call": "plot_plan", "plans": [{"thread": "elizabeth-pregnancy", "setup": "Elizabeth is stalling on proof", '
         '"intended_payoff": "Blood test reveals she is pregnant but not by Deshawn", "target_turns": 15, '
-        '"dependencies": ["blood test scene", "clinic arrival"]}]}\n'
+        '"dependencies": ["blood test scene", "clinic arrival"], "visibility": "private", '
+        '"visible_player_slugs": ["deshawn-williams"], "aware_npc_slugs": ["elizabeth"], '
+        '"hint": "The test result should land soon."}]}\n'
         "You may also resolve/update existing threads by setting status/resolution fields:\n"
         '{"tool_call": "plot_plan", "plans": [{"thread": "elizabeth-pregnancy", "status": "resolved", "resolution": "Result confirmed. Relationship ruptured."}]}\n'
+        "Plot-thread visibility rules:\n"
+        "- public: campaign-wide story/theme threads other players may see.\n"
+        "- private: personal or secret threads for one player only.\n"
+        "- limited: visible only to the listed visible_player_slugs / visible_user_ids.\n"
+        "- local: scene-bound thread tied to one location_key.\n"
+        "- Use aware_npc_slugs only for NPCs who plausibly know the thread; NPC awareness alone does NOT expose the thread to other players.\n"
         "ACTIVE_PLOT_THREADS are returned in prompt context.\n"
         "You MUST consult ACTIVE_PLOT_THREADS before narrating scenes that touch those threads.\n"
+        "ACTIVE_HINTS are per-viewer imminent nudges derived from the currently relevant threads. Use them as near-term pressure, not as mandatory rails.\n"
         "Any narrative thread expected to span more than 3 turns SHOULD have a plot plan.\n"
     )
 
@@ -2459,6 +2449,33 @@ class ZorkEmulator:
             "aware_npc_slugs": aware_npc_slugs,
             "reason": reason or None,
             "source": "model",
+        }
+
+    @classmethod
+    def _resolved_turn_visibility_keys(
+        cls,
+        turn_visibility: Dict[str, object],
+        *,
+        scene_output_raw: object,
+        player_state_update: object,
+        fallback_location_key: str = "",
+    ) -> Dict[str, Optional[str]]:
+        location_key = ""
+        context_key = ""
+        if isinstance(scene_output_raw, dict):
+            location_key = str(scene_output_raw.get("location_key") or "").strip()
+            context_key = str(scene_output_raw.get("context_key") or "").strip()
+        if not location_key and isinstance(player_state_update, dict):
+            location_key = str(player_state_update.get("location") or "").strip()
+        if not location_key:
+            location_key = str(
+                turn_visibility.get("location_key") or fallback_location_key or ""
+            ).strip()
+        if not context_key:
+            context_key = str(turn_visibility.get("context_key") or "").strip()
+        return {
+            "location_key": location_key or None,
+            "context_key": context_key or None,
         }
 
     @classmethod
@@ -10912,6 +10929,72 @@ class ZorkEmulator:
                 dep_text = " ".join(str(dep or "").strip().split())[:120]
                 if dep_text:
                     dep_clean.append(dep_text)
+            raw_player_slugs = raw_value.get("player_slugs")
+            if isinstance(raw_player_slugs, str):
+                raw_player_slugs = [raw_player_slugs]
+            player_slugs: List[str] = []
+            if isinstance(raw_player_slugs, list):
+                seen_player_slugs: set[str] = set()
+                for item in raw_player_slugs[:8]:
+                    slug = cls._player_slug_key(item)
+                    if not slug or slug in seen_player_slugs:
+                        continue
+                    seen_player_slugs.add(slug)
+                    player_slugs.append(slug)
+            raw_visible_player_slugs = raw_value.get("visible_player_slugs")
+            if isinstance(raw_visible_player_slugs, str):
+                raw_visible_player_slugs = [raw_visible_player_slugs]
+            visible_player_slugs: List[str] = []
+            if isinstance(raw_visible_player_slugs, list):
+                seen_visible_player_slugs: set[str] = set()
+                for item in raw_visible_player_slugs[:8]:
+                    slug = cls._player_slug_key(item)
+                    if not slug or slug in seen_visible_player_slugs:
+                        continue
+                    seen_visible_player_slugs.add(slug)
+                    visible_player_slugs.append(slug)
+            raw_visible_user_ids = raw_value.get("visible_user_ids")
+            if isinstance(raw_visible_user_ids, (str, int)):
+                raw_visible_user_ids = [raw_visible_user_ids]
+            visible_user_ids: List[int] = []
+            if isinstance(raw_visible_user_ids, list):
+                seen_visible_user_ids: set[int] = set()
+                for item in raw_visible_user_ids[:8]:
+                    try:
+                        user_id = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if user_id <= 0 or user_id in seen_visible_user_ids:
+                        continue
+                    seen_visible_user_ids.add(user_id)
+                    visible_user_ids.append(user_id)
+            raw_npc_slugs = raw_value.get("npc_slugs")
+            if isinstance(raw_npc_slugs, str):
+                raw_npc_slugs = [raw_npc_slugs]
+            npc_slugs: List[str] = []
+            if isinstance(raw_npc_slugs, list):
+                seen_npc_slugs: set[str] = set()
+                for item in raw_npc_slugs[:12]:
+                    slug = str(item or "").strip()
+                    if not slug or slug in seen_npc_slugs:
+                        continue
+                    seen_npc_slugs.add(slug)
+                    npc_slugs.append(slug)
+            raw_aware_npc_slugs = raw_value.get("aware_npc_slugs")
+            if isinstance(raw_aware_npc_slugs, str):
+                raw_aware_npc_slugs = [raw_aware_npc_slugs]
+            aware_npc_slugs: List[str] = []
+            if isinstance(raw_aware_npc_slugs, list):
+                seen_aware_npc_slugs: set[str] = set()
+                for item in raw_aware_npc_slugs[:12]:
+                    slug = str(item or "").strip()
+                    if not slug or slug in seen_aware_npc_slugs:
+                        continue
+                    seen_aware_npc_slugs.add(slug)
+                    aware_npc_slugs.append(slug)
+            visibility = str(raw_value.get("visibility") or "").strip().lower()
+            if visibility not in {"public", "private", "limited", "local"}:
+                visibility = ""
             target_turns = cls._coerce_non_negative_int(
                 raw_value.get("target_turns", 0), default=0
             )
@@ -10925,6 +11008,14 @@ class ZorkEmulator:
                 ],
                 "target_turns": min(250, max(1, target_turns)),
                 "dependencies": dep_clean,
+                "player_slugs": player_slugs,
+                "npc_slugs": npc_slugs,
+                "visibility": visibility,
+                "visible_player_slugs": visible_player_slugs,
+                "visible_user_ids": visible_user_ids,
+                "aware_npc_slugs": aware_npc_slugs,
+                "location_key": str(raw_value.get("location_key") or "").strip()[:160],
+                "hint": str(raw_value.get("hint") or "").strip()[:220],
                 "status": status,
                 "resolution": str(raw_value.get("resolution") or "").strip()[:260],
                 "created_turn": cls._coerce_non_negative_int(
@@ -10941,6 +11032,11 @@ class ZorkEmulator:
         cls,
         campaign_state: Dict[str, object],
         *,
+        campaign: Optional[ZorkCampaign] = None,
+        viewer_user_id: int = 0,
+        viewer_player_slug: str = "",
+        viewer_location_key: str = "",
+        active_scene_npc_slugs: Optional[set[str]] = None,
         limit: int = 10,
     ) -> List[Dict[str, object]]:
         threads = cls._plot_threads_from_state(campaign_state)
@@ -10953,7 +11049,16 @@ class ZorkEmulator:
             )
         )
         out = []
-        for row in rows[: max(1, int(limit or 10))]:
+        for row in rows:
+            if not cls._plot_thread_visible_to_viewer(
+                row,
+                campaign=campaign,
+                viewer_user_id=viewer_user_id,
+                viewer_player_slug=viewer_player_slug,
+                viewer_location_key=viewer_location_key,
+                active_scene_npc_slugs=active_scene_npc_slugs or set(),
+            ):
+                continue
             out.append(
                 {
                     "thread": row.get("thread"),
@@ -10961,11 +11066,192 @@ class ZorkEmulator:
                     "intended_payoff": row.get("intended_payoff"),
                     "target_turns": row.get("target_turns"),
                     "dependencies": list(row.get("dependencies") or []),
+                    "hint": row.get("hint"),
+                    "visibility": row.get("visibility"),
+                    "visible_player_slugs": list(row.get("visible_player_slugs") or []),
+                    "visible_user_ids": list(row.get("visible_user_ids") or []),
+                    "aware_npc_slugs": list(row.get("aware_npc_slugs") or []),
+                    "location_key": row.get("location_key"),
                     "status": row.get("status"),
                     "resolution": row.get("resolution"),
                 }
             )
+            if len(out) >= max(1, int(limit or 10)):
+                break
         return out
+
+    @classmethod
+    def _plot_thread_visibility_descriptor(
+        cls,
+        row: Dict[str, object],
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+    ) -> Tuple[str, set[int], set[str], set[str], str]:
+        scope = str(row.get("visibility") or "").strip().lower()
+        raw_user_ids = row.get("visible_user_ids")
+        if isinstance(raw_user_ids, (str, int)):
+            raw_user_ids = [raw_user_ids]
+        visible_user_ids: set[int] = set()
+        if isinstance(raw_user_ids, list):
+            for item in raw_user_ids[:8]:
+                try:
+                    user_id = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if user_id > 0:
+                    visible_user_ids.add(user_id)
+        explicit_visible_player_slugs = {
+            cls._player_slug_key(item)
+            for item in list(row.get("visible_player_slugs") or [])
+            if cls._player_slug_key(item)
+        }
+        explicit_aware_npc_slugs = {
+            str(item or "").strip()
+            for item in list(row.get("aware_npc_slugs") or [])
+            if str(item or "").strip()
+        }
+        explicit_player_slugs = {
+            cls._player_slug_key(item)
+            for item in list(row.get("player_slugs") or [])
+            if cls._player_slug_key(item)
+        }
+        explicit_npc_slugs = {
+            str(item or "").strip()
+            for item in list(row.get("npc_slugs") or [])
+            if str(item or "").strip()
+        }
+        location_key = str(row.get("location_key") or "").strip().lower()
+        haystack = " ".join(
+            str(row.get(field) or "").strip().lower()
+            for field in ("thread", "setup", "intended_payoff", "resolution", "hint")
+        )
+        haystack += " " + " ".join(
+            str(item or "").strip().lower() for item in list(row.get("dependencies") or [])
+        )
+        inferred_player_slugs: set[str] = set()
+        inferred_npc_slugs: set[str] = set()
+        if campaign is not None:
+            registry = cls._campaign_player_registry(campaign.id)
+            for entry in registry.get("by_user_id", {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                slug = cls._player_slug_key(entry.get("slug") or entry.get("name") or "")
+                if not slug:
+                    continue
+                aliases = {
+                    slug,
+                    " ".join(str(entry.get("name") or "").strip().lower().split()),
+                }
+                name = str(entry.get("name") or "").strip()
+                for sep in (",", "(", " - "):
+                    if sep in name:
+                        aliases.add(" ".join(name.split(sep, 1)[0].strip().lower().split()))
+                if any(alias and alias in haystack for alias in aliases):
+                    inferred_player_slugs.add(slug)
+            characters = cls.get_campaign_characters(campaign)
+            if isinstance(characters, dict):
+                for slug, char in characters.items():
+                    aliases = {
+                        str(slug or "").strip().lower(),
+                        " ".join(str((char or {}).get("name") or "").strip().lower().split()),
+                    }
+                    if any(alias and alias in haystack for alias in aliases):
+                        inferred_npc_slugs.add(str(slug))
+        visible_player_slugs = explicit_visible_player_slugs or explicit_player_slugs or inferred_player_slugs
+        aware_npc_slugs = explicit_aware_npc_slugs or explicit_npc_slugs or inferred_npc_slugs
+        if scope not in {"public", "private", "limited", "local"}:
+            if visible_player_slugs:
+                scope = "private" if len(visible_player_slugs) <= 1 else "limited"
+            elif location_key:
+                scope = "local"
+            else:
+                scope = "public"
+        return scope, visible_user_ids, visible_player_slugs, aware_npc_slugs, location_key
+
+    @classmethod
+    def _plot_thread_visible_to_viewer(
+        cls,
+        row: Dict[str, object],
+        *,
+        campaign: Optional[ZorkCampaign],
+        viewer_user_id: int,
+        viewer_player_slug: str,
+        viewer_location_key: str,
+        active_scene_npc_slugs: set[str],
+    ) -> bool:
+        (
+            scope,
+            visible_user_ids,
+            visible_player_slugs,
+            aware_npc_slugs,
+            location_key,
+        ) = cls._plot_thread_visibility_descriptor(
+            row,
+            campaign=campaign,
+        )
+        viewer_slug = cls._player_slug_key(viewer_player_slug)
+        viewer_loc = str(viewer_location_key or "").strip().lower()
+        viewer_allowed = bool(
+            (viewer_user_id > 0 and viewer_user_id in visible_user_ids)
+            or (viewer_slug and viewer_slug in visible_player_slugs)
+        )
+        if scope in {"private", "limited"}:
+            return viewer_allowed
+        if scope == "local":
+            if viewer_allowed:
+                return True
+            return bool(location_key and viewer_loc and location_key == viewer_loc)
+        if scope == "public":
+            return True
+        if viewer_allowed:
+            return True
+        if location_key and viewer_loc and location_key == viewer_loc:
+            return True
+        if aware_npc_slugs and active_scene_npc_slugs:
+            return bool(aware_npc_slugs.intersection(active_scene_npc_slugs))
+        return True
+
+    @classmethod
+    def _plot_hints_for_viewer(
+        cls,
+        campaign: ZorkCampaign,
+        campaign_state: Dict[str, object],
+        *,
+        viewer_user_id: int,
+        viewer_player_slug: str,
+        viewer_location_key: str,
+        active_scene_npc_slugs: set[str],
+        limit: int = 3,
+    ) -> List[Dict[str, object]]:
+        rows = cls._plot_threads_for_prompt(
+            campaign_state,
+            campaign=campaign,
+            viewer_user_id=viewer_user_id,
+            viewer_player_slug=viewer_player_slug,
+            viewer_location_key=viewer_location_key,
+            active_scene_npc_slugs=active_scene_npc_slugs,
+            limit=max(limit * 2, 6),
+        )
+        active_rows = [row for row in rows if str(row.get("status")) == "active"]
+        hints: List[Dict[str, object]] = []
+        for row in active_rows[: max(1, int(limit or 3))]:
+            hint_text = " ".join(str(row.get("hint") or "").split()).strip()
+            if not hint_text:
+                hint_text = " ".join(str(row.get("intended_payoff") or "").split()).strip()
+            if not hint_text:
+                hint_text = " ".join(str(row.get("setup") or "").split()).strip()
+            hint_text = hint_text[:220]
+            if not hint_text:
+                continue
+            hints.append(
+                {
+                    "thread": row.get("thread"),
+                    "hint": hint_text,
+                    "visibility": row.get("visibility"),
+                    "status": row.get("status"),
+                }
+            )
+        return hints
 
     @classmethod
     def _apply_plot_plan_tool(
@@ -11012,6 +11298,14 @@ class ZorkEmulator:
                         "intended_payoff": "",
                         "target_turns": 8,
                         "dependencies": [],
+                        "player_slugs": [],
+                        "npc_slugs": [],
+                        "visibility": "",
+                        "visible_player_slugs": [],
+                        "visible_user_ids": [],
+                        "aware_npc_slugs": [],
+                        "location_key": "",
+                        "hint": "",
                         "status": "active",
                         "resolution": "",
                         "created_turn": max(0, int(current_turn or 0)),
@@ -11039,6 +11333,95 @@ class ZorkEmulator:
                     if dep_text:
                         dep_clean.append(dep_text)
                 row["dependencies"] = dep_clean
+
+            if "visibility" in raw_plan:
+                visibility = str(raw_plan.get("visibility") or "").strip().lower()
+                if visibility in {"public", "private", "limited", "local"}:
+                    row["visibility"] = visibility
+
+            if "visible_user_ids" in raw_plan:
+                raw_visible_user_ids = raw_plan.get("visible_user_ids")
+                if isinstance(raw_visible_user_ids, (str, int)):
+                    raw_visible_user_ids = [raw_visible_user_ids]
+                cleaned_visible_user_ids = []
+                seen_visible_user_ids: set[int] = set()
+                if isinstance(raw_visible_user_ids, list):
+                    for item in raw_visible_user_ids[:8]:
+                        try:
+                            user_id = int(item)
+                        except (TypeError, ValueError):
+                            continue
+                        if user_id <= 0 or user_id in seen_visible_user_ids:
+                            continue
+                        seen_visible_user_ids.add(user_id)
+                        cleaned_visible_user_ids.append(user_id)
+                row["visible_user_ids"] = cleaned_visible_user_ids
+
+            if "player_slugs" in raw_plan:
+                raw_player_slugs = raw_plan.get("player_slugs")
+                if isinstance(raw_player_slugs, str):
+                    raw_player_slugs = [raw_player_slugs]
+                cleaned_player_slugs = []
+                seen_player_slugs: set[str] = set()
+                if isinstance(raw_player_slugs, list):
+                    for item in raw_player_slugs[:8]:
+                        slug = cls._player_slug_key(item)
+                        if not slug or slug in seen_player_slugs:
+                            continue
+                        seen_player_slugs.add(slug)
+                        cleaned_player_slugs.append(slug)
+                row["player_slugs"] = cleaned_player_slugs
+
+            if "visible_player_slugs" in raw_plan:
+                raw_visible_player_slugs = raw_plan.get("visible_player_slugs")
+                if isinstance(raw_visible_player_slugs, str):
+                    raw_visible_player_slugs = [raw_visible_player_slugs]
+                cleaned_visible_player_slugs = []
+                seen_visible_player_slugs: set[str] = set()
+                if isinstance(raw_visible_player_slugs, list):
+                    for item in raw_visible_player_slugs[:8]:
+                        slug = cls._player_slug_key(item)
+                        if not slug or slug in seen_visible_player_slugs:
+                            continue
+                        seen_visible_player_slugs.add(slug)
+                        cleaned_visible_player_slugs.append(slug)
+                row["visible_player_slugs"] = cleaned_visible_player_slugs
+
+            if "npc_slugs" in raw_plan:
+                raw_npc_slugs = raw_plan.get("npc_slugs")
+                if isinstance(raw_npc_slugs, str):
+                    raw_npc_slugs = [raw_npc_slugs]
+                cleaned_npc_slugs = []
+                seen_npc_slugs: set[str] = set()
+                if isinstance(raw_npc_slugs, list):
+                    for item in raw_npc_slugs[:12]:
+                        slug = str(item or "").strip()
+                        if not slug or slug in seen_npc_slugs:
+                            continue
+                        seen_npc_slugs.add(slug)
+                        cleaned_npc_slugs.append(slug)
+                row["npc_slugs"] = cleaned_npc_slugs
+
+            if "aware_npc_slugs" in raw_plan:
+                raw_aware_npc_slugs = raw_plan.get("aware_npc_slugs")
+                if isinstance(raw_aware_npc_slugs, str):
+                    raw_aware_npc_slugs = [raw_aware_npc_slugs]
+                cleaned_aware_npc_slugs = []
+                seen_aware_npc_slugs: set[str] = set()
+                if isinstance(raw_aware_npc_slugs, list):
+                    for item in raw_aware_npc_slugs[:12]:
+                        slug = str(item or "").strip()
+                        if not slug or slug in seen_aware_npc_slugs:
+                            continue
+                        seen_aware_npc_slugs.add(slug)
+                        cleaned_aware_npc_slugs.append(slug)
+                row["aware_npc_slugs"] = cleaned_aware_npc_slugs
+
+            if "location_key" in raw_plan:
+                row["location_key"] = str(raw_plan.get("location_key") or "").strip()[:160]
+
+            if "hint" in raw_plan:
+                row["hint"] = " ".join(str(raw_plan.get("hint") or "").strip().split())[:220]
 
             status = str(raw_plan.get("status") or row.get("status") or "active").strip().lower()
             if raw_plan.get("resolve"):
@@ -11071,7 +11454,9 @@ class ZorkEmulator:
 
         campaign_state[cls.PLOT_THREADS_STATE_KEY] = threads
         active_threads = [
-            row for row in cls._plot_threads_for_prompt(campaign_state, limit=12) if str(row.get("status")) == "active"
+            row
+            for row in cls._plot_threads_for_prompt(campaign_state, limit=12)
+            if str(row.get("status")) == "active"
         ]
         return {
             "updated": updated,
@@ -13423,7 +13808,27 @@ class ZorkEmulator:
             source_material_available=bool(_source_payload.get("available")),
             action_text=action,
         )
-        _active_plot_threads = cls._plot_threads_for_prompt(state, limit=10)
+        _viewer_player_slug = cls._player_slug_key(player_state.get("character_name"))
+        _viewer_location_key = cls._room_key_from_player_state(player_state).lower()
+        _active_scene_npc_slugs = cls._active_scene_npc_slugs(campaign, player_state)
+        _active_plot_threads = cls._plot_threads_for_prompt(
+            state,
+            campaign=campaign,
+            viewer_user_id=player.user_id,
+            viewer_player_slug=_viewer_player_slug,
+            viewer_location_key=_viewer_location_key,
+            active_scene_npc_slugs=_active_scene_npc_slugs,
+            limit=10,
+        )
+        _active_hints = cls._plot_hints_for_viewer(
+            campaign,
+            state,
+            viewer_user_id=player.user_id,
+            viewer_player_slug=_viewer_player_slug,
+            viewer_location_key=_viewer_location_key,
+            active_scene_npc_slugs=_active_scene_npc_slugs,
+            limit=3,
+        )
         _active_chapters = cls._chapters_for_prompt(
             state, active_only=True, limit=8
         )
@@ -13489,6 +13894,8 @@ class ZorkEmulator:
             user_prompt += (
                 f"ACTIVE_PLOT_THREADS: {cls._dump_json(_active_plot_threads)}\n"
             )
+        if _active_hints:
+            user_prompt += f"ACTIVE_HINTS: {cls._dump_json(_active_hints)}\n"
         if _active_chapters:
             user_prompt += f"ACTIVE_CHAPTERS: {cls._dump_json(_active_chapters)}\n"
         if _active_consequences:
@@ -16609,6 +17016,20 @@ class ZorkEmulator:
                         player_state,
                         turn_visibility,
                     )
+                    _resolved_turn_keys = cls._resolved_turn_visibility_keys(
+                        turn_visibility,
+                        scene_output_raw=scene_output_raw,
+                        player_state_update=player_state_update,
+                        fallback_location_key=cls._room_key_from_player_state(
+                            player_state
+                        ),
+                    )
+                    turn_visibility["location_key"] = _resolved_turn_keys.get(
+                        "location_key"
+                    )
+                    turn_visibility["context_key"] = _resolved_turn_keys.get(
+                        "context_key"
+                    )
 
                     _zork_log(
                         f"TURN RESULT campaign={campaign.id}",
@@ -16874,9 +17295,9 @@ class ZorkEmulator:
                         summary_update = cls._strip_inventory_mentions(summary_update)
                         if not _turn_is_public:
                             _zork_log(
-                                f"SUMMARY FILTERED (private turn) campaign={campaign.id}",
-                                summary_update,
-                            )
+                            f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
+                            summary_update,
+                        )
                         elif not cls._scene_output_is_summary_public_safe(scene_output):
                             _zork_log(
                                 f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
@@ -16916,6 +17337,9 @@ class ZorkEmulator:
                         campaign,
                         player_state,
                         turn_visibility,
+                    )
+                    turn_visibility["location_key"] = (
+                        cls._room_key_from_player_state(player_state).strip() or None
                     )
                     player.state_json = cls._dump_json(player_state)
                     cls._sync_main_party_room_state(
@@ -17670,6 +18094,16 @@ class ZorkEmulator:
                 turn_visibility = cls._promote_player_npc_slugs(
                     turn_visibility, campaign.id,
                 )
+                _resolved_turn_keys = cls._resolved_turn_visibility_keys(
+                    turn_visibility,
+                    scene_output_raw=scene_output_raw,
+                    player_state_update=player_state_update,
+                    fallback_location_key=cls._room_key_from_player_state(
+                        active_player_state
+                    ),
+                )
+                turn_visibility["location_key"] = _resolved_turn_keys.get("location_key")
+                turn_visibility["context_key"] = _resolved_turn_keys.get("context_key")
                 if (
                     " ".join(str(narration or "").lower().split())
                     == "the world shifts, but nothing clear emerges."
@@ -17777,7 +18211,7 @@ class ZorkEmulator:
                     summary_update = cls._strip_inventory_mentions(summary_update)
                     if not _turn_is_public:
                         _zork_log(
-                            f"SUMMARY FILTERED (private timed event) campaign={campaign.id}",
+                            f"SUMMARY FILTERED (non-public timed event) campaign={campaign.id}",
                             summary_update,
                         )
                     elif not cls._scene_output_is_summary_public_safe(scene_output):
@@ -17815,6 +18249,9 @@ class ZorkEmulator:
                     campaign,
                     player_state,
                     turn_visibility,
+                )
+                turn_visibility["location_key"] = (
+                    cls._room_key_from_player_state(player_state).strip() or None
                 )
                 active_player.state_json = cls._dump_json(player_state)
                 cls._sync_main_party_room_state(

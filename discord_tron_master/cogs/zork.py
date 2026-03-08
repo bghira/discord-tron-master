@@ -721,6 +721,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork attributes` view attributes and points\n"
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
             f"- `{prefix}zork stats` view player stats\n"
+            f"- `{prefix}zork hint` view your currently visible imminent plot hints\n"
             f"- `{prefix}zork level` level up if you have enough XP\n"
             f"- `{prefix}zork map` draw an ASCII map for your location\n"
             f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
@@ -2068,6 +2069,90 @@ class Zork(commands.Cog):
                 extra = f" | party: {party_status}" if party_status else ""
                 lines.append(f"- <@{player.user_id}>: {room} ({status}{extra})")
             await DiscordBot.send_large_message(ctx, "Locations:\n" + "\n".join(lines))
+
+    @zork.command(name="hint")
+    async def zork_hint(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            player = ZorkEmulator.get_or_create_player(
+                campaign.id, ctx.author.id, campaign=campaign
+            )
+            player_state = ZorkEmulator.get_player_state(player)
+            campaign_state = ZorkEmulator.get_campaign_state(campaign)
+            viewer_player_slug = ZorkEmulator._player_slug_key(
+                player_state.get("character_name")
+            )
+            viewer_location_key = ZorkEmulator._room_key_from_player_state(
+                player_state
+            ).lower()
+            active_scene_npc_slugs = ZorkEmulator._active_scene_npc_slugs(
+                campaign, player_state
+            )
+            hints = ZorkEmulator._plot_hints_for_viewer(
+                campaign,
+                campaign_state,
+                viewer_user_id=ctx.author.id,
+                viewer_player_slug=viewer_player_slug,
+                viewer_location_key=viewer_location_key,
+                active_scene_npc_slugs=active_scene_npc_slugs,
+                limit=5,
+            )
+            visible_threads = ZorkEmulator._plot_threads_for_prompt(
+                campaign_state,
+                campaign=campaign,
+                viewer_user_id=ctx.author.id,
+                viewer_player_slug=viewer_player_slug,
+                viewer_location_key=viewer_location_key,
+                active_scene_npc_slugs=active_scene_npc_slugs,
+                limit=10,
+            )
+            active_visible = [
+                row for row in visible_threads if str(row.get("status") or "") == "active"
+            ]
+            if not hints and not active_visible:
+                await ctx.send("No active hints right now.")
+                return
+
+            lines = [f"Hints for `{campaign.name}`:"]
+            if hints:
+                for row in hints:
+                    thread = str(row.get("thread") or "").strip() or "untitled-thread"
+                    hint_text = str(row.get("hint") or "").strip()
+                    if hint_text:
+                        lines.append(f"- `{thread}`: {hint_text}")
+                    else:
+                        lines.append(f"- `{thread}`")
+            elif active_visible:
+                lines.append("- No imminent hints, but these active threads are currently visible:")
+                for row in active_visible[:5]:
+                    thread = str(row.get("thread") or "").strip() or "untitled-thread"
+                    setup = " ".join(str(row.get("setup") or "").split()).strip()[:180]
+                    if setup:
+                        lines.append(f"- `{thread}`: {setup}")
+                    else:
+                        lines.append(f"- `{thread}`")
+
+            if viewer_location_key:
+                lines.append(f"Location: `{viewer_location_key}`")
+            if active_scene_npc_slugs:
+                lines.append(
+                    "Scene NPCs: " + ", ".join(f"`{slug}`" for slug in sorted(active_scene_npc_slugs))
+                )
+            await DiscordBot.send_large_message(ctx, "\n".join(lines))
 
     @zork.command(name="speed")
     async def zork_speed(self, ctx, *, value: str = None):
