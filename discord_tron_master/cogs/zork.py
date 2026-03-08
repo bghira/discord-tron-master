@@ -622,7 +622,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
-            f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode]` view or set the text backend for this channel/thread (creator/admin only to change)\n"
+            f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
@@ -1177,16 +1177,31 @@ class Zork(commands.Cog):
                 await ctx.send("No active campaign in this channel.")
                 return
 
-        current = self.config.get_zork_backend(ctx.channel.id, default_value="zai")
+        current = self.config.get_zork_backend_config(
+            ctx.channel.id,
+            default_backend="zai",
+        )
+        current_backend = str(current.get("backend") or "zai").strip() or "zai"
+        current_model = str(current.get("model") or "").strip() or None
         allowed = ", ".join(f"`{item}`" for item in AppConfig.ZORK_BACKEND_OPTIONS)
         if option is None:
+            model_text = f"`{current_model}`" if current_model else "`default`"
             await ctx.send(
-                f"Current Zork backend for this channel/thread: `{current}`.\n"
+                f"Current Zork backend for this channel/thread: `{current_backend}`.\n"
+                f"Current model override: {model_text}\n"
                 f"Available backends: {allowed}"
             )
             return
 
-        normalized = self.config.normalize_zork_backend(option, default="")
+        try:
+            tokens = shlex.split(option)
+        except ValueError:
+            tokens = str(option or "").split()
+        if not tokens:
+            await ctx.send(f"Available backends: {allowed}")
+            return
+        normalized = self.config.normalize_zork_backend(tokens[0], default="")
+        model = " ".join(str(token or "").strip() for token in tokens[1:]).strip() or None
         if normalized not in AppConfig.ZORK_BACKEND_OPTIONS:
             await ctx.send(
                 f"Unknown backend `{option}`. Available backends: {allowed}"
@@ -1199,9 +1214,10 @@ class Zork(commands.Cog):
             )
             return
 
-        self.config.set_zork_backend(ctx.channel.id, normalized)
+        self.config.set_zork_backend(ctx.channel.id, normalized, model=model)
+        model_text = f" with model `{model}`" if model else " with the backend default model"
         await ctx.send(
-            f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`."
+            f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`{model_text}."
         )
 
     @zork.command(name="thread")

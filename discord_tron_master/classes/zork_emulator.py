@@ -2666,13 +2666,16 @@ class ZorkEmulator:
         cls,
         campaign: Optional[ZorkCampaign] = None,
         channel_id: Optional[int] = None,
-    ) -> str:
+    ) -> dict:
         cfg = AppConfig()
         resolved_channel_id = cls._resolve_zork_backend_channel_id(
             campaign=campaign,
             channel_id=channel_id,
         )
-        return cfg.get_zork_backend(channel_id=resolved_channel_id, default_value="zai")
+        return cfg.get_zork_backend_config(
+            channel_id=resolved_channel_id,
+            default_backend="zai",
+        )
 
     @classmethod
     def _new_gpt(
@@ -2682,10 +2685,14 @@ class ZorkEmulator:
         channel_id: Optional[int] = None,
     ) -> GPT:
         gpt = GPT()
-        gpt.backend = cls._resolve_zork_backend(
+        backend_config = cls._resolve_zork_backend(
             campaign=campaign,
             channel_id=channel_id,
         )
+        gpt.backend = str(backend_config.get("backend") or "zai").strip() or "zai"
+        model = str(backend_config.get("model") or "").strip()
+        if model:
+            gpt.engine = model
         return gpt
 
     @classmethod

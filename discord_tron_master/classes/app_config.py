@@ -268,27 +268,59 @@ class AppConfig:
         return default
 
     def get_zork_backend(self, channel_id=None, default_value="zai"):
+        return self.get_zork_backend_config(
+            channel_id=channel_id,
+            default_backend=default_value,
+        ).get("backend", "zai")
+
+    def get_zork_backend_model(self, channel_id=None):
+        return self.get_zork_backend_config(channel_id=channel_id).get("model")
+
+    def get_zork_backend_config(self, channel_id=None, default_backend="zai"):
         self.reload_config()
-        default_backend = self.normalize_zork_backend(default_value, default="zai")
+        resolved_default = self.normalize_zork_backend(default_backend, default="zai")
         mapping = self.config.get("zork_backends", {})
         if not isinstance(mapping, dict):
             mapping = {}
-        if channel_id is not None:
-            configured = mapping.get(str(channel_id))
-            if configured:
-                return self.normalize_zork_backend(
-                    configured,
-                    default=default_backend,
-                )
-        configured_default = self.config.get("zork_backend")
-        if configured_default:
-            return self.normalize_zork_backend(
-                configured_default,
-                default=default_backend,
-            )
-        return default_backend
 
-    def set_zork_backend(self, channel_id, backend):
+        def _coerce(value):
+            if isinstance(value, dict):
+                backend_value = self.normalize_zork_backend(
+                    value.get("backend"),
+                    default=resolved_default,
+                )
+                model_value = str(value.get("model") or "").strip() or None
+                return {"backend": backend_value, "model": model_value}
+            if value:
+                return {
+                    "backend": self.normalize_zork_backend(
+                        value,
+                        default=resolved_default,
+                    ),
+                    "model": None,
+                }
+            return None
+
+        if channel_id is not None:
+            configured = _coerce(mapping.get(str(channel_id)))
+            if configured:
+                return configured
+        configured_default = self.config.get("zork_backend")
+        configured_default_model = str(
+            self.config.get("zork_backend_model") or ""
+        ).strip() or None
+        if configured_default:
+            configured = _coerce(
+                {
+                    "backend": configured_default,
+                    "model": configured_default_model,
+                }
+            )
+            if configured:
+                return configured
+        return {"backend": resolved_default, "model": None}
+
+    def set_zork_backend(self, channel_id, backend, model=None):
         normalized = self.normalize_zork_backend(backend, default="")
         if normalized not in self.ZORK_BACKEND_OPTIONS:
             raise ValueError(f"Unsupported Zork backend: {backend}")
@@ -296,7 +328,8 @@ class AppConfig:
         if not isinstance(mapping, dict):
             mapping = {}
             self.config["zork_backends"] = mapping
-        mapping[str(channel_id)] = normalized
+        model_text = str(model or "").strip() or None
+        mapping[str(channel_id)] = {"backend": normalized, "model": model_text}
         self._save_config()
 
     def clear_zork_backend(self, channel_id):
