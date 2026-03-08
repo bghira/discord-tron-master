@@ -353,12 +353,13 @@ class ZorkEmulator:
         "- ANTI-CLICHE: Avoid default narrative beats. Not every tense moment needs a drawn weapon. "
         "Not every silence is meaningful. Not every NPC encounter is adversarial-then-allied.\n"
         "- If you are about to write a beat that could appear in any story, pick the version that could only happen in THIS story with THESE characters.\n"
-        "- DELTA MODE: each turn should add NEW developments only. Do not recap unchanged context from WORLD_SUMMARY or RECENT_TURNS.\n"
+        "- DELTA MODE: each turn should add NEW developments only. Do not recap unchanged context from WORLD_SUMMARY or loaded RECENT_TURNS.\n"
         "- Do not re-state the player's action in paraphrase unless needed for immediate clarity.\n"
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
         "- Keep diction plain and direct; prioritize immediate consequences and available choices.\n"
-        "- RECENT_TURNS includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
-        "- RECENT_TURNS is already filtered to what the acting player plausibly knows. Hidden/private turns from other players are omitted.\n"
+        "- RECENT_TURNS is not loaded by default. If you need immediate scene continuity, ask for it with the recent_turns tool.\n"
+        "- When RECENT_TURNS has been loaded, it includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
+        "- Loaded RECENT_TURNS is already filtered to what the acting player plausibly knows. Hidden/private turns from unrelated players are omitted.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
         "- TURN_VISIBILITY_DEFAULT tells you whether this turn should default to public, local, or private context.\n"
         "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
@@ -411,7 +412,7 @@ class ZorkEmulator:
         "- PLAYER_CARD.state.character_name is ALWAYS the correct name for this player. Ignore any old names in WORLD_SUMMARY.\n"
         "- For other visible characters, always use the 'name' field from PARTY_SNAPSHOT. Never rename or confuse them.\n"
         "- TURN VISIBILITY RULES:\n"
-        "  * Use turn_visibility when a turn should not fully enter every other player's RECENT_TURNS context.\n"
+        "  * Use turn_visibility when a turn should not fully enter every other player's loaded RECENT_TURNS context.\n"
         "  * public: use only for campaign-wide announcements, reminders, alarms, or changes all players should know even outside the room.\n"
         "  * private: actor-only context. Use this for DM/private-channel turns unless the action clearly becomes public.\n"
         "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
@@ -440,14 +441,14 @@ class ZorkEmulator:
         "    * Moving them to a new location or changing their state in any way\n"
         "  You MAY reference another player character in two cases:\n"
         "    1. Static presence — note they are in the room (e.g. 'X is here'), nothing more.\n"
-        "    2. Continuing a prior action — if RECENT_TURNS shows that player ALREADY performed an action on their own turn\n"
+        "    2. Continuing a prior action — if loaded RECENT_TURNS shows that player ALREADY performed an action on their own turn\n"
         "       (e.g. 'I toss the key to you', 'I hold the door open'), you may narrate the CONSEQUENCE of that\n"
         "       established action as it affects the acting player (e.g. 'You catch the key X tossed'). \n"
         "       You are acknowledging what they did, not inventing new behaviour for them.\n"
         "  In ALL other cases, treat other player characters as scenery — they exist but do nothing until THEY act.\n"
         "  This turn's narration concerns ONLY the acting player identified by PLAYER_ACTION.\n"
         "- When mentioning a player character in narration, use their Discord mention from PARTY_SNAPSHOT followed by their name in parentheses, e.g. '<@123456> (Bruce Wayne)'. This pings the player in Discord so they know they were referenced.\n"
-        "- Respect explicit player intent for routine actions (sleep, rest, wait). If nothing established in WORLD_STATE/RECENT_TURNS blocks it, the action succeeds.\n"
+        "- Respect explicit player intent for routine actions (sleep, rest, wait). If nothing established in WORLD_STATE/loaded RECENT_TURNS blocks it, the action succeeds.\n"
         "- For sleep/rest/wait, do NOT invent refusal or conflict (insomnia, sudden danger, interruptions) unless it is already established by prior events, active timers, or immediate scene facts.\n"
         "- If time cannot safely jump because the campaign timeline is shared, still honor intent by ending with the player sleeping/resting in the present moment.\n"
         "- Only advance to later times (e.g. morning) when the player explicitly requests it AND the jump is consistent with established world timing.\n"
@@ -474,7 +475,7 @@ class ZorkEmulator:
         "- REFUSAL RESPECT: a clear player refusal ('no', 'not interested', decline) ends that offer in the current scene unless the player reopens it.\n"
         "- Do NOT run pressure loops where new NPCs repeatedly re-pitch the same offer after refusal.\n"
         "- Do NOT escalate environmental hardship (property damage, theft risk, safety collapse, social pressure) just to coerce acceptance of an optional deal.\n"
-        "- Do NOT assert debts, obligations, or contracts unless they were explicitly accepted earlier and grounded in WORLD_STATE/RECENT_TURNS.\n"
+        "- Do NOT assert debts, obligations, or contracts unless they were explicitly accepted earlier and grounded in WORLD_STATE/loaded RECENT_TURNS.\n"
         "- NPCs may disagree with the player, but must pursue their own goals through plausible actions, not narrative coercion to force a 'yes'.\n"
         "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
         "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
@@ -504,7 +505,18 @@ class ZorkEmulator:
         "- Long-term memory lookup tools are disabled for this turn because WORLD_SUMMARY is still within context budget.\n"
         "- Source-material memory search should only be enabled when the current player action explicitly asks for canon recall/details.\n"
         "- Do NOT call memory_search, memory_terms, memory_turn, or memory_store.\n"
-        "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, and RECENT_TURNS directly.\n"
+        "- You may still call recent_turns for immediate visible continuity.\n"
+        "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, CURRENTLY_ATTENTIVE_PLAYERS, and recent_turns when needed.\n"
+    )
+    RECENT_TURNS_TOOL_PROMPT = (
+        "\nYou have a recent_turns tool for immediate visible continuity.\n"
+        "Use it when you need the latest visible scene history before narrating.\n"
+        "Return ONLY:\n"
+        '{"tool_call": "recent_turns"}\n'
+        "Optional limit example:\n"
+        '{"tool_call": "recent_turns", "limit": 12}\n'
+        "The system will return recent visible turns filtered for the acting player, current location, active private/limited context, and any relevant recipients.\n"
+        "This tool is preferred over guessing what just happened in the room.\n"
     )
     SMS_TOOL_PROMPT = (
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
@@ -537,7 +549,7 @@ class ZorkEmulator:
         "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
         "\nTOOL USAGE POLICY (HIGH PRIORITY):\n"
         "- On MOST turns, call at least one tool BEFORE final narration/state JSON.\n"
-        "- Default behavior: call memory_search first.\n"
+        "- Default behavior: call recent_turns first for immediate continuity, then memory_search for deeper recall when needed.\n"
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
         "use sms_write when sending or replying. Use sms_schedule for delayed replies.\n"
         "- Phone/text/SMS turns should normally be private or limited, not local/public, unless the player explicitly shares the content out loud.\n"
@@ -568,6 +580,9 @@ class ZorkEmulator:
         "By default source scope returns the highest-similarity snippets. "
         "For additional context around a hit, set before_lines/after_lines\n"
         "(defaults: 0/0; keep ranges small, e.g. 3-8).\n"
+        "\nRECENT TURN CONTINUITY:\n"
+        "- If you need to know what just happened in the room or active whisper/private exchange, call recent_turns first.\n"
+        "- recent_turns is the authoritative immediate continuity tool; memory_search is for deeper or older recall.\n"
         "\nRULEBOOK BROWSING — source_browse tool:\n"
         "Rulebook-format documents are key-snippet indexes. Use source_browse to list entries before drilling into specifics.\n"
         "- List ALL keys in a rulebook document (default when you have no specific lead):\n"
@@ -632,7 +647,7 @@ class ZorkEmulator:
         "- When the player asks questions, investigates, or examines something — search for related terms.\n"
         "- When you are unsure about ANY detail from earlier in the campaign.\n"
         "The cost of an unnecessary search is zero. The cost of hallucinating a detail is broken continuity.\n"
-        "When in doubt, SEARCH. Do not guess, improvise, or rely solely on RECENT_TURNS.\n"
+        "When in doubt, SEARCH. Do not guess, improvise, or rely solely on loaded RECENT_TURNS.\n"
         "IMPORTANT: Memories are stored as narrator event text (e.g. what happened in a scene). "
         "Queries are matched by semantic similarity against these narration snippets. "
         "Use short, concrete keyword queries with names and places — e.g. "
@@ -2460,6 +2475,182 @@ class ZorkEmulator:
         if viewer_user_id in user_ids:
             return True
         return bool(viewer_slug and viewer_slug in player_slugs)
+
+    @classmethod
+    def _active_scene_npc_slugs(
+        cls,
+        campaign: ZorkCampaign,
+        player_state: Dict[str, object],
+    ) -> set[str]:
+        out: set[str] = set()
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict):
+            return out
+        for slug, entry in characters.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("deceased_reason"):
+                continue
+            char_state = {
+                "location": entry.get("location"),
+                "room_title": entry.get("room_title"),
+                "room_summary": entry.get("room_summary"),
+                "room_id": entry.get("room_id"),
+            }
+            if cls._same_scene(player_state, char_state):
+                clean_slug = str(slug or "").strip()
+                if clean_slug:
+                    out.add(clean_slug)
+        return out
+
+    @classmethod
+    def _turn_relevant_to_scene_receivers(
+        cls,
+        turn: ZorkTurn,
+        *,
+        viewer_user_id: int,
+        party_snapshot: List[Dict[str, object]],
+        active_scene_npc_slugs: set[str],
+    ) -> bool:
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        if not isinstance(visibility, dict):
+            return False
+        scope = str(visibility.get("scope") or "").strip().lower()
+        if scope not in {"private", "limited"}:
+            return False
+
+        aware_npc_slugs = {
+            str(item or "").strip()
+            for item in list(visibility.get("aware_npc_slugs") or [])
+            if str(item or "").strip()
+        }
+        if aware_npc_slugs and active_scene_npc_slugs and aware_npc_slugs.intersection(active_scene_npc_slugs):
+            return True
+
+        visible_user_ids: set[int] = set()
+        for item in list(visibility.get("visible_user_ids") or []):
+            try:
+                visible_user_ids.add(int(item))
+            except (TypeError, ValueError):
+                continue
+        visible_player_slugs = {
+            cls._player_slug_key(item)
+            for item in list(visibility.get("visible_player_slugs") or [])
+            if cls._player_slug_key(item)
+        }
+
+        scene_user_ids: set[int] = set()
+        scene_player_slugs: set[str] = set()
+        for entry in party_snapshot:
+            if not isinstance(entry, dict):
+                continue
+            raw_user_id = entry.get("user_id")
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                user_id = 0
+            if user_id > 0 and user_id != viewer_user_id:
+                scene_user_ids.add(user_id)
+            slug = cls._player_slug_key(
+                entry.get("player_slug") or entry.get("name") or ""
+            )
+            if slug:
+                scene_player_slugs.add(slug)
+
+        if visible_user_ids.intersection(scene_user_ids):
+            return True
+        if visible_player_slugs.intersection(scene_player_slugs):
+            return True
+        return False
+
+    @classmethod
+    def _recent_turns_text_for_viewer(
+        cls,
+        campaign: ZorkCampaign,
+        turns: List[ZorkTurn],
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+        viewer_location_key: str,
+        viewer_private_context_key: str,
+        party_snapshot: List[Dict[str, object]],
+        player_state: Dict[str, object],
+        include_receiver_context: bool,
+    ) -> str:
+        recent_lines: List[str] = []
+        _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
+        _ERROR_PHRASES = (
+            "a hollow silence answers",
+            "the world shifts, but nothing clear emerges",
+        )
+        registry = cls._campaign_player_registry(campaign.id)
+        player_names: Dict[int, str] = {}
+        for raw_user_id, info in registry.get("by_user_id", {}).items():
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                continue
+            name = str(info.get("name") or "").strip()
+            if name:
+                player_names[user_id] = name
+        active_scene_npc_slugs = (
+            cls._active_scene_npc_slugs(campaign, player_state)
+            if include_receiver_context
+            else set()
+        )
+
+        for turn in turns:
+            content = (turn.content or "").strip()
+            if not content:
+                continue
+            visible = cls._turn_visible_to_viewer(
+                turn,
+                viewer_user_id,
+                viewer_slug,
+                viewer_location_key,
+                viewer_private_context_key,
+            )
+            if (
+                not visible
+                and include_receiver_context
+                and turn.user_id == viewer_user_id
+                and cls._turn_relevant_to_scene_receivers(
+                    turn,
+                    viewer_user_id=viewer_user_id,
+                    party_snapshot=party_snapshot,
+                    active_scene_npc_slugs=active_scene_npc_slugs,
+                )
+            ):
+                visible = True
+            if not visible:
+                continue
+
+            turn_prefix = cls._turn_context_prefix(turn, cls.get_campaign_state(campaign))
+            if turn.kind == "player":
+                if _OOC_RE.match(content):
+                    continue
+                clipped = cls._strip_inventory_mentions(content)
+                name = player_names.get(turn.user_id)
+                mention = f"<@{turn.user_id}>" if turn.user_id else ""
+                if name and mention:
+                    label = f"PLAYER {mention} ({name.upper()})"
+                elif name:
+                    label = f"PLAYER ({name.upper()})"
+                elif mention:
+                    label = f"PLAYER {mention}"
+                else:
+                    label = "PLAYER"
+                recent_lines.append(f"{turn_prefix} {label}: {clipped}")
+            elif turn.kind == "narrator":
+                if content.lower() in _ERROR_PHRASES:
+                    continue
+                clipped = cls._strip_ephemeral_context_lines(content)
+                clipped = cls._strip_narration_footer(clipped)
+                if not clipped:
+                    continue
+                recent_lines.append(f"{turn_prefix} NARRATOR: {clipped}")
+        return "\n".join(recent_lines) if recent_lines else "None"
 
     @classmethod
     def _turn_embedding_metadata(
@@ -11724,25 +11915,14 @@ class ZorkEmulator:
             "attributes": attributes,
             "state": player_state_prompt,
         }
-
-        recent_lines = []
-        _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
-        _ERROR_PHRASES = (
-            "a hollow silence answers",
-            "the world shifts, but nothing clear emerges",
-        )
         _player_registry = cls._campaign_player_registry(campaign.id)
-        _player_names: Dict[int, str] = {}
         _player_slugs: Dict[int, str] = {}
         for raw_user_id, info in _player_registry.get("by_user_id", {}).items():
             try:
                 user_id = int(raw_user_id)
             except (TypeError, ValueError):
                 continue
-            name = str(info.get("name") or "").strip()
             slug = str(info.get("slug") or "").strip()
-            if name:
-                _player_names[user_id] = name
             if slug:
                 _player_slugs[user_id] = slug
 
@@ -11763,47 +11943,17 @@ class ZorkEmulator:
         _viewer_private_context_key = str(
             (_viewer_private_context or {}).get("context_key") or ""
         ).strip()
-
-        for turn in turns:
-            content = (turn.content or "").strip()
-            if not content:
-                continue
-            if not cls._turn_visible_to_viewer(
-                turn,
-                player.user_id,
-                _viewer_slug,
-                _viewer_location_key,
-                _viewer_private_context_key,
-            ):
-                continue
-            turn_prefix = cls._turn_context_prefix(turn, state)
-            if turn.kind == "player":
-                # Skip OOC messages — those are meta-messages to the GM.
-                if _OOC_RE.match(content):
-                    continue
-                clipped = content
-                clipped = cls._strip_inventory_mentions(clipped)
-                name = _player_names.get(turn.user_id)
-                mention = f"<@{turn.user_id}>" if turn.user_id else ""
-                if name and mention:
-                    label = f"PLAYER {mention} ({name.upper()})"
-                elif name:
-                    label = f"PLAYER ({name.upper()})"
-                elif mention:
-                    label = f"PLAYER {mention}"
-                else:
-                    label = "PLAYER"
-                recent_lines.append(f"{turn_prefix} {label}: {clipped}")
-            elif turn.kind == "narrator":
-                # Skip error/fallback narrations.
-                if content.lower() in _ERROR_PHRASES:
-                    continue
-                clipped = cls._strip_ephemeral_context_lines(content)
-                clipped = cls._strip_narration_footer(clipped)
-                if not clipped:
-                    continue
-                recent_lines.append(f"{turn_prefix} NARRATOR: {clipped}")
-        recent_text = "\n".join(recent_lines) if recent_lines else "None"
+        recent_text = cls._recent_turns_text_for_viewer(
+            campaign,
+            turns,
+            viewer_user_id=player.user_id,
+            viewer_slug=_viewer_slug,
+            viewer_location_key=_viewer_location_key,
+            viewer_private_context_key=_viewer_private_context_key,
+            party_snapshot=party_snapshot,
+            player_state=player_state,
+            include_receiver_context=False,
+        )
         rails_context = cls._build_rails_context(player_state, party_snapshot)
 
         characters = cls.get_campaign_characters(campaign)
@@ -11915,6 +12065,7 @@ class ZorkEmulator:
             f"CAMPAIGN_PLAYERS: {cls._dump_json(_campaign_players)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
+            "RECENT_TURNS_LOADED: false\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
@@ -11952,7 +12103,6 @@ class ZorkEmulator:
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
-            f"RECENT_TURNS:\n{recent_text}\n"
             f"{_response_style_note}\n"
             f"{_action_label}: {action}\n"
         )
@@ -11963,6 +12113,7 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
         if on_rails:
             system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.RECENT_TURNS_TOOL_PROMPT}"
         if _memory_lookup_enabled:
             system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
         else:
@@ -12662,6 +12813,27 @@ class ZorkEmulator:
                     party_snapshot = cls._build_party_snapshot_for_prompt(
                         campaign, player, player_state
                     )
+                    viewer_slug = cls._player_slug_key(
+                        player_state.get("character_name")
+                    )
+                    viewer_location_key = cls._room_key_from_player_state(
+                        player_state
+                    ).lower()
+                    stored_private_context = cls._active_private_context_from_state(
+                        player_state
+                    )
+                    if cls._action_leaves_private_context(action, stored_private_context):
+                        viewer_private_context = None
+                    else:
+                        viewer_private_context = cls._derive_private_context_candidate(
+                            campaign,
+                            player,
+                            player_state,
+                            action,
+                        ) or stored_private_context
+                    viewer_private_context_key = str(
+                        (viewer_private_context or {}).get("context_key") or ""
+                    ).strip()
                     system_prompt, user_prompt = cls.build_prompt(
                         campaign,
                         player,
@@ -12841,7 +13013,55 @@ class ZorkEmulator:
                                 break
                             continue
 
-                        if tool_name == "memory_search":
+                        if tool_name == "recent_turns":
+                            try:
+                                recent_limit = max(
+                                    1,
+                                    min(
+                                        48,
+                                        int(first_payload.get("limit") or cls.MAX_RECENT_TURNS),
+                                    ),
+                                )
+                            except (TypeError, ValueError):
+                                recent_limit = cls.MAX_RECENT_TURNS
+                            recent_turns = cls.get_recent_turns(
+                                campaign.id,
+                                limit=recent_limit,
+                            )
+                            recent_text = cls._recent_turns_text_for_viewer(
+                                campaign,
+                                recent_turns,
+                                viewer_user_id=player.user_id,
+                                viewer_slug=viewer_slug,
+                                viewer_location_key=viewer_location_key,
+                                viewer_private_context_key=viewer_private_context_key,
+                                party_snapshot=party_snapshot,
+                                player_state=player_state,
+                                include_receiver_context=True,
+                            )
+                            tool_result_block = (
+                                "RECENT_TURNS_LOADED: true\n"
+                                "RECENT_TURNS_NOTE: This is the immediate visible continuity for the acting player. "
+                                "It includes prior private/limited turns when a current scene receiver still needs that context.\n"
+                                f"RECENT_TURNS:\n{recent_text}"
+                            )
+                            _zork_log("RECENT TURNS BLOCK", tool_result_block)
+                            tool_augmented_prompt = (
+                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
+                            )
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("RECENT TURNS AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
                             raw_queries = first_payload.get("queries") or []
                             if not raw_queries:
