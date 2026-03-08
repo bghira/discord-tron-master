@@ -13216,6 +13216,9 @@ class ZorkEmulator:
                             "twist, or decision point. Summarise skipped time in one brief "
                             "sentence, then narrate the new moment in full."
                         )
+                    turn_response_style_note = cls._turn_response_style_note(
+                        cls.normalize_difficulty(campaign_state.get("difficulty", "normal"))
+                    )
                     system_prompt, user_prompt = cls.build_prompt(
                         campaign,
                         player,
@@ -13236,11 +13239,7 @@ class ZorkEmulator:
                         player_state,
                         action,
                         turn_attachment_context,
-                        cls._turn_response_style_note(
-                            cls.normalize_difficulty(
-                                cls.get_campaign_state(campaign).get("difficulty", "normal")
-                            )
-                        ),
+                        turn_response_style_note,
                         extra_lines=turn_tail_extra_lines,
                     )
                     memory_lookup_enabled = (
@@ -13479,25 +13478,28 @@ class ZorkEmulator:
                                 f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
                                 f"RECENT_TURNS:\n{recent_text}\n"
                             )
-                            recent_turns_system_note = cls._merge_system_notes(
-                                cls.RESPONSE_STYLE_NOTE,
-                                (
-                                    "RECENT_TURNS is loaded. Do not call recent_turns again this turn unless the system explicitly says it was not loaded."
+                            turn_prompt_tail = cls._build_turn_prompt_tail(
+                                player,
+                                player_state,
+                                action,
+                                turn_attachment_context,
+                                cls._merge_system_notes(
+                                    turn_response_style_note,
+                                    (
+                                        "RECENT_TURNS is loaded. Do not call recent_turns again this turn unless the system explicitly says it was not loaded."
+                                    ),
+                                    (
+                                        'If you need deeper or older recall beyond this immediate continuity, use memory_search next, e.g. '
+                                        '{"tool_call": "memory_search", "queries": ["character name", "location", "event"]}.'
+                                    ),
+                                    (
+                                        "If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
+                                    ),
                                 ),
-                                (
-                                    'If you need deeper or older recall beyond this immediate continuity, use memory_search next, e.g. '
-                                    '{"tool_call": "memory_search", "queries": ["character name", "location", "event"]}.'
-                                ),
-                                (
-                                    'Return final JSON only. Include reasoning first. state_update is required and must include "game_time", '
-                                    '"current_chapter", and "current_scene" explicitly, even if unchanged.'
-                                ),
-                                (
-                                    "If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
-                                ),
+                                extra_lines=turn_tail_extra_lines,
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block, recent_turns_system_note)
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
