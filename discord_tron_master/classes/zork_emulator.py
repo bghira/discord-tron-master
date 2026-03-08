@@ -6809,6 +6809,73 @@ class ZorkEmulator:
         return len(text.split()) >= 6
 
     @classmethod
+    def _compose_world_summary(
+        cls,
+        campaign: ZorkCampaign,
+        campaign_state: Dict[str, object],
+        *,
+        max_chars: Optional[int] = None,
+    ) -> str:
+        raw_summary = cls._strip_inventory_mentions(campaign.summary or "")
+        seen: set[str] = set()
+        lines: List[str] = []
+        for raw_line in raw_summary.splitlines():
+            line = " ".join(str(raw_line or "").strip().split())
+            if not line:
+                continue
+            line_key = line.lower()
+            if line_key in seen:
+                continue
+            if not cls._should_keep_summary_update(
+                line,
+                state_update={},
+                player_state_update={},
+                character_updates={},
+                calendar_update=None,
+            ):
+                continue
+            seen.add(line_key)
+            lines.append(line)
+
+        if not lines:
+            active_chapters = cls._chapters_for_prompt(
+                campaign_state if isinstance(campaign_state, dict) else {},
+                active_only=True,
+                limit=1,
+            )
+            if active_chapters:
+                title = str(active_chapters[0].get("title") or "").strip()
+                summary = " ".join(
+                    str(active_chapters[0].get("summary") or "").strip().split()
+                )
+                fallback = f"{title}: {summary}".strip(": ").strip()
+                if fallback:
+                    lines.append(fallback)
+
+        composed = "\n".join(lines)
+        if max_chars is None:
+            max_chars = cls.MAX_SUMMARY_CHARS
+        return cls._trim_text(composed, max_chars) if composed else ""
+
+    @classmethod
+    def _scene_output_is_summary_public_safe(
+        cls,
+        scene_output: object,
+    ) -> bool:
+        if not isinstance(scene_output, dict):
+            return True
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list) or not beats:
+            return True
+        for beat in beats:
+            if not isinstance(beat, dict):
+                continue
+            scope = str(beat.get("visibility") or "").strip().lower() or "local"
+            if scope != "public":
+                return False
+        return True
+
+    @classmethod
     def _fit_state_to_budget(
         cls, state: Dict[str, object], max_chars: int
     ) -> Dict[str, object]:
@@ -12250,6 +12317,12 @@ class ZorkEmulator:
                 base = prompt_text[: -len(without_newline)]
             elif prompt_text.endswith(tail_text):
                 base = prompt_text[: -len(tail_text)]
+        tail_marker = "\nPLAYER_ACTION "
+        marker_index = base.rfind(tail_marker)
+        if marker_index == -1 and base.startswith("PLAYER_ACTION "):
+            marker_index = 0
+        if marker_index >= 0:
+            base = base[:marker_index]
         parts = [base.rstrip("\n")]
         for block in inserted_blocks:
             text = str(block or "").strip()
@@ -12736,8 +12809,6 @@ class ZorkEmulator:
         turn_visibility_default: str = "public",
         tail_extra_lines: Optional[List[str]] = None,
     ) -> Tuple[str, str]:
-        summary = cls._strip_inventory_mentions(campaign.summary or "")
-        summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
         state = cls.get_campaign_state(campaign)
         state = cls._scrub_inventory_from_state(state)
         # Seed game_time if missing.
@@ -12747,6 +12818,11 @@ class ZorkEmulator:
                 "period": "morning", "date_label": "Day 1, Morning",
             }
             campaign.state_json = cls._dump_json(state)
+        summary = cls._compose_world_summary(
+            campaign,
+            state,
+            max_chars=cls.MAX_SUMMARY_CHARS,
+        )
         guardrails_enabled = bool(state.get("guardrails_enabled", False))
         model_state = cls._build_model_state(state)
         model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
@@ -12914,6 +12990,11 @@ class ZorkEmulator:
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
             "RECENT_TURNS_LOADED: false\n"
+        )
+        if story_context:
+            user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
+        user_prompt += (
+            f"WORLD_SUMMARY: {summary}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
@@ -12937,8 +13018,6 @@ class ZorkEmulator:
             user_prompt += (
                 f"ACTIVE_LOCATION_MODIFICATIONS: {cls._dump_json(_active_location_mods)}\n"
             )
-        if story_context:
-            user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
@@ -16277,6 +16356,11 @@ class ZorkEmulator:
                                 f"SUMMARY FILTERED (private turn) campaign={campaign.id}",
                                 summary_update,
                             )
+                        elif not cls._scene_output_is_summary_public_safe(scene_output):
+                            _zork_log(
+                                f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
+                                summary_update,
+                            )
                         elif cls._should_keep_summary_update(
                             summary_update,
                             state_update=state_update,
@@ -17156,6 +17240,11 @@ class ZorkEmulator:
                             f"SUMMARY FILTERED (private timed event) campaign={campaign.id}",
                             summary_update,
                         )
+                    elif not cls._scene_output_is_summary_public_safe(scene_output):
+                        _zork_log(
+                            f"SUMMARY FILTERED (non-public beat timed event) campaign={campaign.id}",
+                            summary_update,
+                        )
                     elif cls._should_keep_summary_update(
                         summary_update,
                         state_update=state_update,
@@ -17515,7 +17604,7 @@ class ZorkEmulator:
                 f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
-                f"WORLD_SUMMARY: {cls._trim_text(campaign.summary or '', 1200)}\n"
+                f"WORLD_SUMMARY: {cls._compose_world_summary(campaign, campaign_state, max_chars=1200)}\n"
                 f"WORLD_STATE: {cls._dump_json(model_state)}\n"
                 f"LANDMARKS: {landmarks_text}\n"
                 f"WORLD_CHARACTER_LOCATIONS: {chars_text}\n"
