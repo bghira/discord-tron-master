@@ -44,9 +44,9 @@ class Zork(commands.Cog):
 
     def _parse_thread_options(
         self, raw: str | None
-    ) -> tuple[str | None, bool | None, str | None]:
+    ) -> tuple[str | None, bool | None, str | None, bool]:
         if not raw:
-            return None, None, None
+            return None, None, None, False
         try:
             tokens = shlex.split(raw)
         except ValueError:
@@ -55,10 +55,15 @@ class Zork(commands.Cog):
         name_tokens: list[str] = []
         use_imdb: bool | None = None
         summary_instructions: str | None = None
+        create_empty = False
         i = 0
         while i < len(tokens):
             token = str(tokens[i] or "")
             low = token.lower()
+            if low == "--empty":
+                create_empty = True
+                i += 1
+                continue
             if low == "--imdb":
                 use_imdb = True
                 i += 1
@@ -86,7 +91,7 @@ class Zork(commands.Cog):
             summary_instructions = " ".join(summary_instructions.strip().split())[:600]
             if not summary_instructions:
                 summary_instructions = None
-        return parsed_name, use_imdb, summary_instructions
+        return parsed_name, use_imdb, summary_instructions, create_empty
 
     def _parse_source_material_options(
         self, raw: str | None
@@ -136,12 +141,40 @@ class Zork(commands.Cog):
             return "\n\n".join(clean_units).strip()
         return "\n\n".join(clean_units).strip()
 
-    def _source_material_export_filename(self, document_key: str) -> str:
-        key = str(document_key or "").strip().lower()
-        if not key:
-            key = "source-material"
-        key = ZorkMemory._normalize_source_document_key(key) or "source-material"
-        return f"{key[:180]}.txt"
+    def _source_material_export_filename(
+        self,
+        document_key: str,
+        document_label: str | None = None,
+        *,
+        used_names: set[str] | None = None,
+    ) -> str:
+        label = " ".join(str(document_label or "").strip().split())
+        if label:
+            base = label[:180]
+        else:
+            key = str(document_key or "").strip().lower()
+            if not key:
+                key = "source-material"
+            base = ZorkMemory._normalize_source_document_key(key) or "source-material"
+            base = base[:180]
+        filename = f"{base}.txt"
+        if used_names is None:
+            return filename
+        if filename not in used_names:
+            used_names.add(filename)
+            return filename
+
+        fallback_key = (
+            ZorkMemory._normalize_source_document_key(str(document_key or "").strip())
+            or "source-material"
+        )[:80]
+        suffix = 2
+        while True:
+            candidate = f"{base} ({fallback_key}-{suffix}).txt"
+            if candidate not in used_names:
+                used_names.add(candidate)
+                return candidate
+            suffix += 1
 
     def _get_private_dm_binding(self, user_id: int) -> dict | None:
         binding = self.config.get_zork_private_dm(user_id)
@@ -616,7 +649,8 @@ class Zork(commands.Cog):
             f"Zork commands:\n"
             f"- `{prefix}zork` enable adventure mode in this channel\n"
             f"- `{prefix}zork <action>` take an action (ex: look, open door, take lamp)\n"
-            f"- `{prefix}zork thread [name] [--imdb|--no-imdb] [--summary-instructions \"...\"]` create a dedicated Zork thread/campaign for yourself (`--imdb` is opt-in)\n"
+            f"- `{prefix}zork thread [name] [--empty] [--imdb|--no-imdb] [--summary-instructions \"...\"]` create a dedicated Zork thread/campaign for yourself (`--imdb` is opt-in; `--empty` skips auto setup)\n"
+            f"- `{prefix}zork share [thread-id]` show this thread/channel id or bind this channel/thread to another Zork thread's active campaign, even across servers\n"
             f"- `{prefix}zork source-material [label]` ingest attached `.txt` as campaign canon memory; "
             "format is auto-detected as story/rulebook/generic.\n"
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
@@ -1230,12 +1264,12 @@ class Zork(commands.Cog):
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
-        parsed_name, use_imdb, summary_instructions = self._parse_thread_options(name)
+        parsed_name, use_imdb, summary_instructions, create_empty = self._parse_thread_options(name)
 
         if isinstance(ctx.channel, discord.Thread):
             setup_message = None
             requested_name = bool(parsed_name)
-            has_txt_attachment = any(
+            has_txt_attachment = (not create_empty) and any(
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
                 for att in ctx.message.attachments
             )
@@ -1276,10 +1310,10 @@ class Zork(commands.Cog):
                         db.session.commit()
                         campaign_state = ZorkEmulator.get_campaign_state(campaign)
 
-                if (has_txt_attachment and requested_name) or (
+                if not create_empty and ((has_txt_attachment and requested_name) or (
                     not campaign_state.get("setup_phase")
                     and not campaign_state.get("default_persona")
-                ):
+                )):
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign,
                         campaign_name,
@@ -1291,6 +1325,11 @@ class Zork(commands.Cog):
             if setup_message:
                 await ctx.send(
                     f"Thread mode enabled. Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
+                )
+            elif create_empty:
+                await ctx.send(
+                    f"Thread mode enabled here. Active campaign: `{resolved_campaign_name}`.\n"
+                    f"Empty thread created. Run `{self._prefix()}zork thread` here when you want to start setup."
                 )
             else:
                 await ctx.send(
@@ -1330,7 +1369,7 @@ class Zork(commands.Cog):
             channel.updated = db.func.now()
             db.session.commit()
             att_summary = None
-            if any(
+            if (not create_empty) and any(
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
                 for att in ctx.message.attachments
             ):
@@ -1340,19 +1379,96 @@ class Zork(commands.Cog):
                     channel=thread,
                     summary_instructions=summary_instructions,
                 )
-            setup_message = await ZorkEmulator.start_campaign_setup(
-                campaign,
-                parsed_name or thread_name,
-                attachment_summary=att_summary,
-                use_imdb=use_imdb,
-                attachment_summary_instructions=summary_instructions,
-            )
+            setup_message = None
+            if not create_empty:
+                setup_message = await ZorkEmulator.start_campaign_setup(
+                    campaign,
+                    parsed_name or thread_name,
+                    attachment_summary=att_summary,
+                    use_imdb=use_imdb,
+                    attachment_summary_instructions=summary_instructions,
+                )
             resolved_campaign_name = campaign.name
 
         await ctx.send(f"Created Zork thread: {thread.mention}")
-        await thread.send(
-            f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
-        )
+        if create_empty:
+            await thread.send(
+                f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n"
+                f"Empty thread created. Run `{self._prefix()}zork thread` here when you want to start setup."
+            )
+        else:
+            await thread.send(
+                f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
+            )
+
+    @zork.command(name="share")
+    async def zork_share(self, ctx, thread_id: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        current_id = getattr(ctx.channel, "id", None)
+        if thread_id is None:
+            with app.app_context():
+                channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+                campaign = (
+                    ZorkCampaign.query.get(channel.active_campaign_id)
+                    if channel.active_campaign_id
+                    else None
+                )
+                campaign_text = (
+                    f"Active campaign here: `{campaign.name}` (id `{campaign.id}`)."
+                    if campaign is not None
+                    else "No active campaign is bound here yet."
+                )
+            await ctx.send(
+                f"This thread/channel id is `{current_id}`.\n"
+                f"{campaign_text}\n"
+                f"Run `{self._prefix()}zork share {current_id}` in another thread/channel to link it here."
+            )
+            return
+
+        try:
+            source_thread_id = int(str(thread_id).strip())
+        except (TypeError, ValueError):
+            await ctx.send("Provide a numeric thread/channel id.")
+            return
+
+        with app.app_context():
+            target_channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            source_channel = ZorkChannel.query.filter_by(channel_id=source_thread_id).first()
+            if source_channel is None or source_channel.active_campaign_id is None:
+                await ctx.send("That thread/channel is not linked to an active Zork campaign.")
+                return
+            source_campaign = ZorkCampaign.query.get(source_channel.active_campaign_id)
+            if source_campaign is None:
+                await ctx.send("That thread/channel points to a missing Zork campaign.")
+                return
+            if (
+                target_channel.active_campaign_id == source_campaign.id
+                and bool(target_channel.enabled)
+            ):
+                await ctx.send(
+                    f"This thread/channel is already linked to `{source_campaign.name}`."
+                )
+                return
+            target_channel.active_campaign_id = source_campaign.id
+            target_channel.enabled = True
+            target_channel.updated = db.func.now()
+            db.session.commit()
+            source_guild_text = (
+                f" from guild `{source_campaign.guild_id}`"
+                if source_campaign.guild_id != ctx.guild.id
+                else ""
+            )
+            await ctx.send(
+                f"Linked this thread/channel to shared campaign `{source_campaign.name}`"
+                f"{source_guild_text} via source id `{source_thread_id}`."
+            )
 
     @zork.command(name="source-material")
     async def zork_source_material(self, ctx, *, label: str = None):
@@ -1491,8 +1607,10 @@ class Zork(commands.Cog):
                 return
             docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
             export_rows: list[tuple[str, str, str]] = []
+            used_names: set[str] = set()
             for row in docs:
                 document_key = str(row.get("document_key") or "").strip()
+                document_label = str(row.get("document_label") or "").strip()
                 if not document_key:
                     continue
                 units = ZorkMemory.get_source_material_document_units(
@@ -1505,7 +1623,11 @@ class Zork(commands.Cog):
                 export_rows.append(
                     (
                         document_key,
-                        self._source_material_export_filename(document_key),
+                        self._source_material_export_filename(
+                            document_key,
+                            document_label,
+                            used_names=used_names,
+                        ),
                         export_text,
                     )
                 )
@@ -1584,6 +1706,32 @@ class Zork(commands.Cog):
                     channel=ctx.channel,
                     status_message=status_msg,
                 )
+                await ZorkEmulator._edit_progress_message(
+                    status_msg,
+                    "Campaign export: packaging stored source-material documents...",
+                )
+                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                source_export_files: dict[str, str] = {}
+                used_names = set(export_files.keys())
+                for row in docs:
+                    document_key = str(row.get("document_key") or "").strip()
+                    document_label = str(row.get("document_label") or "").strip()
+                    if not document_key:
+                        continue
+                    units = ZorkMemory.get_source_material_document_units(
+                        campaign.id,
+                        document_key,
+                    )
+                    export_text = self._source_material_export_text(document_key, units)
+                    if not export_text:
+                        continue
+                    filename = self._source_material_export_filename(
+                        document_key,
+                        document_label,
+                        used_names=used_names,
+                    )
+                    source_export_files[filename] = export_text
+                export_files.update(source_export_files)
         except Exception:
             await ZorkEmulator._delete_progress_message(status_msg)
             raise
