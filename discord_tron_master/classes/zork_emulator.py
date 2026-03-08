@@ -13086,7 +13086,12 @@ class ZorkEmulator:
                                 "RECENT_TURNS_NOTE: This is the immediate visible continuity for the acting player. "
                                 "Requested receivers add relevant prior private/limited continuity; public/local continuity remains included.\n"
                                 f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
-                                f"RECENT_TURNS:\n{recent_text}"
+                                f"RECENT_TURNS:\n{recent_text}\n"
+                                "RECENT_TURNS_NEXT_ACTIONS:\n"
+                                "- Do NOT call recent_turns again this turn unless the system explicitly says it was not loaded.\n"
+                                "- If you need deeper or older recall beyond this immediate continuity, use memory_search next.\n"
+                                '- Example: {"tool_call": "memory_search", "queries": ["character name", "location", "event"]}\n'
+                                "- Otherwise return final narration/state JSON."
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
                             tool_augmented_prompt = (
