@@ -248,6 +248,23 @@ class ZorkEmulator:
         "if that NPC plausibly knows in this scene (direct evidence, prior established knowledge, or in-scene disclosure). "
         "Do not leak off-screen NPC communications into current NPC dialogue unless continuity clearly supports it.]"
     )
+    PROMPT_STAGE_BOOTSTRAP = "bootstrap"  # Deprecated: kept for logging/audit only; bootstrap LLM call eliminated.
+    PROMPT_STAGE_RESEARCH = "research"
+    PROMPT_STAGE_FINAL = "final"
+    # BOOTSTRAP_SYSTEM_PROMPT removed — bootstrap LLM call replaced by heuristic preload.
+    RESEARCH_SYSTEM_PROMPT = (
+        "You are the ZorkEmulator research planner.\n"
+        "RECENT_TURNS has already been loaded for the acting player.\n"
+        "Do NOT narrate yet unless the system explicitly says to finalize.\n"
+        "Your job in this phase is to gather any deeper continuity, canon, SMS, plot, chapter, or consequence context that materially matters for this turn.\n"
+        "When research is sufficient, return ONLY {\"tool_call\": \"ready_to_write\"}.\n"
+    )
+    READY_TO_WRITE_TOOL_PROMPT = (
+        "\nYou have a ready_to_write tool for ending the research phase.\n"
+        "When you have enough context to write the turn, return ONLY:\n"
+        '{"tool_call": "ready_to_write"}\n'
+        "Do not narrate in the same response as ready_to_write.\n"
+    )
     DIFFICULTY_LEVELS = (
         "story",
         "easy",
@@ -525,18 +542,8 @@ class ZorkEmulator:
         "- You may still call recent_turns for immediate visible continuity.\n"
         "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, CURRENTLY_ATTENTIVE_PLAYERS, and recent_turns when needed.\n"
     )
-    RECENT_TURNS_TOOL_PROMPT = (
-        "\nYou have a recent_turns tool for immediate visible continuity.\n"
-        "You MUST call it before final narration/state JSON on every normal gameplay turn.\n"
-        "Return ONLY:\n"
-        '{"tool_call": "recent_turns", "player_slugs": ["other-player-slug"], "npc_slugs": ["npc-slug"]}\n'
-        "Optional limit example:\n"
-        '{"tool_call": "recent_turns", "player_slugs": ["other-player-slug"], "npc_slugs": ["npc-slug"], "limit": 12}\n'
-        "Include player_slugs and npc_slugs for the current receivers who need continuity from prior private/limited exchanges.\n"
-        "The receiver lists ADD relevant private continuity; they do NOT filter out normal public/local continuity.\n"
-        "The system will return recent visible turns filtered for the acting player, current location, active private/limited context, and the requested receivers.\n"
-        "This tool is required before guessing what just happened in the room.\n"
-    )
+    # RECENT_TURNS_TOOL_PROMPT removed — recent_turns is now preloaded by heuristic.
+    # MEMORY_BOOTSTRAP_TOOL_PROMPT removed — bootstrap phase eliminated.
     SMS_TOOL_PROMPT = (
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
         "- List SMS threads:\n"
@@ -2882,6 +2889,74 @@ class ZorkEmulator:
         return {
             "current_location_key": current_location,
             "last_other_location_key": last_other_location or "none",
+        }
+
+    @classmethod
+    def _compute_recent_turns_metadata(
+        cls,
+        recent_turns: List["ZorkTurn"],
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+    ) -> Dict[str, object]:
+        """Compute quantitative metadata from loaded recent_turns for dynamic RECENT_TURNS_NOTE."""
+        turn_count = len(recent_turns)
+        time_span_minutes = 0
+        if turn_count >= 2:
+            first_created = getattr(recent_turns[-1], "created", None)
+            last_created = getattr(recent_turns[0], "created", None)
+            if first_created and last_created:
+                try:
+                    delta = (last_created - first_created).total_seconds()
+                    time_span_minutes = max(0, int(delta / 60))
+                except Exception:
+                    pass
+        speaker_counts: Dict[str, int] = {}
+        listener_counts: Dict[str, int] = {}
+        private_turn_count = 0
+        viewer_last_turn_ago = turn_count  # default: never acted
+        viewer_slug_lower = (viewer_slug or "").strip().lower()
+        for idx, turn in enumerate(recent_turns):
+            meta = cls._safe_turn_meta(turn)
+            visibility = meta.get("visibility")
+            if isinstance(visibility, dict):
+                scope = str(visibility.get("scope") or "").strip().lower()
+                if scope in {"private", "limited"}:
+                    private_turn_count += 1
+            # Check if viewer acted this turn
+            actor_slug = ""
+            if isinstance(visibility, dict):
+                actor_slug = str(visibility.get("actor_player_slug") or "").strip().lower()
+            if not actor_slug:
+                actor_slug = cls._player_slug_key(meta.get("actor_player_slug") or "")
+            if viewer_slug_lower and actor_slug == viewer_slug_lower and idx < viewer_last_turn_ago:
+                viewer_last_turn_ago = idx
+            # Extract speakers/listeners from beats
+            scene_output = meta.get("scene_output")
+            if isinstance(scene_output, dict):
+                beats = scene_output.get("beats")
+                if isinstance(beats, list):
+                    for beat in beats:
+                        if not isinstance(beat, dict):
+                            continue
+                        spk = str(beat.get("speaker") or "").strip()
+                        if spk and spk != "narrator":
+                            speaker_counts[spk] = speaker_counts.get(spk, 0) + 1
+                        for lis in (beat.get("listeners") or []):
+                            lis_str = str(lis or "").strip()
+                            if lis_str:
+                                listener_counts[lis_str] = listener_counts.get(lis_str, 0) + 1
+        active_speakers = [
+            name for name, _ in sorted(speaker_counts.items(), key=lambda x: -x[1])
+        ][:6]
+        active_listeners = sorted(listener_counts.items(), key=lambda x: -x[1])[:6]
+        return {
+            "turn_count": turn_count,
+            "time_span_minutes": time_span_minutes,
+            "active_speakers": active_speakers,
+            "active_listeners": active_listeners,
+            "private_turn_count": private_turn_count,
+            "viewer_last_turn_ago": viewer_last_turn_ago if viewer_last_turn_ago < turn_count else None,
         }
 
     @classmethod
@@ -13134,6 +13209,24 @@ class ZorkEmulator:
         )
 
     @classmethod
+    def _turn_stage_note(cls, difficulty: object, prompt_stage: str) -> str:
+        stage = str(prompt_stage or cls.PROMPT_STAGE_FINAL).strip().lower()
+        if stage == cls.PROMPT_STAGE_RESEARCH:
+            return cls._merge_system_notes(
+                cls._difficulty_response_note(difficulty),
+                (
+                    "RECENT_TURNS is loaded. Do not call recent_turns again this turn."
+                ),
+                (
+                    "Use memory/source/SMS/planning tools only when they materially improve continuity."
+                ),
+                (
+                    'When research is sufficient, return ONLY {"tool_call": "ready_to_write"}. Do not narrate yet.'
+                ),
+            )
+        return cls._turn_response_style_note(difficulty)
+
+    @classmethod
     def _build_turn_prompt_tail(
         cls,
         player: ZorkPlayer,
@@ -13672,7 +13765,15 @@ class ZorkEmulator:
         turn_attachment_context: Optional[str] = None,
         turn_visibility_default: str = "public",
         tail_extra_lines: Optional[List[str]] = None,
+        prompt_stage: str = PROMPT_STAGE_FINAL,
     ) -> Tuple[str, str]:
+        stage = str(prompt_stage or cls.PROMPT_STAGE_FINAL).strip().lower()
+        if stage not in {
+            cls.PROMPT_STAGE_BOOTSTRAP,
+            cls.PROMPT_STAGE_RESEARCH,
+            cls.PROMPT_STAGE_FINAL,
+        }:
+            stage = cls.PROMPT_STAGE_FINAL
         state = cls.get_campaign_state(campaign)
         state = cls._scrub_inventory_from_state(state)
         # Seed game_time if missing.
@@ -13767,6 +13868,7 @@ class ZorkEmulator:
         _speed_mult = state.get("speed_multiplier", 1.0)
         _difficulty = cls.normalize_difficulty(state.get("difficulty", "normal"))
         _response_style_note = cls._turn_response_style_note(_difficulty)
+        _stage_note = cls._turn_stage_note(_difficulty, stage)
         _calendar_state_before = json.dumps(
             state.get("calendar") or [],
             ensure_ascii=True,
@@ -13879,69 +13981,80 @@ class ZorkEmulator:
             f"CAMPAIGN_PLAYERS: {cls._dump_json(_campaign_players)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
+            f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
             "RECENT_TURNS_LOADED: false\n"
         )
-        if story_context:
-            user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
-        user_prompt += (
-            f"WORLD_SUMMARY: {summary}\n"
-            f"WORLD_STATE: {cls._dump_json(model_state)}\n"
-            f"CALENDAR: {cls._dump_json(_calendar)}\n"
-            f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
-            f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
-        )
-        if _active_plot_threads:
-            user_prompt += (
-                f"ACTIVE_PLOT_THREADS: {cls._dump_json(_active_plot_threads)}\n"
-            )
-        if _active_hints:
-            user_prompt += f"ACTIVE_HINTS: {cls._dump_json(_active_hints)}\n"
-        if _active_chapters:
-            user_prompt += f"ACTIVE_CHAPTERS: {cls._dump_json(_active_chapters)}\n"
-        if _active_consequences:
-            user_prompt += (
-                f"ACTIVE_CONSEQUENCES: {cls._dump_json(_active_consequences)}\n"
-            )
-        if _active_location_mods:
-            user_prompt += (
-                f"ACTIVE_LOCATION_MODIFICATIONS: {cls._dump_json(_active_location_mods)}\n"
-            )
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
         )
+        if stage in {cls.PROMPT_STAGE_RESEARCH, cls.PROMPT_STAGE_FINAL}:
+            if story_context:
+                user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
+            user_prompt += (
+                f"WORLD_SUMMARY: {summary}\n"
+                f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+                f"CALENDAR: {cls._dump_json(_calendar)}\n"
+                f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
+            )
+            if _active_plot_threads:
+                user_prompt += (
+                    f"ACTIVE_PLOT_THREADS: {cls._dump_json(_active_plot_threads)}\n"
+                )
+            if _active_hints:
+                user_prompt += f"ACTIVE_HINTS: {cls._dump_json(_active_hints)}\n"
+            if _active_chapters:
+                user_prompt += f"ACTIVE_CHAPTERS: {cls._dump_json(_active_chapters)}\n"
+            if _active_consequences:
+                user_prompt += (
+                    f"ACTIVE_CONSEQUENCES: {cls._dump_json(_active_consequences)}\n"
+                )
+            if _active_location_mods:
+                user_prompt += (
+                    f"ACTIVE_LOCATION_MODIFICATIONS: {cls._dump_json(_active_location_mods)}\n"
+                )
         turn_prompt_tail = cls._build_turn_prompt_tail(
             player,
             player_state,
             action,
             turn_attachment_context,
-            _response_style_note,
+            _stage_note,
             extra_lines=tail_extra_lines,
         )
         if turn_prompt_tail:
             user_prompt += f"{turn_prompt_tail}\n"
-        system_prompt = cls.SYSTEM_PROMPT
-        if guardrails_enabled:
-            system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
-        if on_rails:
-            system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.RECENT_TURNS_TOOL_PROMPT}"
-        if _memory_lookup_enabled:
-            system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
+        if stage == cls.PROMPT_STAGE_BOOTSTRAP:
+            _zork_log("WARNING", "PROMPT_STAGE_BOOTSTRAP reached unexpectedly; falling back to RESEARCH")
+            stage = cls.PROMPT_STAGE_RESEARCH
+        if stage == cls.PROMPT_STAGE_RESEARCH:
+            system_prompt = cls.RESEARCH_SYSTEM_PROMPT
+            if guardrails_enabled:
+                system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
+            if on_rails:
+                system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
+            if _memory_lookup_enabled:
+                system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
+            else:
+                system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_DISABLED_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.SMS_TOOL_PROMPT}"
+            if state.get("timed_events_enabled", True):
+                system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
+            if story_context:
+                system_prompt = f"{system_prompt}{cls.STORY_OUTLINE_TOOL_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.PLOT_PLAN_TOOL_PROMPT}"
+            if not on_rails:
+                system_prompt = f"{system_prompt}{cls.CHAPTER_PLAN_TOOL_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.CONSEQUENCE_TOOL_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.CALENDAR_TOOL_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.READY_TO_WRITE_TOOL_PROMPT}"
         else:
-            system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_DISABLED_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.SMS_TOOL_PROMPT}"
-        if state.get("timed_events_enabled", True):
-            system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
-        if story_context:
-            system_prompt = f"{system_prompt}{cls.STORY_OUTLINE_TOOL_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.PLOT_PLAN_TOOL_PROMPT}"
-        if not on_rails:
-            system_prompt = f"{system_prompt}{cls.CHAPTER_PLAN_TOOL_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.CONSEQUENCE_TOOL_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.CALENDAR_TOOL_PROMPT}"
-        system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
+            system_prompt = cls.SYSTEM_PROMPT
+            if guardrails_enabled:
+                system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
+            if on_rails:
+                system_prompt = f"{system_prompt}{cls.ON_RAILS_SYSTEM_PROMPT}"
         return system_prompt, user_prompt
 
     @staticmethod
@@ -14684,9 +14797,22 @@ class ZorkEmulator:
                             "Do NOT assume it has been sent yet. If it really sends in this scene, call sms_write. "
                             "If the send fails, is interrupted, is reconsidered, or never actually happens, do not call sms_write."
                         )
-                    turn_response_style_note = cls._turn_response_style_note(
-                        cls.normalize_difficulty(campaign_state.get("difficulty", "normal"))
+                    prompt_difficulty = cls.normalize_difficulty(
+                        campaign_state.get("difficulty", "normal")
                     )
+                    # --- Heuristic preload: skip bootstrap LLM call ---
+                    current_prompt_stage = cls.PROMPT_STAGE_RESEARCH
+                    receiver_hints = cls._recent_turn_receiver_hints(
+                        campaign,
+                        viewer_user_id=player.user_id,
+                        party_snapshot=party_snapshot,
+                        player_state=player_state,
+                    )
+                    first_payload = {
+                        "tool_call": "recent_turns",
+                        "player_slugs": receiver_hints.get("player_slugs") or [],
+                        "npc_slugs": receiver_hints.get("npc_slugs") or [],
+                    }
                     system_prompt, user_prompt = cls.build_prompt(
                         campaign,
                         player,
@@ -14701,13 +14827,15 @@ class ZorkEmulator:
                             else "public"
                         ),
                         tail_extra_lines=turn_tail_extra_lines,
+                        prompt_stage=current_prompt_stage,
                     )
+                    base_user_prompt = user_prompt
                     turn_prompt_tail = cls._build_turn_prompt_tail(
                         player,
                         player_state,
                         action,
                         turn_attachment_context,
-                        turn_response_style_note,
+                        cls._turn_stage_note(prompt_difficulty, current_prompt_stage),
                         extra_lines=turn_tail_extra_lines,
                     )
                     memory_lookup_enabled = (
@@ -14719,25 +14847,9 @@ class ZorkEmulator:
                     )
                     _zork_log(
                         f"TURN START campaign={campaign.id}",
+                        f"heuristic preload: recent_turns with receivers={receiver_hints}\n"
                         f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
                     )
-                    response = await gpt.turbo_completion(
-                        system_prompt, user_prompt, temperature=0.8, max_tokens=2048
-                    )
-                    if not response:
-                        response = "A hollow silence answers. Try again."
-                    else:
-                        response = cls._clean_response(response)
-                    _zork_log("INITIAL API RESPONSE", response)
-
-                    # --- Tool-call detection (memory_*, sms_*, set_timer, story_outline, plot_plan, chapter_plan, consequence_log) ---
-                    json_text_tc = cls._extract_json(response)
-                    first_payload = None
-                    if json_text_tc:
-                        try:
-                            first_payload = cls._parse_json_lenient(json_text_tc)
-                        except Exception:
-                            first_payload = None
                     auto_forced_memory_search = False
                     recent_turns_loaded = False
                     memory_recall_help_emitted = False
@@ -14749,22 +14861,78 @@ class ZorkEmulator:
 
                     # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
                     # The model can refine queries when the first search has no useful hits.
+                    tool_prompt_blocks: List[str] = []
                     tool_augmented_prompt = user_prompt
-                    def _append_tool_prompt(*blocks: object) -> None:
+
+                    def _rebuild_tool_prompt() -> None:
                         nonlocal tool_augmented_prompt
                         tool_augmented_prompt = cls._recompose_prompt_with_tail(
-                            tool_augmented_prompt,
+                            base_user_prompt,
                             turn_prompt_tail,
-                            *blocks,
+                            *tool_prompt_blocks,
                         )
+
+                    def _append_tool_prompt(*blocks: object) -> None:
+                        nonlocal tool_augmented_prompt
+                        for block in blocks:
+                            text = str(block or "").strip()
+                            if text:
+                                tool_prompt_blocks.append(text)
+                        tool_prompt_blocks.append(_tool_budget_note())
+                        _rebuild_tool_prompt()
                         _zork_log(
                             "TURN AUGMENTED PROMPT",
                             f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{tool_augmented_prompt}",
                         )
+
+                    def _tool_budget_note() -> str:
+                        remaining = max(0, max_tool_chain_steps - tool_chain_steps)
+                        if remaining <= 1:
+                            return f"TOOL_BUDGET: {remaining} call(s) remaining. Return ready_to_write or final JSON now."
+                        return f"TOOL_BUDGET: {remaining} call(s) remaining."
+
+                    def _switch_prompt_stage(next_stage: str) -> None:
+                        nonlocal current_prompt_stage
+                        nonlocal system_prompt
+                        nonlocal user_prompt
+                        nonlocal base_user_prompt
+                        nonlocal turn_prompt_tail
+                        if next_stage == current_prompt_stage:
+                            return
+                        current_prompt_stage = next_stage
+                        system_prompt, user_prompt = cls.build_prompt(
+                            campaign,
+                            player,
+                            action,
+                            turns,
+                            party_snapshot=party_snapshot,
+                            is_new_player=is_new_player,
+                            turn_attachment_context=turn_attachment_context,
+                            turn_visibility_default=(
+                                "private"
+                                if getattr(ctx, "guild", None) is None
+                                else "public"
+                            ),
+                            tail_extra_lines=turn_tail_extra_lines,
+                            prompt_stage=current_prompt_stage,
+                        )
+                        base_user_prompt = user_prompt
+                        turn_prompt_tail = cls._build_turn_prompt_tail(
+                            player,
+                            player_state,
+                            action,
+                            turn_attachment_context,
+                            cls._turn_stage_note(
+                                prompt_difficulty, current_prompt_stage
+                            ),
+                            extra_lines=turn_tail_extra_lines,
+                        )
+                        _rebuild_tool_prompt()
                     tool_chain_steps = 0
-                    max_tool_chain_steps = 4
+                    max_tool_chain_steps = 6
                     if (
-                        not (first_payload and cls._is_tool_call(first_payload))
+                        current_prompt_stage != cls.PROMPT_STAGE_BOOTSTRAP
+                        and not (first_payload and cls._is_tool_call(first_payload))
                         and memory_lookup_enabled
                         and cls._should_force_auto_memory_search(action)
                     ):
@@ -14784,27 +14952,6 @@ class ZorkEmulator:
                                 "FORCED MEMORY SEARCH",
                                 f"queries={forced_queries}",
                             )
-                    first_tool_name = (
-                        str(first_payload.get("tool_call") or "").strip()
-                        if isinstance(first_payload, dict)
-                        else ""
-                    )
-                    if first_tool_name != "recent_turns":
-                        receiver_hints = cls._recent_turn_receiver_hints(
-                            campaign,
-                            viewer_user_id=player.user_id,
-                            party_snapshot=party_snapshot,
-                            player_state=player_state,
-                        )
-                        first_payload = {
-                            "tool_call": "recent_turns",
-                            "player_slugs": receiver_hints.get("player_slugs") or [],
-                            "npc_slugs": receiver_hints.get("npc_slugs") or [],
-                        }
-                        _zork_log(
-                            "FORCED RECENT TURNS",
-                            "recent_turns injected before any other tool or final narration",
-                        )
                     while (
                         first_payload
                         and cls._is_tool_call(first_payload)
@@ -14947,36 +15094,46 @@ class ZorkEmulator:
                                 viewer_location_key=viewer_location_key,
                                 viewer_private_context_key=viewer_private_context_key,
                             )
+                            rt_meta = cls._compute_recent_turns_metadata(
+                                recent_turns,
+                                viewer_user_id=player.user_id,
+                                viewer_slug=viewer_slug,
+                            )
+                            rt_note_lines = [
+                                "RECENT_TURNS_NOTE: Immediate visible continuity for the acting player.",
+                                "Local continuity is room-scoped; older local turns from other rooms may be missing.",
+                            ]
+                            rt_note_lines.append(
+                                f"Loaded {rt_meta['turn_count']} turns spanning ~{rt_meta['time_span_minutes']} real minutes."
+                            )
+                            if rt_meta["active_speakers"]:
+                                rt_note_lines.append(
+                                    f"Active speakers: {', '.join(rt_meta['active_speakers'])}."
+                                )
+                            if rt_meta["active_listeners"]:
+                                listener_strs = [
+                                    f"{name}({count})" for name, count in rt_meta["active_listeners"]
+                                ]
+                                rt_note_lines.append(
+                                    f"Frequent listeners: {', '.join(listener_strs)}."
+                                )
+                            if rt_meta["private_turn_count"]:
+                                rt_note_lines.append(
+                                    f"{rt_meta['private_turn_count']} turn(s) contain private/limited exchanges."
+                                )
+                            if rt_meta["viewer_last_turn_ago"] is not None:
+                                rt_note_lines.append(
+                                    f"Viewer's last turn: {rt_meta['viewer_last_turn_ago']} turn(s) ago."
+                                )
                             tool_result_block = (
                                 "RECENT_TURNS_LOADED: true\n"
-                                "RECENT_TURNS_NOTE: Immediate visible continuity for the acting player. "
-                                "Local continuity is room-scoped, so older local turns from other rooms may be missing. "
-                                "Requested receivers add relevant prior private/limited continuity; public/local continuity remains included.\n"
+                                + "\n".join(rt_note_lines) + "\n"
                                 f"RECENT_TURNS_LOCATIONS: current={recent_location_hint.get('current_location_key')} "
                                 f"last_other={recent_location_hint.get('last_other_location_key')}\n"
                                 f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
                                 f"RECENT_TURNS:\n{recent_text}\n"
                             )
-                            turn_prompt_tail = cls._build_turn_prompt_tail(
-                                player,
-                                player_state,
-                                action,
-                                turn_attachment_context,
-                                cls._merge_system_notes(
-                                    turn_response_style_note,
-                                    (
-                                        "RECENT_TURNS is loaded. Do not call recent_turns again this turn unless the system explicitly says it was not loaded."
-                                    ),
-                                    (
-                                        'If you need deeper or older recall beyond this immediate continuity, use memory_search next, e.g. '
-                                        '{"tool_call": "memory_search", "queries": ["character name", "location", "event"]}.'
-                                    ),
-                                    (
-                                        "If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
-                                    ),
-                                ),
-                                extra_lines=turn_tail_extra_lines,
-                            )
+                            _switch_prompt_stage(cls.PROMPT_STAGE_RESEARCH)
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
                             _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
@@ -14990,6 +15147,26 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("RECENT TURNS AUGMENTED RESPONSE", response)
+
+                        elif tool_name == "ready_to_write":
+                            _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+                            tool_result_block = (
+                                "RESEARCH_COMPLETE: Context gathering is complete.\n"
+                                "Do NOT call any more tools now. Return final narration/state JSON directly."
+                            )
+                            _zork_log("READY TO WRITE", tool_result_block)
+                            _append_tool_prompt(tool_result_block)
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("FINALIZATION RESPONSE", response)
 
                         elif tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
@@ -16217,34 +16394,10 @@ class ZorkEmulator:
                         except Exception:
                             first_payload = None
                             break
-                        if (
-                            not recent_turns_loaded
-                            and (
-                                not isinstance(first_payload, dict)
-                                or str(first_payload.get("tool_call") or "").strip()
-                                != "recent_turns"
-                            )
-                        ):
-                            receiver_hints = cls._recent_turn_receiver_hints(
-                                campaign,
-                                viewer_user_id=player.user_id,
-                                party_snapshot=party_snapshot,
-                                player_state=player_state,
-                            )
-                            first_payload = {
-                                "tool_call": "recent_turns",
-                                "player_slugs": receiver_hints.get("player_slugs") or [],
-                                "npc_slugs": receiver_hints.get("npc_slugs") or [],
-                            }
-                            _zork_log(
-                                "FORCED RECENT TURNS",
-                                "recent_turns re-injected before continuing tool/final flow",
-                            )
-
                     # Hard-stop infinite tool loops.
                     if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
                         _append_tool_prompt(
-                            "TOOL_CHAIN_LIMIT_REACHED: Stop calling tools now. Return final narration/state JSON directly."
+                            "TOOL_CHAIN_LIMIT_REACHED (0 remaining): Stop calling tools now. Return final narration/state JSON directly."
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
