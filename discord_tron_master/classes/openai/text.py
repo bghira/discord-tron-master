@@ -1,13 +1,18 @@
 import asyncio
-import threading
-from discord_tron_master.classes.app_config import AppConfig
+import json
 import logging
+import os
+import subprocess
+import threading
+
+import openai
+from openai import OpenAI
+
+from discord_tron_master.classes.app_config import AppConfig
 
 config = AppConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
-import openai
-from openai import OpenAI
 
 openai.api_key = config.get_openai_api_key()
 
@@ -26,6 +31,16 @@ def _get_openai_semaphore(limit: int) -> asyncio.Semaphore:
 
 
 class GPT:
+    _ZAI_MODEL = "glm-5"
+    _CLI_TIMEOUT_SECONDS = 300.0
+    _CLI_WORKDIR = "/tmp/discord-tron-master-gpt"
+    _TEXT_COMPLETION_INSTRUCTIONS = (
+        "You are being used as a text-completion backend, not as a coding agent. "
+        "Do not inspect the workspace, read files, run shell commands, or infer hidden tasks "
+        "from nearby repositories unless the prompt explicitly asks for that. "
+        "Respond directly to the prompt content only."
+    )
+
     def __init__(self):
         self.engine = "o3-mini"
         self.temperature = 0.9
@@ -33,6 +48,7 @@ class GPT:
         self.discord_bot_role = "You are a Discord bot."
         self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
+        self.backend = "zai"
 
     def set_values(self, **kwargs):
         for key, value in kwargs.items():
@@ -48,32 +64,29 @@ class GPT:
         return await self.turbo_completion(self.discord_bot_role, prompt)
 
     async def compliment_user_selection(self):
-        role = f"You are Joe Rogan! Respond as he would."
-        prompt = f"Return just a compliment on a decision I've made. Maybe you can ask Jamie to pull a clip up about the image that's about to be generated. Short and sweet output only."
+        role = "You are Joe Rogan! Respond as he would."
+        prompt = "Return just a compliment on a decision I've made. Maybe you can ask Jamie to pull a clip up about the image that's about to be generated. Short and sweet output only."
         return await self.turbo_completion(
             role, prompt, max_tokens=50, temperature=1.05, engine="text-davinci-003"
         )
 
     async def insult_user_selection(self):
         role = "You are Joe Rogan! We tease each other in non-offensive ways. We are friends. Keep it short and sweet."
-        prompt = f"Return just a playful, short and sweet tease me about a decision I've made, in the style of Joe Rogan."
+        prompt = "Return just a playful, short and sweet tease me about a decision I've made, in the style of Joe Rogan."
         return await self.turbo_completion(
             role, prompt, temperature=1.05, max_tokens=50, engine="text-davinci-003"
         )
 
     async def insult_or_compliment_random(self):
-        # Roll a dice and select whether we insult or compliment, and then, return that:
         import random
 
         random_number = random.randint(1, 2)
         if random_number == 1:
             return await self.insult_user_selection()
-        else:
-            return await self.compliment_user_selection()
+        return await self.compliment_user_selection()
 
     async def random_image_prompt(self, theme: str = None):
-        prompt = f"Print an image caption on a single line."
-        # prompt = f"Print your prompt."
+        prompt = "Print an image caption on a single line."
         if theme is not None:
             prompt = prompt + ". Your theme for consideration: " + theme
         system_role = "You are a Prompt Generator Bot, that strictly generates prompts, with no other output, to avoid distractions.\n"
@@ -90,16 +103,6 @@ class GPT:
         logger.debug(
             f"OpenAI returned the following response to the prompt: {image_prompt_response}"
         )
-        # prompt_pieces = image_prompt_response.split(', ')
-        # logger.debug(f'Prompt pieces: {prompt_pieces}')
-        # # We want to turn the "foo, bar, buz" into ("foo", "bar", "buzz").and()
-        # prompt_output = "("
-        # for index, prompt_piece in enumerate(prompt_pieces):
-        #     if prompt_output == "(":
-        #         prompt_output = f'{prompt_output}"{prompt_piece}"'
-        #         continue
-        #     prompt_output = f'{prompt_output}, "{prompt_piece}"'
-        # prompt_output = f'{prompt_output}).and()'
         return image_prompt_response
 
     async def auto_model_select(self, prompt: str, query_str: str = None):
@@ -144,12 +147,9 @@ class GPT:
         prediction = await self.turbo_completion(
             system_role, query_str, temperature=1.18
         )
-        # if any ``` are in the response, remove the entire lines containing it
         for line in prediction.split("\n"):
             if "```" in line:
                 prediction = prediction.replace(line, "")
-
-        import json
 
         try:
             result = json.loads(prediction)
@@ -157,7 +157,7 @@ class GPT:
             raw_resolution = result["resolution"]
             width, heidht = raw_resolution.split("x")
             resolution = {"width": int(width), "height": int(heidht)}
-        except Exception as e:
+        except Exception:
             logger.setLevel(config.get_log_level())
             logger.error(f"Error parsing JSON from prediction: {prediction}")
             return ("1280x768", "ptx0/terminus-xl-gamma-training")
@@ -165,11 +165,10 @@ class GPT:
         logger.debug(
             f"OpenAI returned the following response to the prompt: {model_name}"
         )
-        # Did it refuse?
         if "/" not in model_name:
             logger.setLevel(config.get_log_level())
             logger.warning(
-                f"OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training."
+                "OpenAI refused to label our spicy model name. Lets default to ptx0/terminus-xl-gamma-training."
             )
             return ("1280x768", "ptx0/terminus-xl-gamma-training")
 
@@ -177,69 +176,285 @@ class GPT:
 
     async def discord_bot_response(self, prompt, ctx=None):
         user_role = self.discord_bot_role
+        user_temperature = self.temperature
         if ctx is not None:
             user_role = self.config.get_user_setting(
                 ctx.author.id, "gpt_role", self.discord_bot_role
             )
             user_temperature = self.config.get_user_setting(
-                ctx.author.id, "temperature"
+                ctx.author.id, "temperature", self.temperature
             )
         return await self.turbo_completion(
             user_role, prompt, temperature=user_temperature, max_tokens=4096
         )
 
-    def send_request(self, message_log):
-        try:
-            client = OpenAI(
-                api_key=config.get_openai_api_key(),
-                base_url="https://api.z.ai/api/coding/paas/v4",
-            )
+    @classmethod
+    def _ensure_cli_workdir(cls) -> str:
+        os.makedirs(cls._CLI_WORKDIR, exist_ok=True)
+        return cls._CLI_WORKDIR
 
-            return client.chat.completions.create(
-                model="glm-5",
-                messages=message_log,
-                max_completion_tokens=self.max_tokens,
-                # stop=[],
-                temperature=self.temperature,
-                extra_body={
-                    "thinking": {
-                        "type": "enabled",
-                    },
+    def _normalize_backend(self) -> str:
+        return self.config.normalize_zork_backend(getattr(self, "backend", "zai"))
+
+    def _resolve_cli_model(self, backend: str) -> str | None:
+        raw_model = str(getattr(self, "engine", "") or "").strip()
+        if backend == "opencode":
+            if not raw_model or raw_model in {"o3-mini", self._ZAI_MODEL}:
+                return "opencode/gpt-5-nano"
+            return raw_model
+        if not raw_model or raw_model in {"o3-mini", self._ZAI_MODEL, "text-davinci-003"}:
+            return None
+        return raw_model
+
+    def _send_zai_request(self, message_log):
+        client = OpenAI(
+            api_key=config.get_openai_api_key(),
+            base_url="https://api.z.ai/api/coding/paas/v4",
+        )
+        return client.chat.completions.create(
+            model=self._ZAI_MODEL,
+            messages=message_log,
+            max_completion_tokens=self.max_tokens,
+            temperature=self.temperature,
+            extra_body={
+                "thinking": {
+                    "type": "enabled",
                 },
-            )
-        except Exception as e:
-            logger.error(f"Error sending request to OpenAI: {e}")
+            },
+        )
+
+    @classmethod
+    def _build_cli_prompt(cls, role: str, prompt: str) -> str:
+        role_text = str(role or "").strip()
+        user_text = str(prompt or "").strip()
+        if role_text:
+            return (
+                f"{cls._TEXT_COMPLETION_INSTRUCTIONS}\n\n"
+                f"SYSTEM:\n{role_text}\n\n"
+                f"USER:\n{user_text}"
+            ).strip()
+        return f"{cls._TEXT_COMPLETION_INSTRUCTIONS}\n\nUSER:\n{user_text}".strip()
+
+    @staticmethod
+    def _extract_last_json_object(text: str):
+        lines = str(text or "").splitlines()
+        for idx in range(len(lines) - 1, -1, -1):
+            candidate = "\n".join(lines[idx:]).strip()
+            if not candidate.startswith("{"):
+                continue
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+        return None
+
+    @staticmethod
+    def _extract_jsonl_objects(text: str) -> list[dict]:
+        objects = []
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                objects.append(payload)
+        return objects
+
+    def _run_codex_cli(self, role: str, prompt: str) -> str:
+        workdir = self._ensure_cli_workdir()
+        role_text = str(role or "").strip()
+        user_instructions = self._TEXT_COMPLETION_INSTRUCTIONS
+        if role_text:
+            user_instructions = f"{user_instructions}\n\n{role_text}"
+        command = [
+            "codex",
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-C",
+            workdir,
+            "-s",
+            "read-only",
+            "-c",
+            f"user_instructions={json.dumps(user_instructions)}",
+        ]
+        model = self._resolve_cli_model("codex")
+        if model:
+            command.extend(["-m", model])
+        result = subprocess.run(
+            command,
+            input=str(prompt or ""),
+            text=True,
+            capture_output=True,
+            timeout=self._CLI_TIMEOUT_SECONDS,
+            check=False,
+        )
+        events = self._extract_jsonl_objects(result.stdout)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise RuntimeError(f"Codex CLI request failed: {detail}")
+        messages = []
+        for event in events:
+            if str(event.get("type") or "").strip() != "item.completed":
+                continue
+            item = event.get("item")
+            if isinstance(item, dict) and str(item.get("type") or "").strip() == "agent_message":
+                text = str(item.get("text") or "").strip()
+                if text:
+                    messages.append(text)
+        return messages[-1] if messages else result.stdout.strip()
+
+    def _run_claude_cli(self, role: str, prompt: str) -> str:
+        workdir = self._ensure_cli_workdir()
+        command = [
+            "claude",
+            "-p",
+            str(prompt or ""),
+            "--output-format",
+            "json",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "",
+        ]
+        model = self._resolve_cli_model("claude")
+        if model:
+            command.extend(["--model", model])
+        if str(role or "").strip():
+            command.extend(["--system-prompt", str(role).strip()])
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=self._CLI_TIMEOUT_SECONDS,
+            cwd=workdir,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise RuntimeError(f"Claude CLI request failed: {detail}")
+        payload = self._extract_last_json_object(result.stdout)
+        if not isinstance(payload, dict):
+            raise RuntimeError("Claude CLI returned no JSON result payload")
+        if payload.get("is_error") is True:
+            raise RuntimeError(f"Claude CLI request failed: {payload.get('result') or payload}")
+        return str(payload.get("result") or "").strip()
+
+    def _run_gemini_cli(self, role: str, prompt: str) -> str:
+        workdir = self._ensure_cli_workdir()
+        command = ["gemini", "-o", "json"]
+        model = self._resolve_cli_model("gemini")
+        if model:
+            command.extend(["-m", model])
+        command.append(self._build_cli_prompt(role, prompt))
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=self._CLI_TIMEOUT_SECONDS,
+            cwd=workdir,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise RuntimeError(f"Gemini CLI request failed: {detail}")
+        payload = self._extract_last_json_object(result.stdout)
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gemini CLI returned no JSON response payload")
+        return str(payload.get("response") or "").strip()
+
+    def _run_opencode_cli(self, role: str, prompt: str) -> str:
+        workdir = self._ensure_cli_workdir()
+        command = ["opencode", "run", "--format", "json"]
+        model = self._resolve_cli_model("opencode")
+        if model:
+            command.extend(["-m", model])
+        command.append(self._build_cli_prompt(role, prompt))
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=self._CLI_TIMEOUT_SECONDS,
+            cwd=workdir,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise RuntimeError(f"OpenCode CLI request failed: {detail}")
+        events = self._extract_jsonl_objects(result.stdout)
+        texts = []
+        for event in events:
+            if str(event.get("type") or "").strip() != "text":
+                continue
+            part = event.get("part")
+            if isinstance(part, dict):
+                text = str(part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+        return "\n".join(texts).strip() or result.stdout.strip()
+
+    def _run_cli_backend(self, backend: str, role: str, prompt: str) -> str:
+        if backend == "codex":
+            return self._run_codex_cli(role, prompt)
+        if backend == "claude":
+            return self._run_claude_cli(role, prompt)
+        if backend == "gemini":
+            return self._run_gemini_cli(role, prompt)
+        if backend == "opencode":
+            return self._run_opencode_cli(role, prompt)
+        raise ValueError(f"Unsupported GPT backend: {backend}")
 
     async def turbo_completion(self, role, prompt, **kwargs):
         if kwargs:
             self.set_values(**kwargs)
 
-        message_log = [
-            {"role": "assistant", "content": role},
-            {"role": "user", "content": prompt},
-        ]
-
+        backend = self._normalize_backend()
+        effective_role = str(role or "")
+        effective_prompt = str(prompt or "")
+        if backend != "zai" and not effective_prompt.strip() and effective_role.strip():
+            effective_prompt = effective_role.strip()
+            effective_role = ""
         semaphore = _get_openai_semaphore(self.concurrent_requests)
         async with semaphore:
-            response = await asyncio.to_thread(self.send_request, message_log)
+            if backend == "zai":
+                message_log = [
+                    {"role": "assistant", "content": effective_role},
+                    {"role": "user", "content": effective_prompt},
+                ]
+                try:
+                    response = await asyncio.to_thread(
+                        self._send_zai_request, message_log
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending request to ZAI: {e}")
+                    return None
+                if response is None:
+                    return None
+                for choice in response.choices:
+                    if "text" in choice:
+                        return choice.text
+                return response.choices[0].message.content
 
-        if response is None:
-            return None
-
-        for choice in response.choices:
-            if "text" in choice:
-                return choice.text
-
-        return response.choices[0].message.content
+            try:
+                return await asyncio.to_thread(
+                    self._run_cli_backend, backend, effective_role, effective_prompt
+                )
+            except Exception as e:
+                logger.error(f"Error sending request to {backend}: {e}")
+                return None
 
     def retrieve_image(self, url: str):
         import requests
 
         response = requests.get(url)
-        # Response: 024-04-18 16:00:15,447 [DEBUG] (discord_tron_master.classes.openai.text) Result: b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x04\x00\x00\x00\x04\x00\x08\x02\x00\x00\x00\xf0\x7f\xbc\xd4\x00\x009\xe7caBX\x00\x009\xe7jumb\x00\x00\x00\x1ejumdc2pa\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa\x00\x00\x009\xc1jumb\x00\x00\x00Gjumdc2ma\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03urn:uuid:01811e43-50a9-4e0b-b5bd-8f6364bc43e4\x00\x00\x00\x01\xa1jumb\x00\x00\x00)jumdc2as\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.assertions\x00\x00\x00\x00\xc5jumb\x00\x00\x00&jumdcbor\x00\x11\x00\x10\x80\x00\x00\xaa\x008\x9bq\x03c2pa.actions\x00\x00\x00\x00\x97cbor\xa1gactio
         content = response.content
 
-        # Create Image object
         from PIL import Image
         from io import BytesIO
 
@@ -257,11 +472,9 @@ class GPT:
                 quality="standard",
                 n=1,
             )
-            # Possible error: {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Your prompt may contain text that is not allowed by our safety system.', 'param': None, 'type': 'invalid_request_error'}}
             logger.setLevel(config.get_log_level())
             if "error" in response:
-                logger.error(f"API returned error result, returning black image")
-                # make a black image to return
+                logger.error("API returned error result, returning black image")
                 from PIL import Image
 
                 image = Image.new(
@@ -271,23 +484,20 @@ class GPT:
                 )
                 return image
 
-            else:
-                logger.debug(
-                    f"Received response from OpenAI image endpoint: {response}"
-                )
-
+            logger.debug(
+                f"Received response from OpenAI image endpoint: {response}"
+            )
             url = response.data[0].url
             logger.debug(f"Retrieving URL: {url}")
-            # retrieve URL, return Image
             image_obj, image_data = self.retrieve_image(url)
             logger.debug(f"Result: {image_obj}")
             if not hasattr(image_obj, "size"):
                 logger.error(
-                    f"Image object does not have a size attribute. Returning None."
+                    "Image object does not have a size attribute. Returning None."
                 )
                 logger.debug(f"Response from OpenAI: {response}")
                 return None
-            logger.debug(f"Returning image_data from dalle")
+            logger.debug("Returning image_data from dalle")
             return image_data
         except Exception as e:
             logger.setLevel(config.get_log_level())

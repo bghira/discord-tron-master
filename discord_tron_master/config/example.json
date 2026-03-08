@@ -20,6 +20,7 @@
     "huggingface": {
         "local_model_path": null
     },
+    "zork_backends": {},
     "users": {
     },
     "mysql": {

@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "huggingface": {
         "local_model_path": None,
     },
+    "zork_backends": {},
     "users": {},
     "mysql": {
         "user": "diffusion",
@@ -93,6 +94,7 @@ DEFAULT_USER_CONFIG = {
 
 class AppConfig:
     flask = None
+    ZORK_BACKEND_OPTIONS = ("zai", "codex", "claude", "gemini", "opencode")
 
     def __init__(self):
         parent = os.path.dirname(Path(__file__).resolve().parent)
@@ -119,6 +121,11 @@ class AppConfig:
         with open(self.config_path, "r") as config_file:
             self.config = json.load(config_file)
         self.config = self.merge_dicts(DEFAULT_CONFIG, self.config)
+
+    def _save_config(self):
+        with open(self.config_path, "w") as config_file:
+            logging.info(f"Saving config: {self.config}")
+            json.dump(self.config, config_file, indent=4)
 
     def get_log_level(self):
         self.reload_config()
@@ -202,9 +209,7 @@ class AppConfig:
 
     def set_user_config(self, user_id, user_config):
         self.config.get("users", {})[str(user_id)] = user_config
-        with open(self.config_path, "w") as config_file:
-            logging.info(f"Saving config: {self.config}")
-            json.dump(self.config, config_file, indent=4)
+        self._save_config()
 
     def set_user_setting(self, user_id, setting_key, value):
         user_id = str(user_id)
@@ -245,6 +250,62 @@ class AppConfig:
 
     def clear_zork_private_dm(self, user_id):
         self.set_zork_private_dm(user_id, enabled=False)
+
+    @classmethod
+    def normalize_zork_backend(cls, value, default="zai"):
+        text = " ".join(str(value or "").strip().lower().replace("_", "-").split())
+        aliases = {
+            "z-ai": "zai",
+            "glm": "zai",
+            "glm-5": "zai",
+            "openai": "zai",
+            "codex-cli": "codex",
+            "opencode-ai": "opencode",
+        }
+        normalized = aliases.get(text, text)
+        if normalized in cls.ZORK_BACKEND_OPTIONS:
+            return normalized
+        return default
+
+    def get_zork_backend(self, channel_id=None, default_value="zai"):
+        self.reload_config()
+        default_backend = self.normalize_zork_backend(default_value, default="zai")
+        mapping = self.config.get("zork_backends", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+        if channel_id is not None:
+            configured = mapping.get(str(channel_id))
+            if configured:
+                return self.normalize_zork_backend(
+                    configured,
+                    default=default_backend,
+                )
+        configured_default = self.config.get("zork_backend")
+        if configured_default:
+            return self.normalize_zork_backend(
+                configured_default,
+                default=default_backend,
+            )
+        return default_backend
+
+    def set_zork_backend(self, channel_id, backend):
+        normalized = self.normalize_zork_backend(backend, default="")
+        if normalized not in self.ZORK_BACKEND_OPTIONS:
+            raise ValueError(f"Unsupported Zork backend: {backend}")
+        mapping = self.config.setdefault("zork_backends", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+            self.config["zork_backends"] = mapping
+        mapping[str(channel_id)] = normalized
+        self._save_config()
+
+    def clear_zork_backend(self, channel_id):
+        mapping = self.config.setdefault("zork_backends", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+            self.config["zork_backends"] = mapping
+        mapping.pop(str(channel_id), None)
+        self._save_config()
 
     def get_web_root(self):
         self.reload_config()

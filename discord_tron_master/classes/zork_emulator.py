@@ -933,7 +933,10 @@ class ZorkEmulator:
             campaign_id = campaign.id
 
         if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
-            await cls._delete_context_message(ctx)
+            if getattr(ctx, "guild", None) is None:
+                await cls._notify_ignored_inflight_message(ctx)
+            else:
+                await cls._delete_context_message(ctx)
             return None, None
         return campaign_id, None
 
@@ -953,7 +956,10 @@ class ZorkEmulator:
                 return None, "The linked private Zork campaign no longer exists."
 
         if not cls._try_set_inflight_turn(campaign_id, ctx.author.id):
-            await cls._delete_context_message(ctx)
+            if getattr(ctx, "guild", None) is None:
+                await cls._notify_ignored_inflight_message(ctx)
+            else:
+                await cls._delete_context_message(ctx)
             return None, None
         return campaign_id, None
 
@@ -1153,6 +1159,16 @@ class ZorkEmulator:
                 await ctx.message.delete()
         except Exception:
             # Ignore message delete failures (perms/race).
+            return
+
+    @classmethod
+    async def _notify_ignored_inflight_message(cls, ctx):
+        try:
+            channel = getattr(ctx, "channel", None)
+            if channel is None or not hasattr(channel, "send"):
+                return
+            await channel.send("Ignored: your previous Zork turn is still processing.")
+        except Exception:
             return
 
     @classmethod
@@ -2618,8 +2634,63 @@ class ZorkEmulator:
         return cls.DEFAULT_CAMPAIGN_PERSONA
 
     @classmethod
-    async def generate_campaign_persona(cls, campaign_name: str) -> str:
+    def _resolve_zork_backend_channel_id(
+        cls,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> Optional[int]:
+        try:
+            if channel_id is not None:
+                resolved = int(channel_id)
+                if resolved > 0:
+                    return resolved
+        except (TypeError, ValueError):
+            pass
+        if campaign is None or getattr(campaign, "id", None) is None:
+            return None
+        row = (
+            ZorkChannel.query.filter_by(active_campaign_id=campaign.id)
+            .order_by(ZorkChannel.updated.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        try:
+            resolved = int(row.channel_id)
+        except (TypeError, ValueError):
+            return None
+        return resolved if resolved > 0 else None
+
+    @classmethod
+    def _resolve_zork_backend(
+        cls,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> str:
+        cfg = AppConfig()
+        resolved_channel_id = cls._resolve_zork_backend_channel_id(
+            campaign=campaign,
+            channel_id=channel_id,
+        )
+        return cfg.get_zork_backend(channel_id=resolved_channel_id, default_value="zai")
+
+    @classmethod
+    def _new_gpt(
+        cls,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> GPT:
         gpt = GPT()
+        gpt.backend = cls._resolve_zork_backend(
+            campaign=campaign,
+            channel_id=channel_id,
+        )
+        return gpt
+
+    @classmethod
+    async def generate_campaign_persona(cls, campaign_name: str) -> str:
+        gpt = cls._new_gpt()
         prompt = (
             f"The campaign is titled: '{campaign_name}'.\n"
             f"If this references a known movie, book, show, or story, create a persona for the MAIN CHARACTER/PROTAGONIST of that work. "
@@ -2877,7 +2948,7 @@ class ZorkEmulator:
         attachment_summary_instructions: Optional[str] = None,
     ) -> str:
         """Step 1: IMDB lookup + LLM classify, stores result, returns message."""
-        gpt = GPT()
+        gpt = cls._new_gpt(campaign=campaign)
         effective_use_imdb = (
             bool(use_imdb) if isinstance(use_imdb, bool) else False
         )
@@ -3188,7 +3259,7 @@ class ZorkEmulator:
                     "Use these results to help identify the work.\n"
                 )
 
-            gpt = GPT()
+            gpt = cls._new_gpt(campaign=campaign)
             re_classify_system = (
                 "You classify whether text references a known published work "
                 "(movie, book, TV show, video game, etc).\n"
@@ -3289,6 +3360,7 @@ class ZorkEmulator:
             summary = await cls._summarise_long_text(
                 att_text,
                 ctx,
+                campaign=campaign,
                 summary_instructions=summary_instructions or None,
             )
             if summary:
@@ -3343,7 +3415,7 @@ class ZorkEmulator:
         so the model can inspect ingested source material before producing
         its final JSON response.  Returns the raw final response string.
         """
-        gpt = GPT()
+        gpt = cls._new_gpt(campaign=campaign)
         augmented_prompt = user_prompt
 
         for _step in range(max_tool_steps + 1):
@@ -4657,6 +4729,7 @@ class ZorkEmulator:
         text: str,
         ctx_message,
         channel=None,
+        campaign: Optional[ZorkCampaign] = None,
         summary_instructions: Optional[str] = None,
         show_progress: bool = True,
         allow_single_chunk_passthrough: bool = True,
@@ -4664,7 +4737,6 @@ class ZorkEmulator:
         """Chunk, summarise in parallel, condense to budget. Returns summary.
         *channel* overrides ctx_message.channel for progress messages.
         All sizing uses the GLM tokenizer for accurate token counts."""
-        gpt = GPT()
         # Budget = whatever the context window can fit alongside the prompt
         budget_tokens = (
             cls.ATTACHMENT_MODEL_CTX_TOKENS
@@ -4675,6 +4747,10 @@ class ZorkEmulator:
         max_parallel = cls.ATTACHMENT_MAX_PARALLEL
         guard = cls.ATTACHMENT_GUARD_TOKEN
         progress_channel = channel or ctx_message.channel
+        gpt = cls._new_gpt(
+            campaign=campaign,
+            channel_id=getattr(progress_channel, "id", None),
+        )
 
         # Step 1 — token-aware dynamic chunking
         chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target = (
@@ -4934,6 +5010,7 @@ class ZorkEmulator:
                 payload = await cls._summarise_long_text(
                     text,
                     ctx,
+                    campaign=None,
                     summary_instructions=cls.TURN_ATTACHMENT_SUMMARY_INSTRUCTIONS,
                     show_progress=False,
                     allow_single_chunk_passthrough=False,
@@ -5058,12 +5135,18 @@ class ZorkEmulator:
         )
 
     @classmethod
-    async def _classify_source_material_format(cls, sample_text: str) -> str:
+    async def _classify_source_material_format(
+        cls,
+        sample_text: str,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> str:
         sample = str(sample_text or "").strip()
         if not sample:
             return cls.SOURCE_MATERIAL_FORMAT_GENERIC
 
-        gpt = GPT()
+        gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
         sample_preview = sample[:4000]
         system_prompt = (
             "Classify the attached source material into exactly one of three categories.\n"
@@ -5161,7 +5244,9 @@ class ZorkEmulator:
         if source_format is None:
             try:
                 source_format = await cls._classify_source_material_format(
-                    classification_chunk
+                    classification_chunk,
+                    campaign=campaign,
+                    channel_id=getattr(channel, "id", None),
                 )
             except Exception as e:
                 logger.warning(
@@ -11975,7 +12060,10 @@ class ZorkEmulator:
                             "twist, or decision point. Summarise skipped time in one brief "
                             "sentence, then narrate the new moment in full.\n"
                         )
-                    gpt = GPT()
+                    gpt = cls._new_gpt(
+                        campaign=campaign,
+                        channel_id=getattr(ctx.channel, "id", None),
+                    )
                     _zork_log(
                         f"TURN START campaign={campaign.id}",
                         f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
@@ -14906,7 +14994,7 @@ class ZorkEmulator:
                     ),
                 )
 
-                gpt = GPT()
+                gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
                 response = await gpt.turbo_completion(
                     system_prompt, user_prompt, temperature=0.8, max_tokens=2048
                 )
@@ -15467,7 +15555,10 @@ class ZorkEmulator:
                 "- Different location_key means separate rooms/areas; never nest them.\n"
                 "Draw a compact map with @ marking the player's location.\n"
             )
-            gpt = GPT()
+            gpt = cls._new_gpt(
+                campaign=campaign,
+                channel_id=getattr(ctx.channel, "id", None),
+            )
             response = await gpt.turbo_completion(
                 cls.MAP_SYSTEM_PROMPT,
                 map_prompt,

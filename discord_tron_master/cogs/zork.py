@@ -277,7 +277,9 @@ class Zork(commands.Cog):
             classification_chunk = chunks[0]
             try:
                 source_format = await ZorkEmulator._classify_source_material_format(
-                    classification_chunk
+                    classification_chunk,
+                    campaign=campaign,
+                    channel_id=getattr(channel, "id", None),
                 )
             except Exception:
                 source_format = ZorkEmulator.SOURCE_MATERIAL_FORMAT_GENERIC
@@ -292,6 +294,7 @@ class Zork(commands.Cog):
                     attachment_text,
                     ctx.message,
                     channel=channel,
+                    campaign=campaign,
                     summary_instructions=summary_instructions,
                 )
                 if summary:
@@ -619,6 +622,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
+            f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode]` view or set the text backend for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
@@ -1151,6 +1155,53 @@ class Zork(commands.Cog):
         await ctx.send(
             f"Private DMs enabled for `{campaign.name}` as `{character_name}`.\n"
             "Send plain messages to the bot in DM and they will act in this shared campaign."
+        )
+
+    @zork.command(name="backend")
+    async def zork_backend(self, ctx, *, option: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        current = self.config.get_zork_backend(ctx.channel.id, default_value="zai")
+        allowed = ", ".join(f"`{item}`" for item in AppConfig.ZORK_BACKEND_OPTIONS)
+        if option is None:
+            await ctx.send(
+                f"Current Zork backend for this channel/thread: `{current}`.\n"
+                f"Available backends: {allowed}"
+            )
+            return
+
+        normalized = self.config.normalize_zork_backend(option, default="")
+        if normalized not in AppConfig.ZORK_BACKEND_OPTIONS:
+            await ctx.send(
+                f"Unknown backend `{option}`. Available backends: {allowed}"
+            )
+            return
+
+        if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+            await ctx.send(
+                "Only the campaign creator or an Image Admin can change this setting."
+            )
+            return
+
+        self.config.set_zork_backend(ctx.channel.id, normalized)
+        await ctx.send(
+            f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`."
         )
 
     @zork.command(name="thread")
