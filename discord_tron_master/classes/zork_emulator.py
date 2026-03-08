@@ -2683,6 +2683,44 @@ class ZorkEmulator:
         return "\n".join(recent_lines) if recent_lines else "None"
 
     @classmethod
+    def _recent_turns_location_hint(
+        cls,
+        turns: List[ZorkTurn],
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+        viewer_location_key: str,
+        viewer_private_context_key: str,
+    ) -> Dict[str, str]:
+        current_location = str(viewer_location_key or "").strip().lower() or "unknown-room"
+        last_other_location = ""
+        for turn in reversed(turns):
+            if not cls._turn_visible_to_viewer(
+                turn,
+                viewer_user_id,
+                viewer_slug,
+                viewer_location_key,
+                viewer_private_context_key,
+            ):
+                continue
+            meta = cls._safe_turn_meta(turn)
+            visibility = meta.get("visibility")
+            turn_location = ""
+            if isinstance(visibility, dict):
+                turn_location = str(visibility.get("location_key") or "").strip().lower()
+            if not turn_location:
+                turn_location = str(meta.get("location_key") or "").strip().lower()
+            if not turn_location:
+                continue
+            if turn_location != current_location:
+                last_other_location = turn_location
+                break
+        return {
+            "current_location_key": current_location,
+            "last_other_location_key": last_other_location or "none",
+        }
+
+    @classmethod
     def _turn_embedding_metadata(
         cls,
         *,
@@ -13471,10 +13509,20 @@ class ZorkEmulator:
                                 requested_player_slugs=requested_player_slugs,
                                 requested_npc_slugs=requested_npc_slugs,
                             )
+                            recent_location_hint = cls._recent_turns_location_hint(
+                                recent_turns,
+                                viewer_user_id=player.user_id,
+                                viewer_slug=viewer_slug,
+                                viewer_location_key=viewer_location_key,
+                                viewer_private_context_key=viewer_private_context_key,
+                            )
                             tool_result_block = (
                                 "RECENT_TURNS_LOADED: true\n"
-                                "RECENT_TURNS_NOTE: This is the immediate visible continuity for the acting player. "
+                                "RECENT_TURNS_NOTE: Immediate visible continuity for the acting player. "
+                                "Local continuity is room-scoped, so older local turns from other rooms may be missing. "
                                 "Requested receivers add relevant prior private/limited continuity; public/local continuity remains included.\n"
+                                f"RECENT_TURNS_LOCATIONS: current={recent_location_hint.get('current_location_key')} "
+                                f"last_other={recent_location_hint.get('last_other_location_key')}\n"
                                 f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
                                 f"RECENT_TURNS:\n{recent_text}\n"
                             )
