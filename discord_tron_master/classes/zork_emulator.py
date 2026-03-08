@@ -13350,7 +13350,13 @@ class ZorkEmulator:
                                 "- Do NOT call recent_turns again this turn unless the system explicitly says it was not loaded.\n"
                                 "- If you need deeper or older recall beyond this immediate continuity, use memory_search next.\n"
                                 '- Example: {"tool_call": "memory_search", "queries": ["character name", "location", "event"]}\n'
-                                "- Otherwise return final narration/state JSON."
+                                "- Otherwise return final narration/state JSON.\n"
+                                "FINAL_RESPONSE_RULES:\n"
+                                "- Do NOT echo or paraphrase the player's wording back to them.\n"
+                                "- NPC first lines must add new information, a decision, a consequence, a demand, or a direct question.\n"
+                                "- Return final JSON with reasoning included.\n"
+                                "- Put reasoning first in the final JSON.\n"
+                                "- If ON-RAILS mode is enabled, state_update MUST include current_chapter and current_scene explicitly."
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
                             tool_augmented_prompt = (

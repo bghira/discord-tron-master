@@ -250,6 +250,20 @@ class GPT:
             "- Do not claim to inspect files, run commands, or use tools unless the prompt explicitly requires it.\n"
             "</tool_boundary>"
         )
+        lower_role = role_text.lower()
+        if role_text and (
+            "json" in lower_role
+            or "reasoning" in lower_role
+            or "first key" in lower_role
+        ):
+            parts.append(
+                "<structured_output_contract>\n"
+                "- If SYSTEM_INSTRUCTIONS requires JSON, output exactly one JSON object and nothing else.\n"
+                "- Never omit a required key just because it feels internal.\n"
+                "- If SYSTEM_INSTRUCTIONS requires a reasoning field, include reasoning in every final JSON response.\n"
+                "- If SYSTEM_INSTRUCTIONS specifies key order, preserve that order in the final JSON.\n"
+                "</structured_output_contract>"
+            )
         if role_text:
             parts.append(f"<system_instructions>\n{role_text}\n</system_instructions>")
         return "\n\n".join(part.strip() for part in parts if part.strip()).strip()
