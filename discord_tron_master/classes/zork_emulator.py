@@ -1768,6 +1768,50 @@ class ZorkEmulator:
         return cls.DEFAULT_TURN_ADVANCE_MINUTES
 
     @classmethod
+    def _extract_time_skip_request(
+        cls,
+        action_text: object,
+    ) -> Optional[Dict[str, object]]:
+        text = " ".join(str(action_text or "").strip().split())
+        if not text:
+            return None
+        match = re.match(
+            r"^(?:time[\s-]*skip|timeskip)\b(?:\s+(.*))?$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        desc = str(match.group(1) or "").strip()
+        minutes = 60
+        total = 0
+        found = False
+        for raw_value, unit in re.findall(
+            r"(\d+(?:\.\d+)?)\s*(d(?:ays?)?|h(?:ours?|rs?)?|m(?:in(?:ute)?s?)?)\b",
+            desc,
+            flags=re.IGNORECASE,
+        ):
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            unit_l = unit.lower()
+            if unit_l.startswith("d"):
+                total += int(round(value * 24 * 60))
+            elif unit_l.startswith("h"):
+                total += int(round(value * 60))
+            else:
+                total += int(round(value))
+            found = True
+        if found and total > 0:
+            minutes = total
+        minutes = max(1, min(7 * 24 * 60, int(minutes)))
+        return {
+            "minutes": minutes,
+            "description": desc,
+        }
+
+    @classmethod
     def _ensure_game_time_progress(
         cls,
         campaign_state: Dict[str, object],
@@ -1797,13 +1841,22 @@ class ZorkEmulator:
             campaign_state["game_time"] = cls._game_time_from_total_minutes(cur_total)
             return campaign_state
 
-        base_minutes = cls._estimate_turn_time_advance_minutes(
-            action_text, narration_text
-        )
+        time_skip_request = cls._extract_time_skip_request(action_text)
+        if time_skip_request is not None:
+            base_minutes = cls._coerce_non_negative_int(
+                time_skip_request.get("minutes", 60), default=60
+            )
+        else:
+            base_minutes = cls._estimate_turn_time_advance_minutes(
+                action_text, narration_text
+            )
         speed_multiplier = cls._speed_multiplier_from_state(campaign_state)
         scaled_minutes = int(round(base_minutes * speed_multiplier))
         delta_minutes = max(cls.MIN_TURN_ADVANCE_MINUTES, scaled_minutes)
-        delta_minutes = min(cls.MAX_TURN_ADVANCE_MINUTES, delta_minutes)
+        if time_skip_request is None:
+            delta_minutes = min(cls.MAX_TURN_ADVANCE_MINUTES, delta_minutes)
+        else:
+            delta_minutes = min(7 * 24 * 60, delta_minutes)
 
         # If model froze or regressed time, force monotonic advance from pre-turn time.
         new_total = max(pre_total, cur_total) + delta_minutes
@@ -1820,6 +1873,11 @@ class ZorkEmulator:
                 f"post_model=Day {cur_snapshot.get('day')} {int(cur_snapshot.get('hour', 0)):02d}:"
                 f"{int(cur_snapshot.get('minute', 0)):02d} "
                 f"delta_min={delta_minutes} speed={speed_multiplier}"
+                + (
+                    f" explicit_time_skip={time_skip_request.get('minutes')}"
+                    if time_skip_request is not None
+                    else ""
+                )
             ),
         )
         return campaign_state
@@ -1869,21 +1927,47 @@ class ZorkEmulator:
     ) -> Dict[str, object]:
         out = dict(state_update) if isinstance(state_update, dict) else {}
         current_time = cls._extract_game_time_snapshot(campaign_state)
-        out["game_time"] = cls._game_time_from_total_minutes(
-            cls._game_time_to_total_minutes(current_time)
+        provided_time = out.get("game_time")
+        if isinstance(provided_time, dict):
+            out["game_time"] = cls._game_time_from_total_minutes(
+                cls._game_time_to_total_minutes(provided_time)
+            )
+        else:
+            out["game_time"] = cls._game_time_from_total_minutes(
+                cls._game_time_to_total_minutes(current_time)
+            )
+        if bool(campaign_state.get("on_rails", False)):
+            out["current_chapter"] = cls._coerce_non_negative_int(
+                out.get("current_chapter", campaign_state.get("current_chapter", 0)),
+                default=cls._coerce_non_negative_int(
+                    campaign_state.get("current_chapter", 0), default=0
+                ),
+            )
+            out["current_scene"] = cls._coerce_non_negative_int(
+                out.get("current_scene", campaign_state.get("current_scene", 0)),
+                default=cls._coerce_non_negative_int(
+                    campaign_state.get("current_scene", 0), default=0
+                ),
+            )
+            return out
+
+        active_chapters = cls._chapters_for_prompt(
+            campaign_state,
+            active_only=True,
+            limit=1,
         )
-        out["current_chapter"] = cls._coerce_non_negative_int(
-            out.get("current_chapter", campaign_state.get("current_chapter", 0)),
-            default=cls._coerce_non_negative_int(
-                campaign_state.get("current_chapter", 0), default=0
-            ),
+        active_row = active_chapters[0] if active_chapters else {}
+        default_chapter = cls._chapter_slug_key(
+            active_row.get("slug") or campaign_state.get("current_chapter")
         )
-        out["current_scene"] = cls._coerce_non_negative_int(
-            out.get("current_scene", campaign_state.get("current_scene", 0)),
-            default=cls._coerce_non_negative_int(
-                campaign_state.get("current_scene", 0), default=0
-            ),
+        default_scene = cls._chapter_slug_key(
+            active_row.get("current_scene") or campaign_state.get("current_scene")
         )
+
+        chapter_slug = cls._chapter_slug_key(out.get("current_chapter"))
+        scene_slug = cls._chapter_slug_key(out.get("current_scene"))
+        out["current_chapter"] = chapter_slug or default_chapter or ""
+        out["current_scene"] = scene_slug or default_scene or ""
         return out
 
     @classmethod
@@ -3046,6 +3130,35 @@ class ZorkEmulator:
             }
             lines.append(json.dumps(line, ensure_ascii=False, separators=(",", ":")))
         return "\n".join(lines)
+
+    @classmethod
+    def _scrub_scene_output_npc_awareness(
+        cls,
+        scene_output: object,
+    ) -> object:
+        if not isinstance(scene_output, dict):
+            return scene_output
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list):
+            return scene_output
+        changed = False
+        cleaned_beats = []
+        for beat in beats:
+            if not isinstance(beat, dict):
+                cleaned_beats.append(beat)
+                continue
+            if list(beat.get("aware_npc_slugs") or []):
+                row = dict(beat)
+                row["aware_npc_slugs"] = []
+                cleaned_beats.append(row)
+                changed = True
+            else:
+                cleaned_beats.append(beat)
+        if not changed:
+            return scene_output
+        out = dict(scene_output)
+        out["beats"] = cleaned_beats
+        return out
 
     @classmethod
     def _scene_output_recent_lines(
@@ -9567,6 +9680,25 @@ class ZorkEmulator:
     ) -> Dict[str, Dict[str, object]]:
         registry = cls._campaign_player_registry(campaign_id)
         out: Dict[str, Dict[str, object]] = {}
+
+        def _add_player_token(tokens: set[str], raw_value: object) -> None:
+            value_text = str(raw_value or "").strip()
+            if not value_text:
+                return
+            candidates = {value_text}
+            for sep in (",", "(", " - "):
+                if sep in value_text:
+                    prefix = value_text.split(sep, 1)[0].strip()
+                    if prefix:
+                        candidates.add(prefix)
+            for candidate in candidates:
+                normalized = cls._normalize_match_text(candidate)
+                if normalized:
+                    tokens.add(normalized)
+                slug_key = cls._player_slug_key(candidate)
+                if slug_key:
+                    tokens.add(slug_key)
+
         for entry in registry.get("by_user_id", {}).values():
             if not isinstance(entry, dict):
                 continue
@@ -9580,10 +9712,7 @@ class ZorkEmulator:
                 tokens.add(cls._normalize_match_text(f"<@{user_id}>"))
                 tokens.add(cls._normalize_match_text(f"<@!{user_id}>"))
             if name:
-                tokens.add(cls._normalize_match_text(name))
-                name_slug = cls._player_slug_key(name)
-                if name_slug:
-                    tokens.add(name_slug)
+                _add_player_token(tokens, name)
             if slug:
                 tokens.add(cls._normalize_match_text(slug))
             if mention:
@@ -10131,6 +10260,25 @@ class ZorkEmulator:
         return normalized
 
     @classmethod
+    def _calendar_should_prune_stale_event(
+        cls,
+        event: Dict[str, object],
+        *,
+        hours_remaining: int,
+    ) -> bool:
+        if not isinstance(event, dict):
+            return False
+        if hours_remaining >= 0:
+            return False
+        overdue_hours = abs(int(hours_remaining))
+        fired_notice_key = str(event.get("fired_notice_key") or "").strip()
+        if overdue_hours >= 24:
+            return True
+        if fired_notice_key and overdue_hours >= 6:
+            return True
+        return False
+
+    @classmethod
     def _calendar_for_prompt(
         cls,
         campaign_state: Dict[str, object],
@@ -10146,6 +10294,7 @@ class ZorkEmulator:
             calendar = []
         entries: List[Dict[str, object]] = []
         calendar_changed = False
+        kept_calendar: List[Dict[str, object]] = []
         for raw in calendar:
             normalized = cls._calendar_normalize_event(
                 raw,
@@ -10182,6 +10331,12 @@ class ZorkEmulator:
                     calendar_changed = True
             hours_remaining = ((fire_day - current_day) * 24) + (fire_hour - current_hour)
             days_remaining = fire_day - current_day
+            if cls._calendar_should_prune_stale_event(
+                normalized,
+                hours_remaining=hours_remaining,
+            ):
+                calendar_changed = True
+                continue
             if hours_remaining < 0:
                 status = "overdue"
             elif days_remaining == 0:
@@ -10195,6 +10350,7 @@ class ZorkEmulator:
             view["hours_remaining"] = hours_remaining
             view["status"] = status
             entries.append(view)
+            kept_calendar.append(dict(raw) if isinstance(raw, dict) else dict(normalized))
         entries.sort(
             key=lambda item: (
                 int(item.get("fire_day", current_day)),
@@ -10203,7 +10359,7 @@ class ZorkEmulator:
             )
         )
         if calendar_changed and isinstance(campaign_state, dict):
-            campaign_state["calendar"] = calendar
+            campaign_state["calendar"] = kept_calendar
         return entries
 
     @classmethod
@@ -12065,6 +12221,7 @@ class ZorkEmulator:
     def _build_characters_for_prompt(
         cls,
         characters: Dict[str, dict],
+        campaign_state: Dict[str, object],
         player_state: Dict[str, object],
         recent_text: str,
     ) -> list:
@@ -12078,41 +12235,55 @@ class ZorkEmulator:
             return []
         player_location = str(player_state.get("location") or "").strip().lower()
         recent_lower = recent_text.lower() if recent_text else ""
+        overlay_keys = {
+            "location",
+            "current_status",
+            "room_title",
+            "room_summary",
+            "room_id",
+        }
 
         nearby = []
         mentioned = []
         distant = []
 
         for slug, char in characters.items():
-            char_location = str(char.get("location") or "").strip().lower()
-            char_name = str(char.get("name") or slug).strip().lower()
-            is_deceased = bool(char.get("deceased_reason"))
+            effective_char = dict(char)
+            raw_overlay = campaign_state.get(slug) if isinstance(campaign_state, dict) else None
+            if isinstance(raw_overlay, dict):
+                for key in overlay_keys:
+                    if key in raw_overlay and raw_overlay.get(key) is not None:
+                        effective_char[key] = raw_overlay.get(key)
+
+            char_location = str(effective_char.get("location") or "").strip().lower()
+            char_name = str(effective_char.get("name") or slug).strip().lower()
+            is_deceased = bool(effective_char.get("deceased_reason"))
 
             if not is_deceased and player_location and char_location == player_location:
                 # Full record for nearby characters (strip image_url — harness-managed).
-                entry = {k: v for k, v in char.items() if k != "image_url"}
+                entry = {k: v for k, v in effective_char.items() if k != "image_url"}
                 entry["_slug"] = slug
                 nearby.append(entry)
             elif char_name in recent_lower or slug in recent_lower:
                 # Condensed for recently mentioned.
                 entry = {
                     "_slug": slug,
-                    "name": char.get("name", slug),
-                    "speech_style": char.get("speech_style"),
-                    "location": char.get("location"),
-                    "current_status": char.get("current_status"),
-                    "allegiance": char.get("allegiance"),
+                    "name": effective_char.get("name", slug),
+                    "speech_style": effective_char.get("speech_style"),
+                    "location": effective_char.get("location"),
+                    "current_status": effective_char.get("current_status"),
+                    "allegiance": effective_char.get("allegiance"),
                 }
                 if is_deceased:
-                    entry["deceased_reason"] = char.get("deceased_reason")
+                    entry["deceased_reason"] = effective_char.get("deceased_reason")
                 mentioned.append(entry)
             else:
                 # Minimal for distant/deceased.
-                entry = {"_slug": slug, "name": char.get("name", slug)}
+                entry = {"_slug": slug, "name": effective_char.get("name", slug)}
                 if is_deceased:
-                    entry["deceased_reason"] = char.get("deceased_reason")
+                    entry["deceased_reason"] = effective_char.get("deceased_reason")
                 else:
-                    entry["location"] = char.get("location")
+                    entry["location"] = effective_char.get("location")
                 distant.append(entry)
 
         result = nearby + mentioned + distant
@@ -12905,7 +13076,7 @@ class ZorkEmulator:
 
         characters = cls.get_campaign_characters(campaign)
         characters_for_prompt = cls._build_characters_for_prompt(
-            characters, player_state, recent_text
+            characters, state, player_state, recent_text
         )
         characters_for_prompt = cls._fit_characters_to_budget(
             characters_for_prompt, cls.MAX_CHARACTERS_CHARS
@@ -13353,9 +13524,10 @@ class ZorkEmulator:
 
                     player_state = cls.get_player_state(player)
                     action_clean = action.strip().lower()
+                    time_skip_request = cls._extract_time_skip_request(action)
                     if (
                         getattr(ctx, "guild", None) is None
-                        and action_clean in ("time skip", "time-skip", "timeskip")
+                        and time_skip_request is not None
                     ):
                         return (
                             "Time skips are disabled in private DMs. "
@@ -13717,6 +13889,7 @@ class ZorkEmulator:
                         return cls.format_roster(characters)
 
                     sms_activity_detected = False
+                    sms_inline_draft: Optional[Tuple[str, str]] = None
                     is_ooc_action = bool(
                         re.match(r"\s*\[OOC\b", action or "", re.IGNORECASE)
                     )
@@ -13724,30 +13897,18 @@ class ZorkEmulator:
                         sms_intent = cls._extract_inline_sms_intent(action)
                         if sms_intent is not None:
                             sms_activity_detected = True
+                            sms_inline_draft = sms_intent
                             sms_recipient, sms_message = sms_intent
-                            campaign_state_sms = cls.get_campaign_state(campaign)
-                            game_time_sms = cls._extract_game_time_snapshot(
-                                campaign_state_sms
-                            )
                             sms_sender = str(
                                 player_state.get("character_name")
                                 or f"Player {ctx.author.id}"
                             ).strip()[:80]
-                            thread_key, _thread_label, _entry = cls._sms_write(
-                                campaign_state_sms,
-                                thread=cls._sms_normalize_thread_key(sms_recipient)
-                                or sms_recipient,
-                                sender=sms_sender,
-                                recipient=sms_recipient,
-                                message=sms_message,
-                                game_time=game_time_sms,
-                                turn_id=0,
+                            thread_key = (
+                                cls._sms_normalize_thread_key(sms_recipient)
+                                or sms_recipient
                             )
-                            campaign.state_json = cls._dump_json(campaign_state_sms)
-                            campaign.updated = db.func.now()
-                            db.session.commit()
                             _zork_log(
-                                "SMS AUTO WRITE",
+                                "SMS AUTO DRAFT",
                                 f"thread={thread_key!r} sender={sms_sender!r} recipient={sms_recipient!r}",
                             )
 
@@ -13788,13 +13949,43 @@ class ZorkEmulator:
                             f'The player\'s action that interrupted it: "{action}"\n'
                             "Incorporate the interruption naturally into your narration."
                         )
-                    if action_clean in ("time skip", "time-skip", "timeskip"):
+                    if time_skip_request is not None:
+                        skip_desc = str(
+                            time_skip_request.get("description") or ""
+                        ).strip()
+                        skip_minutes = cls._coerce_non_negative_int(
+                            time_skip_request.get("minutes", 60), default=60
+                        )
                         turn_tail_extra_lines.append(
                             "TIME_SKIP: The player requests a time skip. Fast-forward past "
                             "any idle, repetitive, or low-stakes moments and jump ahead to "
                             "the next meaningful story beat — a new encounter, discovery, "
                             "twist, or decision point. Summarise skipped time in one brief "
-                            "sentence, then narrate the new moment in full."
+                            "sentence, then narrate the new moment in full.\n"
+                            f"- requested_skip_minutes={skip_minutes}\n"
+                            + (
+                                f"- requested_skip_description={skip_desc}\n"
+                                if skip_desc
+                                else ""
+                            )
+                        )
+                    if sms_inline_draft is not None:
+                        sms_recipient, sms_message = sms_inline_draft
+                        sms_sender = str(
+                            player_state.get("character_name")
+                            or f"Player {ctx.author.id}"
+                        ).strip()[:80]
+                        sms_thread = (
+                            cls._sms_normalize_thread_key(sms_recipient)
+                            or sms_recipient
+                        )
+                        turn_tail_extra_lines.append(
+                            "SMS_DRAFT: The player's action looks like an attempted outgoing text.\n"
+                            f"- thread='{sms_thread}'\n"
+                            f"- from='{sms_sender}' to='{sms_recipient}'\n"
+                            f"- message='{sms_message}'\n"
+                            "Do NOT assume it has been sent yet. If it really sends in this scene, call sms_write. "
+                            "If the send fails, is interrupted, is reconsidered, or never actually happens, do not call sms_write."
                         )
                     turn_response_style_note = cls._turn_response_style_note(
                         cls.normalize_difficulty(campaign_state.get("difficulty", "normal"))
@@ -16093,16 +16284,19 @@ class ZorkEmulator:
                     raw_narration = narration
                     narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                     narration = cls._strip_inventory_from_narration(narration)
-                    inferred_aware_npc_slugs = cls._infer_aware_npc_slugs(
-                        campaign,
-                        player_state,
-                        turn_visibility,
-                        narration_text=raw_narration,
-                        summary_update=summary_update,
-                        private_context_candidate=private_context_candidate,
-                    )
-                    if inferred_aware_npc_slugs:
-                        turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
+                    if sms_activity_detected or private_phone_redacted:
+                        turn_visibility["aware_npc_slugs"] = []
+                    else:
+                        inferred_aware_npc_slugs = cls._infer_aware_npc_slugs(
+                            campaign,
+                            player_state,
+                            turn_visibility,
+                            narration_text=raw_narration,
+                            summary_update=summary_update,
+                            private_context_candidate=private_context_candidate,
+                        )
+                        if inferred_aware_npc_slugs:
+                            turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
                     turn_visibility = cls._sanitize_turn_awareness_for_scene(
                         campaign,
                         player_state,
@@ -16578,6 +16772,10 @@ class ZorkEmulator:
                             turn_visibility.get("actor_player_slug") or ""
                         ).strip(),
                     )
+                    if sms_activity_detected or private_phone_redacted:
+                        scene_output = cls._scrub_scene_output_npc_awareness(
+                            scene_output
+                        )
                     rendered_scene_output = cls._scene_output_rendered_text(
                         scene_output
                     )
