@@ -429,6 +429,9 @@ class ZorkEmulator:
         "- Track location/exits in player_state_update, not in narration prose.\n"
         "- CRITICAL — OTHER PLAYER CHARACTERS ARE OFF-LIMITS:\n"
         "  PARTY_SNAPSHOT entries (except the acting player) are REAL HUMANS controlling their own characters.\n"
+        "  CAMPAIGN_PLAYERS is the authoritative list of real human-controlled player characters across the campaign, even when they are off-scene.\n"
+        "  WORLD_CHARACTERS is NPC-ONLY. Never create, update, or remove CAMPAIGN_PLAYERS via character_updates.\n"
+        "  In multiplayer campaigns there is no single main character. Each real player character is a protagonist of their own thread.\n"
         "  You MUST NOT write ANY of the following for another player character:\n"
         "    * Dialogue or quoted speech\n"
         "    * Actions, movements, or decisions (e.g. 'she draws her sword', 'he follows you')\n"
@@ -2138,6 +2141,32 @@ class ZorkEmulator:
             by_user_id[row.user_id] = entry
             by_slug[slug] = entry
         return {"by_user_id": by_user_id, "by_slug": by_slug}
+
+    @classmethod
+    def _campaign_players_for_prompt(
+        cls,
+        campaign_id: int,
+        *,
+        limit: int = 12,
+    ) -> List[Dict[str, object]]:
+        registry = cls._campaign_player_registry(campaign_id)
+        out: List[Dict[str, object]] = []
+        for raw_user_id, entry in registry.get("by_user_id", {}).items():
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                continue
+            out.append(
+                {
+                    "user_id": user_id,
+                    "discord_mention": str(entry.get("discord_mention") or "").strip() or None,
+                    "name": str(entry.get("name") or "").strip() or None,
+                    "player_slug": str(entry.get("slug") or "").strip() or None,
+                }
+            )
+            if len(out) >= max(1, limit):
+                break
+        return out
 
     @staticmethod
     def _safe_turn_meta(turn: ZorkTurn) -> Dict[str, object]:
@@ -8102,7 +8131,102 @@ class ZorkEmulator:
     def get_campaign_characters(cls, campaign: ZorkCampaign) -> Dict[str, dict]:
         """Load the characters dict from campaign.characters_json."""
         data = cls._load_json(campaign.characters_json, {})
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        sanitized = cls._sanitize_npc_roster_against_players(campaign.id, data)
+        if sanitized != data:
+            campaign.characters_json = cls._dump_json(sanitized)
+            campaign.updated = db.func.now()
+            db.session.commit()
+        return sanitized
+
+    @classmethod
+    def _campaign_player_match_keys(
+        cls,
+        campaign_id: int,
+    ) -> Dict[str, Dict[str, object]]:
+        registry = cls._campaign_player_registry(campaign_id)
+        out: Dict[str, Dict[str, object]] = {}
+        for entry in registry.get("by_user_id", {}).values():
+            if not isinstance(entry, dict):
+                continue
+            tokens: set[str] = set()
+            user_id = entry.get("user_id")
+            name = str(entry.get("name") or "").strip()
+            slug = str(entry.get("slug") or "").strip()
+            mention = str(entry.get("discord_mention") or "").strip()
+            if isinstance(user_id, int):
+                tokens.add(str(user_id))
+                tokens.add(cls._normalize_match_text(f"<@{user_id}>"))
+                tokens.add(cls._normalize_match_text(f"<@!{user_id}>"))
+            if name:
+                tokens.add(cls._normalize_match_text(name))
+                name_slug = cls._player_slug_key(name)
+                if name_slug:
+                    tokens.add(name_slug)
+            if slug:
+                tokens.add(cls._normalize_match_text(slug))
+            if mention:
+                tokens.add(cls._normalize_match_text(mention))
+            tokens = {token for token in tokens if token}
+            for token in tokens:
+                out[token] = entry
+        return out
+
+    @classmethod
+    def _character_update_hits_player(
+        cls,
+        campaign_id: int,
+        raw_slug: object,
+        fields: object,
+    ) -> Optional[Dict[str, object]]:
+        player_index = cls._campaign_player_match_keys(campaign_id)
+        candidates: List[str] = []
+        slug_text = str(raw_slug or "").strip()
+        if slug_text:
+            candidates.append(cls._normalize_match_text(slug_text))
+            slug_key = cls._player_slug_key(slug_text)
+            if slug_key:
+                candidates.append(slug_key)
+        if isinstance(fields, dict):
+            for key in ("name", "slug", "player_slug", "discord_mention", "user_id"):
+                raw_value = fields.get(key)
+                value_text = str(raw_value or "").strip()
+                if not value_text:
+                    continue
+                candidates.append(cls._normalize_match_text(value_text))
+                value_slug = cls._player_slug_key(value_text)
+                if value_slug:
+                    candidates.append(value_slug)
+        for candidate in candidates:
+            if not candidate:
+                continue
+            match = player_index.get(candidate)
+            if match is not None:
+                return match
+        return None
+
+    @classmethod
+    def _sanitize_npc_roster_against_players(
+        cls,
+        campaign_id: int,
+        characters: Dict[str, dict],
+    ) -> Dict[str, dict]:
+        if not isinstance(characters, dict) or not characters:
+            return {}
+        out: Dict[str, dict] = {}
+        for slug, payload in characters.items():
+            match = cls._character_update_hits_player(campaign_id, slug, payload)
+            if match is not None:
+                logger.warning(
+                    "Dropping WORLD_CHARACTERS entry %r because it collides with player %r (%s)",
+                    slug,
+                    match.get("name"),
+                    match.get("user_id"),
+                )
+                continue
+            out[str(slug)] = payload
+        return out
 
     @classmethod
     def _apply_character_updates(
@@ -8110,6 +8234,7 @@ class ZorkEmulator:
         existing: Dict[str, dict],
         updates: Dict[str, object],
         on_rails: bool = False,
+        campaign_id: Optional[int] = None,
     ) -> Dict[str, dict]:
         """Merge character updates into existing characters dict.
 
@@ -8123,6 +8248,20 @@ class ZorkEmulator:
             slug = str(raw_slug).strip()
             if not slug:
                 continue
+            if campaign_id is not None:
+                player_match = cls._character_update_hits_player(
+                    campaign_id,
+                    slug,
+                    fields,
+                )
+                if player_match is not None:
+                    logger.warning(
+                        "Ignoring character_update for %r because it targets player %r (%s)",
+                        slug,
+                        player_match.get("name"),
+                        player_match.get("user_id"),
+                    )
+                    continue
 
             # Resolve loose slug/name variants back to an existing slug.
             target_slug = cls._resolve_existing_character_slug(existing, slug)
@@ -8215,6 +8354,8 @@ class ZorkEmulator:
                     continue
                 # New character — store everything.
                 existing[slug] = dict(fields)
+        if campaign_id is not None:
+            return cls._sanitize_npc_roster_against_players(campaign_id, existing)
         return existing
 
     @classmethod
@@ -9785,6 +9926,7 @@ class ZorkEmulator:
         unread_messages = 0
         unread_threads = 0
         labels: List[str] = []
+        unread_thread_markers: Dict[str, int] = {}
         for thread_key, row in threads.items():
             if not isinstance(row, dict):
                 continue
@@ -9804,6 +9946,11 @@ class ZorkEmulator:
                 marker = seq if seq > 0 else turn_id
                 if marker > seen_marker:
                     thread_unread += 1
+                    prev_marker = cls._coerce_non_negative_int(
+                        unread_thread_markers.get(thread_key, 0), default=0
+                    )
+                    if marker > prev_marker:
+                        unread_thread_markers[thread_key] = marker
             if thread_unread <= 0:
                 continue
             unread_messages += thread_unread
@@ -9825,6 +9972,7 @@ class ZorkEmulator:
             "messages": unread_messages,
             "threads": unread_threads,
             "labels": deduped_labels,
+            "thread_markers": unread_thread_markers,
             "last_notified_abs_hour": cls._coerce_non_negative_int(
                 actor_row.get("last_notified_abs_hour", -1),
                 default=-1,
@@ -11282,6 +11430,7 @@ class ZorkEmulator:
         _currently_attentive = cls._build_currently_attentive_players_for_prompt(
             campaign.id
         )
+        _campaign_players = cls._campaign_players_for_prompt(campaign.id)
         _source_payload = cls._source_material_prompt_payload(campaign.id)
         _memory_lookup_enabled = cls._memory_lookup_enabled_for_prompt(
             summary,
@@ -11330,6 +11479,7 @@ class ZorkEmulator:
             f"DIFFICULTY: {_difficulty}\n"
             f"ATTENTION_WINDOW_SECONDS: {cls.ATTENTION_WINDOW_SECONDS}\n"
             f"CURRENTLY_ATTENTIVE_PLAYERS: {cls._dump_json(_currently_attentive)}\n"
+            f"CAMPAIGN_PLAYERS: {cls._dump_json(_campaign_players)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
@@ -14397,6 +14547,7 @@ class ZorkEmulator:
                             existing_chars,
                             character_updates,
                             on_rails=_on_rails,
+                            campaign_id=campaign.id,
                         )
                         campaign.characters_json = cls._dump_json(existing_chars)
                         _zork_log(
@@ -14651,6 +14802,27 @@ class ZorkEmulator:
                         cls._increment_auto_fix_counter(
                             campaign_state, "sms_unread_notice"
                         )
+                        sms_summary = cls._sms_unread_summary_for_player(
+                            campaign_state,
+                            actor_id=ctx.author.id,
+                            player_state=player_state,
+                        )
+                        thread_markers = (
+                            sms_summary.get("thread_markers")
+                            if isinstance(sms_summary, dict)
+                            else {}
+                        )
+                        if isinstance(thread_markers, dict) and thread_markers:
+                            read_changed = cls._sms_mark_threads_read(
+                                campaign_state,
+                                actor_id=ctx.author.id,
+                                player_state=player_state,
+                                thread_markers=thread_markers,
+                            )
+                            if read_changed:
+                                cls._increment_auto_fix_counter(
+                                    campaign_state, "sms_auto_mark_read"
+                                )
 
                     if timer_scheduled_delay is not None:
                         expiry_ts = int(time.time()) + timer_scheduled_delay
@@ -15184,6 +15356,7 @@ class ZorkEmulator:
                         existing_chars,
                         character_updates,
                         on_rails=_on_rails,
+                        campaign_id=campaign.id,
                     )
                     campaign.characters_json = cls._dump_json(existing_chars)
                     _zork_log(
