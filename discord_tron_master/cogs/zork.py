@@ -123,6 +123,51 @@ class Zork(commands.Cog):
         label = " ".join(label_tokens).strip() or None
         return "ingest", label
 
+    def _parse_campaign_export_options(
+        self,
+        raw: str | None,
+    ) -> tuple[str, str]:
+        export_type = "full"
+        raw_format = "jsonl"
+        if not raw:
+            return export_type, raw_format
+        try:
+            tokens = shlex.split(raw)
+        except ValueError:
+            tokens = str(raw).split()
+        i = 0
+        while i < len(tokens):
+            token = str(tokens[i] or "")
+            low = token.lower()
+            if low.startswith("--type="):
+                export_type = token.split("=", 1)[1].strip().lower() or export_type
+                i += 1
+                continue
+            if low == "--type":
+                if i + 1 < len(tokens):
+                    export_type = str(tokens[i + 1] or "").strip().lower() or export_type
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if low.startswith("--raw-format="):
+                raw_format = token.split("=", 1)[1].strip().lower() or raw_format
+                i += 1
+                continue
+            if low == "--raw-format":
+                if i + 1 < len(tokens):
+                    raw_format = str(tokens[i + 1] or "").strip().lower() or raw_format
+                    i += 2
+                else:
+                    i += 1
+                continue
+            i += 1
+        if export_type not in {"full", "raw"}:
+            export_type = "full"
+        if raw_format not in {"script", "markdown", "json", "jsonl", "loglines"}:
+            raw_format = "jsonl"
+        return export_type, raw_format
+
     def _source_material_export_text(
         self,
         document_key: str,
@@ -656,7 +701,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
-            f"- `{prefix}zork campaign-export` export a reconstructed campaign rulebook and story-generator prompt from the full playthrough\n"
+            f"- `{prefix}zork campaign-export [--type full|raw] [--raw-format jsonl|json|markdown|script|loglines]` export the campaign and stored source docs\n"
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
@@ -1665,7 +1710,7 @@ class Zork(commands.Cog):
             await ctx.send("Source-material export produced no files.")
 
     @zork.command(name="campaign-export")
-    async def zork_campaign_export(self, ctx):
+    async def zork_campaign_export(self, ctx, *, options: str = None):
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1673,6 +1718,7 @@ class Zork(commands.Cog):
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
+        export_type, raw_format = self._parse_campaign_export_options(options)
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
@@ -1691,7 +1737,7 @@ class Zork(commands.Cog):
         try:
             try:
                 status_msg = await ctx.send(
-                    f"Campaign export: starting for `{campaign_name}`..."
+                    f"Campaign export: starting `{export_type}` export for `{campaign_name}`..."
                 )
             except Exception:
                 status_msg = None
@@ -1700,12 +1746,19 @@ class Zork(commands.Cog):
                 if campaign is None:
                     await ctx.send("No active campaign in this channel.")
                     return
-                export_files = await ZorkEmulator._generate_campaign_export_artifacts(
-                    campaign,
-                    ctx.message,
-                    channel=ctx.channel,
-                    status_message=status_msg,
-                )
+                if export_type == "raw":
+                    export_files = await ZorkEmulator._generate_campaign_raw_export_artifacts(
+                        campaign,
+                        raw_format=raw_format,
+                        status_message=status_msg,
+                    )
+                else:
+                    export_files = await ZorkEmulator._generate_campaign_export_artifacts(
+                        campaign,
+                        ctx.message,
+                        channel=ctx.channel,
+                        status_message=status_msg,
+                    )
                 await ZorkEmulator._edit_progress_message(
                     status_msg,
                     "Campaign export: packaging stored source-material documents...",

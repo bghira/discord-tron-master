@@ -4117,6 +4117,260 @@ class ZorkEmulator:
         return "\n".join(lines).strip()
 
     @classmethod
+    def _campaign_export_turn_events(
+        cls,
+        campaign: ZorkCampaign,
+    ) -> list[dict[str, object]]:
+        turns = (
+            ZorkTurn.query.filter_by(campaign_id=campaign.id)
+            .order_by(ZorkTurn.id.asc())
+            .all()
+        )
+        registry = cls._campaign_player_registry(campaign.id)
+        by_user_id = registry.get("by_user_id", {})
+        events: list[dict[str, object]] = []
+        for turn in turns:
+            meta = cls._load_json(turn.meta_json, {})
+            if not isinstance(meta, dict):
+                meta = {}
+            player_name = None
+            player_slug = None
+            if turn.user_id is not None:
+                entry = by_user_id.get(turn.user_id) or {}
+                player_name = str(entry.get("name") or f"Player {turn.user_id}").strip()
+                player_slug = str(entry.get("player_slug") or "").strip() or None
+            events.append(
+                {
+                    "turn_id": int(turn.id),
+                    "created_at": turn.created.isoformat() if turn.created else None,
+                    "kind": str(turn.kind or ""),
+                    "user_id": int(turn.user_id) if turn.user_id is not None else None,
+                    "player_name": player_name,
+                    "player_slug": player_slug,
+                    "channel_id": int(turn.channel_id) if turn.channel_id is not None else None,
+                    "discord_message_id": (
+                        int(turn.discord_message_id)
+                        if turn.discord_message_id is not None
+                        else None
+                    ),
+                    "user_message_id": (
+                        int(turn.user_message_id)
+                        if turn.user_message_id is not None
+                        else None
+                    ),
+                    "content": str(turn.content or ""),
+                    "meta": meta,
+                }
+            )
+        return events
+
+    @classmethod
+    def _campaign_raw_export_filename(cls, raw_format: str) -> str:
+        fmt = str(raw_format or "jsonl").strip().lower()
+        if fmt == "json":
+            return "campaign-raw.json"
+        if fmt == "markdown":
+            return "campaign-raw-markdown.md"
+        if fmt == "script":
+            return "campaign-raw-script.txt"
+        if fmt == "loglines":
+            return "campaign-raw-loglines.txt"
+        return "campaign-raw.jsonl"
+
+    @classmethod
+    def _render_campaign_raw_jsonl(
+        cls,
+        campaign: ZorkCampaign,
+        events: list[dict[str, object]],
+    ) -> str:
+        rows = [
+            {
+                "type": "campaign",
+                "campaign_id": int(campaign.id),
+                "campaign_name": str(campaign.name or ""),
+                "guild_id": int(campaign.guild_id),
+                "created_at": campaign.created.isoformat() if campaign.created else None,
+                "updated_at": campaign.updated.isoformat() if campaign.updated else None,
+            }
+        ]
+        rows.extend({"type": "turn", **event} for event in events)
+        return "\n".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows
+        ).strip()
+
+    @classmethod
+    def _render_campaign_raw_json(
+        cls,
+        campaign: ZorkCampaign,
+        events: list[dict[str, object]],
+    ) -> str:
+        payload = {
+            "campaign": {
+                "id": int(campaign.id),
+                "name": str(campaign.name or ""),
+                "guild_id": int(campaign.guild_id),
+                "created_at": campaign.created.isoformat() if campaign.created else None,
+                "updated_at": campaign.updated.isoformat() if campaign.updated else None,
+            },
+            "events": events,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    @classmethod
+    def _render_campaign_raw_markdown(
+        cls,
+        campaign: ZorkCampaign,
+        events: list[dict[str, object]],
+    ) -> str:
+        lines = [
+            f"# Campaign Raw Export: {campaign.name}",
+            "",
+            "## Table of Contents",
+            "",
+            "- [Campaign Metadata](#campaign-metadata)",
+        ]
+        for event in events:
+            lines.append(f"- [Turn {event.get('turn_id')}](#turn-{event.get('turn_id')})")
+        lines.extend(
+            [
+                "",
+                "## Campaign Metadata",
+                "",
+                f"- Campaign ID: `{campaign.id}`",
+                f"- Guild ID: `{campaign.guild_id}`",
+                f"- Created: `{campaign.created.isoformat() if campaign.created else ''}`",
+                f"- Updated: `{campaign.updated.isoformat() if campaign.updated else ''}`",
+            ]
+        )
+        for event in events:
+            turn_id = event.get("turn_id")
+            lines.extend(
+                [
+                    "",
+                    f"## Turn {turn_id}",
+                    "",
+                    f"- Kind: `{event.get('kind')}`",
+                    f"- Timestamp: `{event.get('created_at') or ''}`",
+                    f"- User ID: `{event.get('user_id')}`",
+                    f"- Player: `{event.get('player_name') or ''}`",
+                    f"- Player Slug: `{event.get('player_slug') or ''}`",
+                    "",
+                    "### Content",
+                    "",
+                    "```text",
+                    str(event.get("content") or ""),
+                    "```",
+                    "",
+                    "### Meta",
+                    "",
+                    "```json",
+                    json.dumps(event.get("meta") or {}, ensure_ascii=False, indent=2, sort_keys=True),
+                    "```",
+                ]
+            )
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def _render_campaign_raw_script(
+        cls,
+        campaign: ZorkCampaign,
+        events: list[dict[str, object]],
+    ) -> str:
+        lines = [
+            f"CAMPAIGN\t{campaign.name}",
+            f"\tID\t{campaign.id}",
+            f"\tGUILD\t{campaign.guild_id}",
+            f"\tCREATED\t{campaign.created.isoformat() if campaign.created else ''}",
+            f"\tUPDATED\t{campaign.updated.isoformat() if campaign.updated else ''}",
+        ]
+        for event in events:
+            lines.append("")
+            lines.append(f"TURN\t{event.get('turn_id')}")
+            lines.append(f"\tKIND\t{event.get('kind')}")
+            lines.append(f"\tTIMESTAMP\t{event.get('created_at') or ''}")
+            lines.append(f"\tUSER_ID\t{event.get('user_id')}")
+            lines.append(f"\tPLAYER\t{event.get('player_name') or ''}")
+            lines.append(f"\tPLAYER_SLUG\t{event.get('player_slug') or ''}")
+            lines.append(f"\tCHANNEL_ID\t{event.get('channel_id')}")
+            lines.append("\tCONTENT")
+            for row in str(event.get("content") or "").splitlines() or [""]:
+                lines.append(f"\t\t{row}")
+            lines.append("\tMETA")
+            meta_text = json.dumps(
+                event.get("meta") or {},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            for row in meta_text.splitlines():
+                lines.append(f"\t\t{row}")
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def _render_campaign_raw_loglines(
+        cls,
+        campaign: ZorkCampaign,
+        events: list[dict[str, object]],
+    ) -> str:
+        lines = [
+            f"[CAMPAIGN EXPORT] campaign={campaign.id} name={campaign.name!r} turns={len(events)}"
+        ]
+        for event in events:
+            label = str(event.get("kind") or "event").upper()
+            if event.get("kind") == "player":
+                player_name = str(event.get("player_name") or "").strip()
+                if player_name:
+                    label = f"PLAYER {player_name}"
+            elif event.get("kind") == "narrator":
+                label = "NARRATOR"
+            lines.append(
+                f"[TURN #{event.get('turn_id')} | {event.get('created_at') or ''}] {label}: "
+                f"{str(event.get('content') or '').strip()}"
+            )
+        return "\n".join(lines).strip()
+
+    @classmethod
+    async def _generate_campaign_raw_export_artifacts(
+        cls,
+        campaign: ZorkCampaign,
+        *,
+        raw_format: str = "jsonl",
+        status_message=None,
+    ) -> dict[str, str]:
+        fmt = str(raw_format or "jsonl").strip().lower()
+        if fmt not in {"script", "markdown", "json", "jsonl", "loglines"}:
+            fmt = "jsonl"
+        await cls._edit_progress_message(
+            status_message,
+            f"Campaign export: collecting raw turn events ({fmt})...",
+        )
+        events = cls._campaign_export_turn_events(campaign)
+        if not events:
+            return {}
+        await cls._edit_progress_message(
+            status_message,
+            f"Campaign export: rendering raw export ({fmt})...",
+        )
+        if fmt == "json":
+            text = cls._render_campaign_raw_json(campaign, events)
+        elif fmt == "markdown":
+            text = cls._render_campaign_raw_markdown(campaign, events)
+        elif fmt == "script":
+            text = cls._render_campaign_raw_script(campaign, events)
+        elif fmt == "loglines":
+            text = cls._render_campaign_raw_loglines(campaign, events)
+        else:
+            text = cls._render_campaign_raw_jsonl(campaign, events)
+        if not str(text or "").strip():
+            return {}
+        out = {cls._campaign_raw_export_filename(fmt): str(text or "").strip()}
+        await cls._edit_progress_message(
+            status_message,
+            f"Campaign export: packaged {len(out)} raw file(s).",
+        )
+        return out
+
+    @classmethod
     async def _edit_progress_message(cls, status_message, content: str) -> None:
         if status_message is None:
             return

@@ -225,15 +225,39 @@ class GPT:
 
     @classmethod
     def _build_cli_prompt(cls, role: str, prompt: str) -> str:
+        return cls._build_structured_user_prompt(prompt)
+
+    @classmethod
+    def _build_structured_system_instructions(cls, role: str) -> str:
         role_text = str(role or "").strip()
-        user_text = str(prompt or "").strip()
+        parts = [cls._TEXT_COMPLETION_INSTRUCTIONS]
+        parts.append(
+            "<output_contract>\n"
+            "- Follow the SYSTEM_INSTRUCTIONS block exactly.\n"
+            "- Return only the answer requested by the prompt.\n"
+            "- If the prompt requires a strict format, output only that format.\n"
+            "</output_contract>"
+        )
+        parts.append(
+            "<verbosity_controls>\n"
+            "- Prefer concise, information-dense writing.\n"
+            "- Avoid repeating the user's request.\n"
+            "</verbosity_controls>"
+        )
+        parts.append(
+            "<tool_boundary>\n"
+            "- This call is a text-completion request, not an autonomous coding task.\n"
+            "- Do not claim to inspect files, run commands, or use tools unless the prompt explicitly requires it.\n"
+            "</tool_boundary>"
+        )
         if role_text:
-            return (
-                f"{cls._TEXT_COMPLETION_INSTRUCTIONS}\n\n"
-                f"SYSTEM:\n{role_text}\n\n"
-                f"USER:\n{user_text}"
-            ).strip()
-        return f"{cls._TEXT_COMPLETION_INSTRUCTIONS}\n\nUSER:\n{user_text}".strip()
+            parts.append(f"<system_instructions>\n{role_text}\n</system_instructions>")
+        return "\n\n".join(part.strip() for part in parts if part.strip()).strip()
+
+    @staticmethod
+    def _build_structured_user_prompt(prompt: str) -> str:
+        user_text = str(prompt or "").strip()
+        return f"<user_request>\n{user_text}\n</user_request>".strip()
 
     @staticmethod
     def _extract_last_json_object(text: str):
@@ -267,10 +291,7 @@ class GPT:
 
     def _run_codex_cli(self, role: str, prompt: str) -> str:
         workdir = self._ensure_cli_workdir()
-        role_text = str(role or "").strip()
-        user_instructions = self._TEXT_COMPLETION_INSTRUCTIONS
-        if role_text:
-            user_instructions = f"{user_instructions}\n\n{role_text}"
+        user_instructions = self._build_structured_system_instructions(role)
         command = [
             "codex",
             "exec",
@@ -289,7 +310,7 @@ class GPT:
             command.extend(["-m", model])
         result = subprocess.run(
             command,
-            input=str(prompt or ""),
+            input=self._build_structured_user_prompt(prompt),
             text=True,
             capture_output=True,
             timeout=self._CLI_TIMEOUT_SECONDS,
@@ -315,7 +336,7 @@ class GPT:
         command = [
             "claude",
             "-p",
-            str(prompt or ""),
+            self._build_structured_user_prompt(prompt),
             "--output-format",
             "json",
             "--permission-mode",
@@ -327,7 +348,9 @@ class GPT:
         if model:
             command.extend(["--model", model])
         if str(role or "").strip():
-            command.extend(["--system-prompt", str(role).strip()])
+            command.extend(
+                ["--system-prompt", self._build_structured_system_instructions(role)]
+            )
         result = subprocess.run(
             command,
             text=True,
@@ -352,7 +375,11 @@ class GPT:
         model = self._resolve_cli_model("gemini")
         if model:
             command.extend(["-m", model])
-        command.append(self._build_cli_prompt(role, prompt))
+        structured_prompt = (
+            f"{self._build_structured_system_instructions(role)}\n\n"
+            f"{self._build_structured_user_prompt(prompt)}"
+        )
+        command.append(structured_prompt)
         result = subprocess.run(
             command,
             text=True,
@@ -375,7 +402,11 @@ class GPT:
         model = self._resolve_cli_model("opencode")
         if model:
             command.extend(["-m", model])
-        command.append(self._build_cli_prompt(role, prompt))
+        structured_prompt = (
+            f"{self._build_structured_system_instructions(role)}\n\n"
+            f"{self._build_structured_user_prompt(prompt)}"
+        )
+        command.append(structured_prompt)
         result = subprocess.run(
             command,
             text=True,
