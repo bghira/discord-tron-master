@@ -14237,6 +14237,7 @@ class ZorkEmulator:
                             first_payload = None
                     auto_forced_memory_search = False
                     recent_turns_loaded = False
+                    memory_recall_help_emitted = False
                     empty_response_repair_count = 0
                     anti_echo_retry_count = 0
                     used_tool_names = set()
@@ -14583,6 +14584,7 @@ class ZorkEmulator:
                                         f"campaign={campaign.id} refreshed_turns={backfilled}",
                                     )
                                 seen_turn_ids = set()
+                                seen_source_hits = set()
                                 for query in queries:
                                     logger.info(
                                         "Zork memory search requested: campaign=%s query=%r",
@@ -14681,6 +14683,13 @@ class ZorkEmulator:
                                         ) in source_hits:
                                             if source_score < 0.40:
                                                 continue
+                                            source_hit_key = (
+                                                str(source_doc_key or "").strip(),
+                                                int(source_chunk_index or 0),
+                                            )
+                                            if source_hit_key in seen_source_hits:
+                                                continue
+                                            seen_source_hits.add(source_hit_key)
                                             source_text_lines = [
                                                 line.strip()
                                                 for line in str(source_chunk_text or "").splitlines()
@@ -14744,7 +14753,8 @@ class ZorkEmulator:
                                     tool_result_block = "MEMORY_RECALL: No relevant memories found."
                             else:
                                 tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
-                            if has_source_material:
+                            emit_full_memory_help = not memory_recall_help_emitted
+                            if has_source_material and emit_full_memory_help:
                                 source_index_lines = [
                                     (
                                         "SOURCE_MATERIAL_INDEX: "
@@ -14766,42 +14776,49 @@ class ZorkEmulator:
                                     f"{tool_result_block}\n"
                                     + "\n".join(source_index_lines)
                                 )
-                            tool_result_block = (
-                                f"{tool_result_block}\n"
-                                "MEMORY_RECALL_NEXT_ACTIONS:\n"
-                                "- To retrieve FULL text for a specific hit turn number:\n"
-                                '  {"tool_call": "memory_turn", "turn_id": 1234}\n'
-                                "- To discover curated memory categories/terms before narrowing search:\n"
-                                '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
-                                "- To search inside one curated category after term discovery:\n"
-                                '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
-                                "- To search narrator memories for interactions involving a player slug:\n"
-                                '  {"tool_call": "memory_search", "category": "interaction:player-slug", "queries": ["argument", "kiss", "deal"]}\n'
-                                "- To search for turns noticed by a specific NPC slug:\n"
-                                '  {"tool_call": "memory_search", "category": "awareness:npc-slug", "queries": ["overheard", "promise", "threat"]}\n'
-                                "- To restrict narrator-memory recall by visibility scope:\n"
-                                '  {"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
-                                "- To inspect off-scene SMS communications:\n"
-                                '  {"tool_call": "sms_list", "wildcard": "*"}\n'
-                                '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
-                                "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
-                                '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
-                            )
-                            if has_source_material:
+                            if emit_full_memory_help:
                                 tool_result_block = (
                                     f"{tool_result_block}"
-                                "- To query indexed source-canon snippets (faithful adaptation):\n"
-                                '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
-                                "- To scope one source document only:\n"
-                                '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
-                                "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
-                                '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
-                                "- To browse all keys in a rulebook-format source document (list before drilling in):\n"
-                                '  {"tool_call": "source_browse", "document_key": "document-key"}\n'
-                                "- To filter rulebook keys by wildcard:\n"
-                                '  {"tool_call": "source_browse", "document_key": "document-key", "wildcard": "keyword*"}\n'
+                                    "\nMEMORY_RECALL_NEXT_ACTIONS:\n"
+                                    "- To retrieve FULL text for a specific hit turn number:\n"
+                                    '  {"tool_call": "memory_turn", "turn_id": 1234}\n'
+                                    "- To discover curated memory categories/terms before narrowing search:\n"
+                                    '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
+                                    "- To search inside one curated category after term discovery:\n"
+                                    '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
+                                    "- To search narrator memories for interactions involving a player slug:\n"
+                                    '  {"tool_call": "memory_search", "category": "interaction:player-slug", "queries": ["argument", "kiss", "deal"]}\n'
+                                    "- To search for turns noticed by a specific NPC slug:\n"
+                                    '  {"tool_call": "memory_search", "category": "awareness:npc-slug", "queries": ["overheard", "promise", "threat"]}\n'
+                                    "- To restrict narrator-memory recall by visibility scope:\n"
+                                    '  {"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
+                                    "- To inspect off-scene SMS communications:\n"
+                                    '  {"tool_call": "sms_list", "wildcard": "*"}\n'
+                                    '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
+                                    "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
+                                    '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
                                 )
-                            if roster_hints:
+                                if has_source_material:
+                                    tool_result_block = (
+                                        f"{tool_result_block}"
+                                        "- To query indexed source-canon snippets (faithful adaptation):\n"
+                                        '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
+                                        "- To scope one source document only:\n"
+                                        '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
+                                        "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
+                                        '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
+                                        "- To browse all keys in a rulebook-format source document (list before drilling in):\n"
+                                        '  {"tool_call": "source_browse", "document_key": "document-key"}\n'
+                                        "- To filter rulebook keys by wildcard:\n"
+                                        '  {"tool_call": "source_browse", "document_key": "document-key", "wildcard": "keyword*"}\n'
+                                    )
+                                memory_recall_help_emitted = True
+                            else:
+                                tool_result_block = (
+                                    f"{tool_result_block}\n"
+                                    "MEMORY_RECALL_NEXT_ACTIONS: Use memory_turn for one hit, refine memory_search, or return final JSON."
+                                )
+                            if roster_hints and emit_full_memory_help:
                                 hint_lines = []
                                 for hint in roster_hints[:6]:
                                     term = str(hint.get("term") or hint.get("slug") or "").strip() or "unknown-term"
