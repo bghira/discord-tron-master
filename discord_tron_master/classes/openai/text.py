@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 
@@ -18,6 +19,7 @@ openai.api_key = config.get_openai_api_key()
 
 _OPENAI_SEMAPHORES = {}
 _OPENAI_SEMAPHORE_LOCK = threading.Lock()
+_PROMPT_SECTION_RE = re.compile(r"^([A-Z][A-Z0-9_]+):(?:\s*(.*))?$")
 
 
 def _get_openai_semaphore(limit: int) -> asyncio.Semaphore:
@@ -268,10 +270,146 @@ class GPT:
             parts.append(f"<system_instructions>\n{role_text}\n</system_instructions>")
         return "\n\n".join(part.strip() for part in parts if part.strip()).strip()
 
+    @classmethod
+    def _build_claude_structured_system_instructions(cls, role: str) -> str:
+        role_text = str(role or "").strip()
+        parts = [cls._TEXT_COMPLETION_INSTRUCTIONS]
+        parts.append(
+            "<output_contract>\n"
+            "- Follow the SYSTEM_INSTRUCTIONS block exactly.\n"
+            "- Return only the answer requested by the prompt.\n"
+            "- If the prompt requires a strict format, output only that format.\n"
+            "</output_contract>"
+        )
+        parts.append(
+            "<verbosity_controls>\n"
+            "- Prefer concise, information-dense writing.\n"
+            "- Avoid repeating the user's request.\n"
+            "</verbosity_controls>"
+        )
+        parts.append(
+            "<tool_boundary>\n"
+            "- This call is a text-completion request, not an autonomous coding task.\n"
+            "- Do not claim to inspect files, run commands, or use tools unless the prompt explicitly requires it.\n"
+            "</tool_boundary>"
+        )
+        lower_role = role_text.lower()
+        if role_text and (
+            "json" in lower_role
+            or "reasoning" in lower_role
+            or "first key" in lower_role
+        ):
+            parts.append(
+                "<structured_output_contract>\n"
+                "- If SYSTEM_INSTRUCTIONS requires JSON, output exactly one JSON object and nothing else.\n"
+                "- Never omit a required key just because it feels internal.\n"
+                "- If SYSTEM_INSTRUCTIONS requires a reasoning field, include reasoning in every final JSON response.\n"
+                "- If SYSTEM_INSTRUCTIONS specifies key order, preserve that order in the final JSON.\n"
+                "</structured_output_contract>"
+            )
+        if role_text:
+            parts.append(
+                f"<system_instructions>\n{cls._wrap_examples_for_claude(role_text)}\n</system_instructions>"
+            )
+        return "\n\n".join(part.strip() for part in parts if part.strip()).strip()
+
     @staticmethod
     def _build_structured_user_prompt(prompt: str) -> str:
         user_text = str(prompt or "").strip()
         return f"<user_request>\n{user_text}\n</user_request>".strip()
+
+    @classmethod
+    def _build_claude_structured_user_prompt(cls, prompt: str) -> str:
+        user_text = str(prompt or "").strip()
+        wrapped = cls._wrap_prompt_sections_as_xml(user_text)
+        return f"<user_request>\n{wrapped}\n</user_request>".strip()
+
+    @classmethod
+    def _wrap_prompt_sections_as_xml(cls, text: str) -> str:
+        raw_lines = str(text or "").splitlines()
+        if not raw_lines:
+            return ""
+        blocks = []
+        current_tag = "free_text"
+        current_lines = []
+
+        def flush():
+            nonlocal current_tag, current_lines
+            if current_lines:
+                blocks.append((current_tag, current_lines[:]))
+            current_tag = "free_text"
+            current_lines = []
+
+        for line in raw_lines:
+            match = _PROMPT_SECTION_RE.match(line)
+            if match:
+                flush()
+                current_tag = cls._section_tag_name(match.group(1))
+                first_line = str(match.group(2) or "").strip()
+                current_lines = [first_line] if first_line else []
+                continue
+            current_lines.append(line)
+        flush()
+
+        if not blocks:
+            return str(text or "").strip()
+
+        out = []
+        for tag, lines in blocks:
+            content = cls._wrap_examples_for_claude("\n".join(lines).strip())
+            if not content:
+                out.append(f"<{tag} />")
+                continue
+            out.append(f"<{tag}>")
+            out.append(content)
+            out.append(f"</{tag}>")
+        return "\n".join(out).strip()
+
+    @staticmethod
+    def _section_tag_name(key: str) -> str:
+        text = re.sub(r"[^a-z0-9]+", "_", str(key or "").strip().lower()).strip("_")
+        return text or "section"
+
+    @staticmethod
+    def _wrap_examples_for_claude(text: str) -> str:
+        lines = str(text or "").splitlines()
+        if not lines:
+            return ""
+        out = []
+        example_buf = []
+
+        def flush():
+            if not example_buf:
+                return
+            content = "\n".join(example_buf).strip()
+            if content:
+                out.append("<example>")
+                out.append(content)
+                out.append("</example>")
+            example_buf.clear()
+
+        for raw_line in lines:
+            line = str(raw_line or "")
+            if GPT._is_claude_example_line(line):
+                example_buf.append(line)
+                continue
+            flush()
+            out.append(line)
+        flush()
+        return "\n".join(out).strip()
+
+    @staticmethod
+    def _is_claude_example_line(line: str) -> bool:
+        text = str(line or "").strip()
+        if not text:
+            return False
+        if text.startswith(("Example:", "Examples:", "NOT:", "Output format:")):
+            return True
+        if text.startswith("{") and text.endswith("}"):
+            return True
+        if text.startswith('{"tool_call"'):
+            return True
+        return False
 
     @staticmethod
     def _extract_last_json_object(text: str):
@@ -350,7 +488,7 @@ class GPT:
         command = [
             "claude",
             "-p",
-            self._build_structured_user_prompt(prompt),
+            self._build_claude_structured_user_prompt(prompt),
             "--output-format",
             "json",
             "--permission-mode",
@@ -363,7 +501,7 @@ class GPT:
             command.extend(["--model", model])
         if str(role or "").strip():
             command.extend(
-                ["--system-prompt", self._build_structured_system_instructions(role)]
+                ["--system-prompt", self._build_claude_structured_system_instructions(role)]
             )
         result = subprocess.run(
             command,
