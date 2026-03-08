@@ -9030,6 +9030,102 @@ class ZorkEmulator:
                 return text[:160]
         return ""
 
+    @classmethod
+    def _player_entity_aliases_for_state_sync(
+        cls,
+        player_state: Dict[str, object],
+    ) -> List[str]:
+        aliases: List[str] = []
+        seen: set[str] = set()
+
+        def _add(raw: object) -> None:
+            slug = cls._player_slug_key(raw)
+            if not slug or slug in seen:
+                return
+            seen.add(slug)
+            aliases.append(slug)
+
+        name = str(player_state.get("character_name") or "").strip()
+        if not name:
+            return aliases
+        _add(name)
+        for sep in (",", "(", " - "):
+            if sep in name:
+                _add(name.split(sep, 1)[0].strip())
+        words = [part for part in re.split(r"\s+", name) if part]
+        if words:
+            _add(words[0])
+        return aliases
+
+    @classmethod
+    def _sync_player_states_from_campaign_entities(
+        cls,
+        campaign: ZorkCampaign,
+        campaign_state: Dict[str, object],
+        *,
+        skip_user_id: Optional[int] = None,
+    ) -> int:
+        if not isinstance(campaign_state, dict):
+            return 0
+        synced = 0
+        relevant_keys = (
+            "location",
+            "room_title",
+            "room_summary",
+            "room_description",
+            "exits",
+            "current_status",
+        )
+        players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).all()
+        for target in players:
+            user_id = getattr(target, "user_id", None)
+            if skip_user_id is not None and user_id == skip_user_id:
+                continue
+            target_state = cls.get_player_state(target)
+            entity_state = None
+            for alias in cls._player_entity_aliases_for_state_sync(target_state):
+                candidate = campaign_state.get(alias)
+                if isinstance(candidate, dict) and any(
+                    key in candidate for key in relevant_keys
+                ):
+                    entity_state = candidate
+                    break
+            if not isinstance(entity_state, dict):
+                continue
+
+            changed = False
+            old_location = str(target_state.get("location") or "").strip()
+            new_location = str(entity_state.get("location") or "").strip()
+            if new_location and new_location != old_location:
+                target_state["location"] = new_location
+                changed = True
+                if "room_title" in entity_state:
+                    target_state["room_title"] = entity_state.get("room_title")
+                else:
+                    target_state.pop("room_title", None)
+                if "room_summary" in entity_state:
+                    target_state["room_summary"] = entity_state.get("room_summary")
+                else:
+                    target_state.pop("room_summary", None)
+                if "room_description" in entity_state:
+                    target_state["room_description"] = entity_state.get("room_description")
+                else:
+                    target_state.pop("room_description", None)
+                if "exits" in entity_state:
+                    target_state["exits"] = entity_state.get("exits")
+                else:
+                    target_state.pop("exits", None)
+
+            for key in ("current_status",):
+                if key in entity_state and entity_state.get(key) != target_state.get(key):
+                    target_state[key] = entity_state.get(key)
+                    changed = True
+
+            if changed:
+                target.state_json = cls._dump_json(target_state)
+                synced += 1
+        return synced
+
     @staticmethod
     def _entity_name_candidates_for_sync(
         state_key: object, entity_state: Dict[str, object]
@@ -16865,6 +16961,21 @@ class ZorkEmulator:
                                 f"world_characters={_char_loc_sync_count}"
                             ),
                         )
+                    _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
+                        campaign,
+                        campaign_state,
+                        skip_user_id=player.user_id,
+                    )
+                    if _player_entity_sync_count:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_other_players",
+                            amount=_player_entity_sync_count,
+                        )
+                        _zork_log(
+                            f"PLAYER ENTITY AUTO-SYNC campaign={campaign.id}",
+                            f"other_players={_player_entity_sync_count}",
+                        )
                     campaign.state_json = cls._dump_json(campaign_state)
 
                     # --- give_item: cross-player item transfer ---
@@ -17748,6 +17859,21 @@ class ZorkEmulator:
                             f"state_entities={_state_loc_sync_count} "
                             f"world_characters={_char_loc_sync_count}"
                         ),
+                    )
+                _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
+                    campaign,
+                    campaign_state,
+                    skip_user_id=active_player.user_id,
+                )
+                if _player_entity_sync_count:
+                    cls._increment_auto_fix_counter(
+                        campaign_state,
+                        "location_auto_sync_other_players",
+                        amount=_player_entity_sync_count,
+                    )
+                    _zork_log(
+                        f"PLAYER ENTITY AUTO-SYNC (timed event) campaign={campaign.id}",
+                        f"other_players={_player_entity_sync_count}",
                     )
                 campaign.state_json = cls._dump_json(campaign_state)
 
