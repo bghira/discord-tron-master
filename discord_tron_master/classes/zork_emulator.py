@@ -2716,6 +2716,7 @@ class ZorkEmulator:
             "a hollow silence answers",
             "the world shifts, but nothing clear emerges",
         )
+        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
         registry = cls._campaign_player_registry(campaign.id)
         player_names: Dict[int, str] = {}
         for raw_user_id, info in registry.get("by_user_id", {}).items():
@@ -2732,13 +2733,42 @@ class ZorkEmulator:
             if not content:
                 continue
             meta = cls._safe_turn_meta(turn)
-            visible = cls._turn_visible_to_viewer(
-                turn,
-                viewer_user_id,
-                viewer_slug,
-                viewer_location_key,
-                viewer_private_context_key,
-            )
+            visibility = meta.get("visibility")
+            visible = False
+            if isinstance(visibility, dict):
+                scope = str(visibility.get("scope") or "").strip().lower()
+                turn_context_key = str(
+                    visibility.get("context_key") or meta.get("context_key") or ""
+                ).strip()
+                turn_location_key = str(
+                    visibility.get("location_key") or meta.get("location_key") or ""
+                ).strip().lower()
+                if scope in {"", "public"}:
+                    visible = True
+                elif scope == "local":
+                    visible = bool(
+                        viewer_location_key_norm
+                        and turn_location_key
+                        and viewer_location_key_norm == turn_location_key
+                    )
+                elif scope in {"private", "limited"} and turn_context_key:
+                    visible = cls._turn_visible_to_viewer(
+                        turn,
+                        viewer_user_id,
+                        viewer_slug,
+                        viewer_location_key,
+                        viewer_private_context_key,
+                    )
+                else:
+                    visible = False
+            else:
+                visible = cls._turn_visible_to_viewer(
+                    turn,
+                    viewer_user_id,
+                    viewer_slug,
+                    viewer_location_key,
+                    viewer_private_context_key,
+                )
             if (
                 not visible
                 and (requested_player_slugs or requested_npc_slugs)
