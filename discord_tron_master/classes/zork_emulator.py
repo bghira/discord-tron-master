@@ -2321,6 +2321,59 @@ class ZorkEmulator:
             "source": "model",
         }
 
+    @classmethod
+    def _promote_player_npc_slugs(
+        cls,
+        visibility: Dict[str, object],
+        campaign_id: int,
+    ) -> Dict[str, object]:
+        """Cross-reference aware_npc_slugs against real players.
+
+        When the LLM lists a real player's character slug in npc_slugs,
+        that player silently loses context because npc_slugs are
+        informational only. This promotes matching slugs into
+        visible_player_slugs / visible_user_ids.
+        """
+        npc_slugs = visibility.get("aware_npc_slugs")
+        if not npc_slugs or not isinstance(npc_slugs, list):
+            return visibility
+        scope = str(visibility.get("scope") or "").strip().lower()
+        if scope == "public":
+            return visibility
+        registry = cls._campaign_player_registry(campaign_id)
+        by_slug = registry.get("by_slug", {})
+        if not by_slug:
+            return visibility
+        actor_user_id = visibility.get("actor_user_id")
+        promoted = False
+        vis_slugs = list(visibility.get("visible_player_slugs") or [])
+        vis_user_ids = list(visibility.get("visible_user_ids") or [])
+        remaining_npc_slugs = []
+        for npc_slug in npc_slugs:
+            normalised = cls._player_slug_key(npc_slug)
+            match = by_slug.get(normalised)
+            if match is not None:
+                matched_user_id = match.get("user_id")
+                matched_slug = match.get("slug") or normalised
+                # Don't promote the acting player (they're already included).
+                if matched_user_id == actor_user_id:
+                    remaining_npc_slugs.append(npc_slug)
+                    continue
+                if matched_slug not in vis_slugs:
+                    vis_slugs.append(matched_slug)
+                if isinstance(matched_user_id, int) and matched_user_id not in vis_user_ids:
+                    vis_user_ids.append(matched_user_id)
+                promoted = True
+            else:
+                remaining_npc_slugs.append(npc_slug)
+        if not promoted:
+            return visibility
+        result = dict(visibility)
+        result["visible_player_slugs"] = vis_slugs
+        result["visible_user_ids"] = vis_user_ids
+        result["aware_npc_slugs"] = remaining_npc_slugs
+        return result
+
     @staticmethod
     def _default_prompt_turn_visibility(
         requested_default: str,
@@ -3874,13 +3927,113 @@ class ZorkEmulator:
         return "\n".join(lines).strip()
 
     @classmethod
+    async def _edit_progress_message(cls, status_message, content: str) -> None:
+        if status_message is None:
+            return
+        try:
+            await status_message.edit(content=str(content or "").strip()[:3900] or "Working...")
+        except Exception:
+            pass
+
+    @classmethod
+    async def _delete_progress_message(cls, status_message) -> None:
+        if status_message is None:
+            return
+        try:
+            await status_message.delete()
+        except Exception:
+            pass
+
+    @classmethod
+    async def _generate_campaign_export_digest(
+        cls,
+        campaign: ZorkCampaign,
+        transcript: str,
+        ctx_message,
+        *,
+        channel=None,
+        status_message=None,
+    ) -> str:
+        await cls._edit_progress_message(
+            status_message,
+            "Campaign export: summarising the full playthrough from first turn to last...",
+        )
+        ordered_chunk_digest = await cls._summarise_long_text(
+            transcript,
+            ctx_message,
+            channel=channel,
+            campaign=campaign,
+            summary_instructions=(
+                "This is a complete campaign transcript from the first turn to the latest turn. "
+                "Preserve the entire story arc in chronological order. Do not collapse the story into a vague world-state summary. "
+                "Track what happens early, middle, and late; major and minor arcs; character relationship changes; discoveries; "
+                "state changes; travel; inventory/item changes that mattered; time jumps; player-to-player dynamics; private reveals "
+                "that later became relevant; NPC attitude shifts; recurring jokes; and unresolved threads. "
+                "When facts conflict, preserve both versions if needed but clearly favor the later explicit outcome. "
+                "Be comprehensive and concrete."
+            ),
+            show_progress=True,
+            allow_single_chunk_passthrough=False,
+            progress_label="Campaign export: summarising full transcript",
+        )
+        ordered_chunk_digest = str(ordered_chunk_digest or "").strip()
+        if not ordered_chunk_digest:
+            return ""
+
+        await cls._edit_progress_message(
+            status_message,
+            "Campaign export: fusing the transcript summaries into one complete story-arc digest...",
+        )
+        digest_system = (
+            "You convert an ordered set of campaign transcript summaries into a faithful whole-campaign digest.\n"
+            "Output ONLY plain text.\n"
+            "This digest must cover the entire story arc from first turn to last turn without flattening it into a generic setting summary.\n"
+            "Use these exact plain-text section labels:\n"
+            "FULL ARC OVERVIEW\n"
+            "CHRONOLOGICAL STORY BEATS\n"
+            "PLAYER THREADS\n"
+            "NPC ARCS\n"
+            "RELATIONSHIPS AND REVEALS\n"
+            "LOCATIONS ITEMS AND STATE CHANGES\n"
+            "OPEN THREADS AND AFTERMATH\n"
+            "CURRENT END STATE\n"
+            "CONFLICT RESOLUTION NOTES\n"
+            "Requirements:\n"
+            "- preserve chronology from opening setup to ending state\n"
+            "- name the real player characters and major NPCs repeatedly where relevant\n"
+            "- mention major chapter/scene transitions when known\n"
+            "- include all lasting arcs, even if they seemed small at the time\n"
+            "- if two facts conflict, choose the most sensible truthful version and say why in CONFLICT RESOLUTION NOTES\n"
+            "- multiplayer campaigns are ensemble stories, not single-protagonist stories\n"
+            "- do not write fiction prose; write a precise reconstruction digest"
+        )
+        digest_user = (
+            f"Campaign: {campaign.name}\n\n"
+            "ORDERED TRANSCRIPT SUMMARY:\n"
+            f"{ordered_chunk_digest}\n"
+        )
+        digest_text = await cls._new_gpt(campaign=campaign).turbo_completion(
+            digest_system,
+            digest_user,
+            temperature=0.3,
+            max_tokens=12000,
+        )
+        digest_text = str(digest_text or "").strip()
+        return digest_text or ordered_chunk_digest
+
+    @classmethod
     async def _generate_campaign_export_artifacts(
         cls,
         campaign: ZorkCampaign,
         ctx_message,
         *,
         channel=None,
+        status_message=None,
     ) -> dict[str, str]:
+        await cls._edit_progress_message(
+            status_message,
+            "Campaign export: building transcript from the full playthrough...",
+        )
         transcript = cls._campaign_export_transcript(campaign)
         if not transcript:
             return {}
@@ -3894,19 +4047,34 @@ class ZorkEmulator:
         consequences = campaign_state.get("consequences") if isinstance(campaign_state, dict) else []
         model_state = cls._build_model_state(campaign_state if isinstance(campaign_state, dict) else {})
         model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
-        export_summary = await cls._summarise_long_text(
+        export_summary = await cls._generate_campaign_export_digest(
+            campaign,
             transcript,
             ctx_message,
             channel=channel,
-            campaign=campaign,
-            summary_instructions=(
-                "Summarise this full campaign playthrough faithfully for export. Preserve lasting facts, "
-                "character arcs, relationship changes, major reveals, locations, items, chapter beats, "
-                "timeline changes, unresolved threads, and the current open state. "
-                "When facts conflict, prefer the later explicit outcome and the persisted world state."
-            ),
-            allow_single_chunk_passthrough=False,
+            status_message=status_message,
         )
+        if not export_summary:
+            export_summary = await cls._summarise_long_text(
+                transcript,
+                ctx_message,
+                channel=channel,
+                campaign=campaign,
+                summary_instructions=(
+                    "Summarise this full campaign playthrough faithfully for export. Preserve lasting facts, "
+                    "character arcs, relationship changes, major reveals, locations, items, chapter beats, "
+                    "timeline changes, unresolved threads, and the current open state. "
+                    "When facts conflict, prefer the later explicit outcome and the persisted world state."
+                ),
+                allow_single_chunk_passthrough=False,
+            )
+        export_summary = str(export_summary or "").strip()
+        export_summary_excerpt = export_summary
+        if len(export_summary_excerpt) > 32000:
+            export_summary_excerpt = export_summary_excerpt[:32000].rsplit(" ", 1)[0].strip() + "\n...[truncated excerpt for prompt budget]"
+        transcript_excerpt = transcript
+        if len(transcript_excerpt) > 20000:
+            transcript_excerpt = transcript_excerpt[:20000].rsplit(" ", 1)[0].strip() + "\n...[truncated excerpt for prompt budget]"
         source_payload = cls._source_material_prompt_payload(campaign.id)
         source_index_hint = cls._auto_rulebook_source_index_hint(source_payload)
         source_tool_instructions = ""
@@ -3945,6 +4113,7 @@ class ZorkEmulator:
             "4. Existing source material for unchanged background canon\n"
             "If a fact remains uncertain, omit it or phrase it cautiously instead of inventing certainty.\n"
             "Preserve major arcs, resolved outcomes, and unresolved threads so the tale can be recreated faithfully.\n"
+            "Do not output a generic world summary. Output dense factual rulebook lines only.\n"
             f"{source_tool_instructions}"
         )
         rulebook_user = (
@@ -3952,12 +4121,17 @@ class ZorkEmulator:
             f"{source_index_hint}"
             "Use the full playthrough summary and current campaign data below.\n"
             "This export should describe how to faithfully recreate the tale as it was actually played, not just the initial setup.\n\n"
-            f"PLAYTHROUGH SUMMARY:\n{export_summary or '(none)'}\n\n"
+            f"PLAYTHROUGH ARC DIGEST:\n{export_summary_excerpt or '(none)'}\n\n"
+            f"EARLY TRANSCRIPT EXCERPT:\n{transcript_excerpt or '(none)'}\n\n"
             f"CAMPAIGN DATA:\n{json.dumps(export_context, indent=2)}\n"
         )
         _zork_log(
             f"CAMPAIGN EXPORT RULEBOOK campaign={campaign.id}",
             f"--- SYSTEM ---\n{rulebook_system}\n--- USER ---\n{rulebook_user}",
+        )
+        await cls._edit_progress_message(
+            status_message,
+            "Campaign export: generating factual campaign rulebook...",
         )
         rulebook_response = await cls._setup_tool_loop(
             rulebook_system,
@@ -3968,6 +4142,34 @@ class ZorkEmulator:
             final_response_instruction="Return your final rulebook text now.",
         )
         rulebook_lines = cls._normalize_generated_rulebook_lines(rulebook_response or "")
+        if len(rulebook_lines) < 12:
+            repair_system = (
+                "You repair campaign export drafts into proper retrievable rulebook lines.\n"
+                "Output ONLY plain text rulebook lines.\n"
+                "Every line must be exactly CATEGORY-TAG: fact text\n"
+                "No prose paragraphs. No markdown. No headers.\n"
+                "Preserve chronology-derived facts, arcs, characters, plotlines, interactions, and GM rules.\n"
+                "If the draft is a summary instead of a rulebook, convert it into many factual rulebook lines."
+            )
+            repair_user = (
+                f"Repair this campaign export into a rulebook for '{campaign.name}'.\n\n"
+                f"DRAFT EXPORT:\n{str(rulebook_response or '').strip() or '(empty)'}\n\n"
+                f"PLAYTHROUGH ARC DIGEST:\n{export_summary_excerpt or '(none)'}\n\n"
+                f"CAMPAIGN DATA:\n{json.dumps(export_context, indent=2)}\n"
+            )
+            _zork_log(
+                f"CAMPAIGN EXPORT RULEBOOK REPAIR campaign={campaign.id}",
+                f"--- SYSTEM ---\n{repair_system}\n--- USER ---\n{repair_user}",
+            )
+            repaired = await cls._new_gpt(campaign=campaign).turbo_completion(
+                repair_system,
+                repair_user,
+                temperature=0.3,
+                max_tokens=cls.AUTO_RULEBOOK_MAX_TOKENS,
+            )
+            repaired_lines = cls._normalize_generated_rulebook_lines(repaired or "")
+            if repaired_lines:
+                rulebook_lines = repaired_lines
         rulebook_text = "\n".join(rulebook_lines).strip()
 
         story_prompt_system = (
@@ -3979,17 +4181,23 @@ class ZorkEmulator:
             "NPC CAST, CANON FACTS, MAJOR ARCS, RELATIONSHIPS, OPEN THREADS, OPENING/START STATE, and RECREATION RULES.\n"
             "If this was multiplayer, state clearly that it is an ensemble campaign with multiple real player characters and no single protagonist.\n"
             "Resolve conflicts using the same priority order as the rulebook export: persisted current state, later explicit outcomes, repeated consistent facts, then source canon.\n"
-            "Do not write prose fiction. Write a practical generator prompt for reconstructing the campaign."
+            "Do not write prose fiction. Write a practical generator prompt for reconstructing the campaign.\n"
+            "This must reflect the whole story arc from first turn to last turn, not just the ending state."
         )
         story_prompt_user = (
             f"Generate a story generator prompt export for '{campaign.name}'.\n"
             "This should function like a canonical recreation prompt for the whole played campaign.\n\n"
-            f"PLAYTHROUGH SUMMARY:\n{export_summary or '(none)'}\n\n"
+            f"PLAYTHROUGH ARC DIGEST:\n{export_summary_excerpt or '(none)'}\n\n"
+            f"EARLY TRANSCRIPT EXCERPT:\n{transcript_excerpt or '(none)'}\n\n"
             f"CAMPAIGN DATA:\n{json.dumps(export_context, indent=2)}\n"
         )
         _zork_log(
             f"CAMPAIGN EXPORT STORY PROMPT campaign={campaign.id}",
             f"--- SYSTEM ---\n{story_prompt_system}\n--- USER ---\n{story_prompt_user}",
+        )
+        await cls._edit_progress_message(
+            status_message,
+            "Campaign export: generating story recreation prompt...",
         )
         story_prompt_text = await cls._new_gpt(campaign=campaign).turbo_completion(
             story_prompt_system,
@@ -4004,6 +4212,10 @@ class ZorkEmulator:
             out["campaign-rulebook.txt"] = rulebook_text
         if story_prompt_text:
             out["campaign-story-prompt.txt"] = story_prompt_text
+        await cls._edit_progress_message(
+            status_message,
+            f"Campaign export: packaged {len(out)} file(s). Uploading...",
+        )
         return out
 
     @classmethod
@@ -4931,6 +5143,7 @@ class ZorkEmulator:
         summary_instructions: Optional[str] = None,
         show_progress: bool = True,
         allow_single_chunk_passthrough: bool = True,
+        progress_label: str = "Summarising uploaded file",
     ) -> str:
         """Chunk, summarise in parallel, condense to budget. Returns summary.
         *channel* overrides ctx_message.channel for progress messages.
@@ -4977,9 +5190,10 @@ class ZorkEmulator:
             f"chunk_char_target={chunk_char_target} total_chunks={total}",
         )
         status_msg = None
+        progress_title = str(progress_label or "Summarising uploaded file").strip()
         if show_progress:
             status_msg = await progress_channel.send(
-                f"Summarising uploaded file... [0/{total}]"
+                f"{progress_title}... [0/{total}]"
             )
 
         # Step 2 — parallel summarise
@@ -5033,7 +5247,7 @@ class ZorkEmulator:
             if status_msg is not None:
                 try:
                     await status_msg.edit(
-                        content=f"Summarising uploaded file... [{processed}/{total}]"
+                        content=f"{progress_title}... [{processed}/{total}]"
                     )
                 except Exception:
                     pass
@@ -5052,11 +5266,11 @@ class ZorkEmulator:
                 try:
                     if fallback:
                         await status_msg.edit(
-                            content="Summary model failed — using direct source excerpts fallback."
+                            content=f"{progress_title} failed — using direct source excerpts fallback."
                         )
                     else:
                         await status_msg.edit(
-                            content="Summary failed — continuing without attachment."
+                            content=f"{progress_title} failed — continuing without summary."
                         )
                     await asyncio.sleep(5)
                     await status_msg.delete()
@@ -5076,7 +5290,7 @@ class ZorkEmulator:
                 try:
                     file_kb = len(text) // 1024
                     await status_msg.edit(
-                        content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
+                        content=f"{progress_title} complete. ({joined_tokens} tokens from {file_kb}KB source)"
                     )
                     await asyncio.sleep(5)
                     await status_msg.delete()
@@ -5107,7 +5321,7 @@ class ZorkEmulator:
             if status_msg is not None:
                 try:
                     await status_msg.edit(
-                        content=f"Condensing summaries... [0/{condense_total}]"
+                        content=f"{progress_title}: condensing... [0/{condense_total}]"
                     )
                 except Exception:
                     pass
@@ -5147,7 +5361,7 @@ class ZorkEmulator:
                 if status_msg is not None:
                     try:
                         await status_msg.edit(
-                            content=f"Condensing summaries... [{condense_done}/{condense_total}]"
+                            content=f"{progress_title}: condensing... [{condense_done}/{condense_total}]"
                         )
                     except Exception:
                         pass
@@ -5172,7 +5386,7 @@ class ZorkEmulator:
             try:
                 file_kb = len(text) // 1024
                 await status_msg.edit(
-                    content=f"Summary complete. ({joined_tokens} tokens from {file_kb}KB file)"
+                    content=f"{progress_title} complete. ({joined_tokens} tokens from {file_kb}KB source)"
                 )
                 await asyncio.sleep(5)
                 await status_msg.delete()
@@ -8451,6 +8665,7 @@ class ZorkEmulator:
                 continue
             if target_slug in existing:
                 # Existing character — only accept mutable fields.
+                old_location = str(existing[target_slug].get("location") or "").strip().lower()
                 for key, value in fields.items():
                     if key not in cls.IMMUTABLE_CHARACTER_FIELDS:
                         if key == "relationships":
@@ -8510,6 +8725,15 @@ class ZorkEmulator:
                                 existing[target_slug].pop("relationships", None)
                             continue
                         existing[target_slug][key] = value
+                # Clear stale current_status when location changes.
+                if (
+                    "location" in fields
+                    and "current_status" not in fields
+                    and "current_status" in existing[target_slug]
+                ):
+                    new_location = str(fields["location"] or "").strip().lower()
+                    if old_location and new_location and old_location != new_location:
+                        existing[target_slug]["current_status"] = ""
             else:
                 if on_rails:
                     logger.info("On-rails: rejected new character slug %r", slug)
@@ -8763,6 +8987,41 @@ class ZorkEmulator:
         )
         return fire_day
 
+    @staticmethod
+    def _calendar_fix_ampm(fire_hour: int, description: str) -> int:
+        """Fix AM/PM mismatch — e.g. LLM outputs fire_hour=7 for '7pm'."""
+        if not description:
+            return fire_hour
+        text = description.lower()
+        for m in re.finditer(r"\b(\d{1,2})(?:\s*:\s*\d{2})?\s*(am|pm)\b", text):
+            desc_hour = int(m.group(1))
+            ampm = m.group(2)
+            if desc_hour < 1 or desc_hour > 12:
+                continue
+            if ampm == "pm":
+                expected_24h = desc_hour if desc_hour == 12 else desc_hour + 12
+            else:
+                expected_24h = 0 if desc_hour == 12 else desc_hour
+            if fire_hour == desc_hour and fire_hour != expected_24h:
+                fire_hour = expected_24h
+                break
+        return fire_hour
+
+    @staticmethod
+    def _calendar_fix_relative_day(fire_day: int, description: str, current_day: int) -> int:
+        """Fix off-by-one when description says 'tomorrow' but fire_day == today."""
+        if not description:
+            return fire_day
+        text = description.lower()
+        if re.search(r"\btomorrow\b", text):
+            expected = current_day + 1
+            if fire_day == current_day:
+                return expected
+        elif re.search(r"\btoday\b", text):
+            if fire_day > current_day:
+                return current_day
+        return fire_day
+
     @classmethod
     def _calendar_normalize_event(
         cls,
@@ -8799,11 +9058,14 @@ class ZorkEmulator:
                 time_remaining=event.get("time_remaining", 1),
                 time_unit=event.get("time_unit", "days"),
             )
+        description = str(event.get("description") or "")[:200]
+        fire_hour = cls._calendar_fix_ampm(fire_hour, description)
+        fire_day = cls._calendar_fix_relative_day(fire_day, description, current_day)
         normalized: Dict[str, object] = {
             "name": name,
             "fire_day": fire_day,
             "fire_hour": fire_hour,
-            "description": str(event.get("description") or "")[:200],
+            "description": description,
             "known_by": cls._calendar_known_by_from_event(event),
         }
         target_players = cls._calendar_target_tokens_from_event(event)
@@ -10191,6 +10453,8 @@ class ZorkEmulator:
             f"{unread_threads} thread(s){suffix}."
         )
 
+    _SMS_ARTICLES = frozenset({"the", "a", "an", "my"})
+
     @classmethod
     def _extract_inline_sms_intent(
         cls,
@@ -10199,6 +10463,7 @@ class ZorkEmulator:
         text = str(action or "").strip()
         if not text:
             return None
+        # Pattern 1: Colon-delimited — "text the Doc: hello"
         m = re.match(
             r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?([^:\n]{1,120})\s*:\s*(.+?)\s*$",
             text,
@@ -10208,8 +10473,11 @@ class ZorkEmulator:
             recipient = str(m.group(1) or "").strip().strip("\"'` ")
             message = str(m.group(2) or "").strip()
         else:
+            # Pattern 2: Space-delimited — "text the Doc hello"
+            # Consume articles before the recipient so "I SMS the Doc" captures "Doc".
             m = re.match(
-                r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?([^\s:\n]{1,80})\s+(.+?)\s*$",
+                r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?"
+                r"(?:(?:the|a|an|my)\s+)?([^\s:\n]{1,80})\s+(.+?)\s*$",
                 text,
                 flags=re.IGNORECASE,
             )
@@ -10224,6 +10492,9 @@ class ZorkEmulator:
         ):
             message = message[1:-1].strip()
         if not recipient or not message:
+            return None
+        # Bail out if recipient is still a bare article.
+        if recipient.lower() in cls._SMS_ARTICLES:
             return None
         return recipient[:80], message[:500]
 
@@ -10549,7 +10820,7 @@ class ZorkEmulator:
                 elif (
                     name_mentioned
                     and not has_premature
-                    and (has_completion or (event_is_past and has_cleanup_intent))
+                    and (has_completion or has_cleanup_intent)
                 ):
                     allowed_remove_set.add(name_key)
                 else:
@@ -11820,7 +12091,10 @@ class ZorkEmulator:
             try:
                 parsed = cls._parse_json_lenient(repaired)
                 if isinstance(parsed, dict) and parsed:
-                    return repaired
+                    has_narration = bool(parsed.get("narration"))
+                    has_tool_call = bool(parsed.get("tool_call"))
+                    if has_narration or has_tool_call:
+                        return repaired
             except Exception:
                 pass
         return cleaned
@@ -11884,18 +12158,61 @@ class ZorkEmulator:
     ) -> Dict[str, object]:
         if not isinstance(update, dict):
             return state
+        pruned_keys: List[str] = []
         for key, value in update.items():
             if value is None:
                 state.pop(key, None)
+                pruned_keys.append(key)
             elif (
                 isinstance(value, str)
                 and value.strip().lower() in cls._COMPLETED_VALUES
             ):
                 # Resolved entries don't need to stay in active state.
                 state.pop(key, None)
+                pruned_keys.append(key)
             else:
                 state[key] = value
+        if pruned_keys:
+            cls._auto_resolve_stale_plot_threads(state, pruned_keys)
         return state
+
+    @classmethod
+    def _auto_resolve_stale_plot_threads(
+        cls,
+        campaign_state: Dict[str, object],
+        pruned_keys: List[str],
+    ) -> int:
+        """Auto-resolve active plot threads whose key matches a pruned state key.
+
+        When state_update sets a key to null or a completed value, the
+        corresponding plot thread (if any) should not remain active —
+        otherwise the LLM sees it in ACTIVE_PLOT_THREADS and keeps
+        referencing a resolved storyline.
+
+        Returns the number of threads auto-resolved.
+        """
+        threads = cls._plot_threads_from_state(campaign_state)
+        if not threads:
+            return 0
+        pruned_slugs = set()
+        for key in pruned_keys:
+            slug = cls._plot_thread_key(key)
+            if slug:
+                pruned_slugs.add(slug)
+        if not pruned_slugs:
+            return 0
+        resolved_count = 0
+        for thread_key, thread in threads.items():
+            if str(thread.get("status")) != "active":
+                continue
+            if thread_key in pruned_slugs:
+                thread["status"] = "resolved"
+                if not thread.get("resolution"):
+                    thread["resolution"] = "auto-resolved: state key pruned"
+                resolved_count += 1
+        if resolved_count > 0:
+            campaign_state[cls.PLOT_THREADS_STATE_KEY] = threads
+        return resolved_count
 
     @classmethod
     async def play_action(
@@ -14364,6 +14681,9 @@ class ZorkEmulator:
                         turn_visibility,
                         is_private_context=(getattr(ctx, "guild", None) is None),
                     )
+                    turn_visibility = cls._promote_player_npc_slugs(
+                        turn_visibility, campaign.id,
+                    )
                     private_context_candidate = cls._derive_private_context_candidate(
                         campaign,
                         player,
@@ -15453,6 +15773,9 @@ class ZorkEmulator:
                     active_player,
                     turn_visibility,
                     is_private_context=timer_is_private_context,
+                )
+                turn_visibility = cls._promote_player_npc_slugs(
+                    turn_visibility, campaign.id,
                 )
                 if (
                     " ".join(str(narration or "").lower().split())

@@ -1565,7 +1565,14 @@ class Zork(commands.Cog):
             campaign_name = campaign.name
 
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        status_msg = None
         try:
+            try:
+                status_msg = await ctx.send(
+                    f"Campaign export: starting for `{campaign_name}`..."
+                )
+            except Exception:
+                status_msg = None
             with app.app_context():
                 campaign = ZorkCampaign.query.get(campaign_id)
                 if campaign is None:
@@ -1575,12 +1582,17 @@ class Zork(commands.Cog):
                     campaign,
                     ctx.message,
                     channel=ctx.channel,
+                    status_message=status_msg,
                 )
+        except Exception:
+            await ZorkEmulator._delete_progress_message(status_msg)
+            raise
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
 
         if not export_files:
+            await ZorkEmulator._delete_progress_message(status_msg)
             await ctx.send("Campaign export produced no files.")
             return
 
@@ -1592,6 +1604,7 @@ class Zork(commands.Cog):
             content=f"Campaign export for `{campaign_name}` ({len(files)} file(s)).",
             files=files,
         )
+        await ZorkEmulator._delete_progress_message(status_msg)
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):
