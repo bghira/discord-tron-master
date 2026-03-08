@@ -285,7 +285,9 @@ class ZorkEmulator:
         "Return ONLY valid JSON with these keys:\n"
         "- reasoning: string (first key in final turn JSON; concise internal grounding for this turn: what evidence/context you used, which actors are involved, and why the chosen outcome follows)\n"
         "- narration: string (what the player sees)\n"
-        "- state_update: object (world state patches; set a key to null to remove it when no longer relevant. "
+        "- state_update: object (REQUIRED in every final non-tool JSON response. It must ALWAYS include at least "
+        '"game_time", "current_chapter", and "current_scene", even when they are unchanged this turn. '
+        "Use it for world state patches; set a key to null to remove it when no longer relevant. "
         "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale WORLD_STATE keys every turn by setting them to null. "
         "This cleanup rule applies to transient world-state only (events, countdowns, one-off flags, scene-local state) — "
         "NOT to WORLD_CHARACTERS roster entries. "
@@ -344,6 +346,8 @@ class ZorkEmulator:
         "Rules:\n"
         "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
         "- In final non-tool responses, include reasoning and put it as the first key.\n"
+        '- In final non-tool responses, state_update is REQUIRED and must ALWAYS include "game_time", '
+        '"current_chapter", and "current_scene" explicitly.\n'
         "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
@@ -710,9 +714,11 @@ class ZorkEmulator:
         "- You MUST advance along the current chapter/scene trajectory.\n"
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
         "- In EVERY final non-tool JSON response, include state_update.current_chapter and state_update.current_scene explicitly.\n"
+        "- In EVERY final non-tool JSON response, include state_update.game_time explicitly.\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
         "- If the scene does not advance yet, still restate the current chapter/scene indexes explicitly in state_update.\n"
+        "- Even when nothing major changes, restate game_time/current_chapter/current_scene in state_update.\n"
         "- If player tries to derail, steer back via NPC actions or environmental events.\n"
         "- If player goes off-route or stalls, use grounded calendar pressure and timed events "
         "(set_timer_*) to re-align toward the next outlined beat without abrupt teleportation.\n"
@@ -1842,6 +1848,31 @@ class ZorkEmulator:
             to_drop = len(index) - cls.MAX_TURN_TIME_ENTRIES
             for _, key in keyed[:to_drop]:
                 index.pop(key, None)
+
+    @classmethod
+    def _ensure_minimum_state_update_contract(
+        cls,
+        campaign_state: Dict[str, object],
+        state_update: object,
+    ) -> Dict[str, object]:
+        out = dict(state_update) if isinstance(state_update, dict) else {}
+        current_time = cls._extract_game_time_snapshot(campaign_state)
+        out["game_time"] = cls._game_time_from_total_minutes(
+            cls._game_time_to_total_minutes(current_time)
+        )
+        out["current_chapter"] = cls._coerce_non_negative_int(
+            out.get("current_chapter", campaign_state.get("current_chapter", 0)),
+            default=cls._coerce_non_negative_int(
+                campaign_state.get("current_chapter", 0), default=0
+            ),
+        )
+        out["current_scene"] = cls._coerce_non_negative_int(
+            out.get("current_scene", campaign_state.get("current_scene", 0)),
+            default=cls._coerce_non_negative_int(
+                campaign_state.get("current_scene", 0), default=0
+            ),
+        )
+        return out
 
     @classmethod
     def _turn_context_prefix(
@@ -13356,7 +13387,8 @@ class ZorkEmulator:
                                 "- NPC first lines must add new information, a decision, a consequence, a demand, or a direct question.\n"
                                 "- Return final JSON with reasoning included.\n"
                                 "- Put reasoning first in the final JSON.\n"
-                                "- If ON-RAILS mode is enabled, state_update MUST include current_chapter and current_scene explicitly."
+                                '- state_update is REQUIRED and MUST include "game_time", "current_chapter", and "current_scene" explicitly, even if unchanged.\n'
+                                "- If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
                             tool_augmented_prompt = (
@@ -15048,9 +15080,9 @@ class ZorkEmulator:
                             "Return final JSON now (no tool_call), including:\n"
                             "- reasoning string grounded in evidence/context used\n"
                             "- narration with one concrete scene development\n"
-                            "- state_update object (with game_time advanced)\n"
+                            '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
                             "- summary_update with durable consequence when applicable.\n"
-                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
+                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
                         )
                         _repair_response = await gpt.turbo_completion(
                             system_prompt,
@@ -15124,8 +15156,8 @@ class ZorkEmulator:
                             f"{tool_augmented_prompt}\n"
                             "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
                             "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
-                            "Return final JSON (no tool_call) with reasoning.\n"
-                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
+                            'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
+                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
                         )
                         _clock_retry_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -15182,8 +15214,8 @@ class ZorkEmulator:
                             "OUTPUT_VALIDATION_FAILED: previous narration echoed/paraphrased player wording.\n"
                             "Do NOT restate player phrasing. NPC first line must add new information, a decision, "
                             "a demand, a consequence, or a direct question.\n"
-                            "Return final JSON (no tool_call) with reasoning.\n"
-                            "If ON-RAILS mode is enabled, state_update MUST also include current_chapter and current_scene explicitly.\n"
+                            'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
+                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
                         )
                         _anti_echo_resp = await gpt.turbo_completion(
                             system_prompt,
@@ -15230,6 +15262,11 @@ class ZorkEmulator:
                                     anti_echo_retry_count += 1
                                 except Exception:
                                     pass
+
+                    state_update = cls._ensure_minimum_state_update_contract(
+                        campaign_state,
+                        state_update,
+                    )
 
                     turn_visibility = cls._normalize_turn_visibility(
                         campaign,
