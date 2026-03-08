@@ -6775,21 +6775,47 @@ class ZorkEmulator:
         )
         total_chunk_count = 0
         compact_docs = []
+        source_keys: List[Dict[str, object]] = []
         for row in docs:
             try:
                 chunk_count = int(row.get("chunk_count") or 0)
             except (TypeError, ValueError):
                 chunk_count = 0
             total_chunk_count += chunk_count
+            document_key = str(row.get("document_key") or "")
             source_format = cls._source_material_format_heuristic(
                 str(row.get("sample_chunk") or "")
             )
             compact_docs.append(
                 {
-                    "document_key": str(row.get("document_key") or ""),
+                    "document_key": document_key,
                     "document_label": str(row.get("document_label") or ""),
                     "chunk_count": chunk_count,
                     "format": source_format,
+                }
+            )
+            document_keys: List[str] = []
+            if document_key and source_format == "rulebook":
+                units = ZorkMemory.get_source_material_document_units(
+                    campaign_id,
+                    document_key,
+                )
+                seen_keys: set[str] = set()
+                for unit in units:
+                    text = str(unit or "").strip()
+                    if not text or ":" not in text:
+                        continue
+                    key = text.split(":", 1)[0].strip()
+                    if not key or key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    document_keys.append(key)
+            source_keys.append(
+                {
+                    "document_key": document_key,
+                    "document_label": str(row.get("document_label") or ""),
+                    "format": source_format,
+                    "keys": document_keys,
                 }
             )
         return {
@@ -6797,6 +6823,7 @@ class ZorkEmulator:
             "document_count": len(compact_docs),
             "chunk_count": total_chunk_count,
             "docs": compact_docs,
+            "keys": source_keys,
         }
 
     # ── End Campaign Setup ─────────────────────────────────────────────
@@ -13178,8 +13205,14 @@ class ZorkEmulator:
             f"TURN_VISIBILITY_DEFAULT: {effective_turn_visibility_default}\n"
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
             f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
-            f"WORLD_SUMMARY: {summary}\n"
-            f"WORLD_STATE: {cls._dump_json(model_state)}\n"
+        )
+        if _source_payload.get("available"):
+            user_prompt += (
+                f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
+                f"SOURCE_MATERIAL_KEYS: {cls._dump_json(_source_payload.get('keys') or [])}\n"
+                f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
+            )
+        user_prompt += (
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
             f"DIFFICULTY: {_difficulty}\n"
@@ -13194,15 +13227,11 @@ class ZorkEmulator:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
         user_prompt += (
             f"WORLD_SUMMARY: {summary}\n"
+            f"WORLD_STATE: {cls._dump_json(model_state)}\n"
             f"CALENDAR: {cls._dump_json(_calendar)}\n"
             f"CALENDAR_REMINDERS:\n{_calendar_reminders}\n"
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
         )
-        if _source_payload.get("available"):
-            user_prompt += (
-                f"SOURCE_MATERIAL_DOCS: {cls._dump_json(_source_payload.get('docs') or [])}\n"
-                f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
-            )
         if _active_plot_threads:
             user_prompt += (
                 f"ACTIVE_PLOT_THREADS: {cls._dump_json(_active_plot_threads)}\n"
