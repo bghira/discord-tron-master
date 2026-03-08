@@ -287,8 +287,10 @@ class ZorkEmulator:
         "- narration: string (what the player sees)\n"
         '- scene_output: object (preferred structured scene packet for this turn. Keys: "location_key" (string, optional), "context_key" (string, optional), '
         '"beats" (array), and optional "rendered_text". Each beat object MUST begin with "reasoning" and include: '
-        '"type", "speaker", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
+        '"type", "speaker", "actors", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
         'Use short per-beat reasoning grounded in who perceives the beat and why it belongs in the scene. '
+        'actors is REQUIRED on every beat and should name the character(s) actually doing the thing, even when there is no spoken speaker. '
+        'Use speaker="narrator" only for pure description/environmental framing; otherwise name the acting character. '
         'aware_discord_ids and aware_npc_slugs are REQUIRED on every beat, even if empty arrays. '
         'narration should be the plain-text render of the same scene_output when both are present.)\n'
         "- state_update: object (REQUIRED in every final non-tool JSON response. It must ALWAYS include at least "
@@ -356,7 +358,8 @@ class ZorkEmulator:
         '"current_chapter", and "current_scene" explicitly.\n'
         "- Prefer scene_output over flat narration when multiple speakers, mixed visibility, or carryover/private beats matter.\n"
         "- scene_output.beats are the canonical scene structure; narration is the compatibility render.\n"
-        '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
+        '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
+        '- For non-dialogue action beats, still include actors, e.g. {"reasoning":"Chris physically moves the jar.","type":"action","speaker":"chris-crawly","actors":["chris-crawly"],"visibility":"local","aware_discord_ids":[],"aware_npc_slugs":["rent"],"text":"Chris angles the jar toward the pocket."}\n'
         "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
@@ -2846,6 +2849,19 @@ class ZorkEmulator:
                     reasoning = "Public beat visible to everyone."
             beat_type = str(raw_beat.get("type") or "narration").strip().lower() or "narration"
             speaker = str(raw_beat.get("speaker") or "narrator").strip() or "narrator"
+            actors: List[str] = []
+            raw_actors = raw_beat.get("actors")
+            if isinstance(raw_actors, list):
+                for item in raw_actors:
+                    actor_text = str(item or "").strip()
+                    if actor_text and actor_text not in actors:
+                        actors.append(actor_text)
+            elif isinstance(raw_actors, str):
+                actor_text = str(raw_actors or "").strip()
+                if actor_text:
+                    actors.append(actor_text)
+            if not actors and speaker and speaker != "narrator":
+                actors.append(speaker)
 
             aware_discord_ids: List[int] = []
             raw_aware_ids = raw_beat.get("aware_discord_ids")
@@ -2907,6 +2923,7 @@ class ZorkEmulator:
                     "reasoning": reasoning,
                     "type": beat_type,
                     "speaker": speaker,
+                    "actors": actors,
                     "visibility": beat_visibility,
                     "aware_discord_ids": aware_discord_ids,
                     "aware_npc_slugs": aware_npc_slugs,
@@ -2925,6 +2942,7 @@ class ZorkEmulator:
                     "reasoning": "Compatibility fallback from plain narration.",
                     "type": "narration",
                     "speaker": "narrator",
+                    "actors": [],
                     "visibility": base_visibility,
                     "aware_discord_ids": base_visible_user_ids
                     if base_visibility in {"private", "limited"}
@@ -3018,6 +3036,7 @@ class ZorkEmulator:
                 "reasoning": str(beat.get("reasoning") or "").strip(),
                 "type": str(beat.get("type") or "narration").strip(),
                 "speaker": str(beat.get("speaker") or "narrator").strip(),
+                "actors": list(beat.get("actors") or []),
                 "visibility": str(beat.get("visibility") or "local").strip(),
                 "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
                 "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
@@ -3071,6 +3090,7 @@ class ZorkEmulator:
                         "reasoning": str(beat.get("reasoning") or "").strip(),
                         "type": str(beat.get("type") or "narration").strip(),
                         "speaker": str(beat.get("speaker") or "narrator").strip(),
+                        "actors": list(beat.get("actors") or []),
                         "visibility": str(beat.get("visibility") or "local").strip(),
                         "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
                         "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
