@@ -512,10 +512,12 @@ class ZorkEmulator:
         "\nYou have a recent_turns tool for immediate visible continuity.\n"
         "You MUST call it before final narration/state JSON on every normal gameplay turn.\n"
         "Return ONLY:\n"
-        '{"tool_call": "recent_turns"}\n'
+        '{"tool_call": "recent_turns", "player_slugs": ["other-player-slug"], "npc_slugs": ["npc-slug"]}\n'
         "Optional limit example:\n"
-        '{"tool_call": "recent_turns", "limit": 12}\n'
-        "The system will return recent visible turns filtered for the acting player, current location, active private/limited context, and any relevant recipients.\n"
+        '{"tool_call": "recent_turns", "player_slugs": ["other-player-slug"], "npc_slugs": ["npc-slug"], "limit": 12}\n'
+        "Include player_slugs and npc_slugs for the current receivers who need continuity from prior private/limited exchanges.\n"
+        "The receiver lists ADD relevant private continuity; they do NOT filter out normal public/local continuity.\n"
+        "The system will return recent visible turns filtered for the acting player, current location, active private/limited context, and the requested receivers.\n"
         "This tool is required before guessing what just happened in the room.\n"
     )
     SMS_TOOL_PROMPT = (
@@ -2499,13 +2501,45 @@ class ZorkEmulator:
         return out
 
     @classmethod
+    def _recent_turn_receiver_hints(
+        cls,
+        campaign: ZorkCampaign,
+        *,
+        viewer_user_id: int,
+        party_snapshot: List[Dict[str, object]],
+        player_state: Dict[str, object],
+    ) -> Dict[str, List[str]]:
+        player_slugs: List[str] = []
+        seen_player_slugs: set[str] = set()
+        for entry in party_snapshot:
+            if not isinstance(entry, dict):
+                continue
+            raw_user_id = entry.get("user_id")
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                user_id = 0
+            if user_id > 0 and user_id == viewer_user_id:
+                continue
+            slug = cls._player_slug_key(
+                entry.get("player_slug") or entry.get("name") or ""
+            )
+            if slug and slug not in seen_player_slugs:
+                seen_player_slugs.add(slug)
+                player_slugs.append(slug)
+        npc_slugs = sorted(cls._active_scene_npc_slugs(campaign, player_state))
+        return {
+            "player_slugs": player_slugs[:8],
+            "npc_slugs": npc_slugs[:12],
+        }
+
+    @classmethod
     def _turn_relevant_to_scene_receivers(
         cls,
         turn: ZorkTurn,
         *,
-        viewer_user_id: int,
-        party_snapshot: List[Dict[str, object]],
-        active_scene_npc_slugs: set[str],
+        requested_player_slugs: set[str],
+        requested_npc_slugs: set[str],
     ) -> bool:
         meta = cls._safe_turn_meta(turn)
         visibility = meta.get("visibility")
@@ -2520,42 +2554,15 @@ class ZorkEmulator:
             for item in list(visibility.get("aware_npc_slugs") or [])
             if str(item or "").strip()
         }
-        if aware_npc_slugs and active_scene_npc_slugs and aware_npc_slugs.intersection(active_scene_npc_slugs):
+        if aware_npc_slugs and requested_npc_slugs and aware_npc_slugs.intersection(requested_npc_slugs):
             return True
 
-        visible_user_ids: set[int] = set()
-        for item in list(visibility.get("visible_user_ids") or []):
-            try:
-                visible_user_ids.add(int(item))
-            except (TypeError, ValueError):
-                continue
         visible_player_slugs = {
             cls._player_slug_key(item)
             for item in list(visibility.get("visible_player_slugs") or [])
             if cls._player_slug_key(item)
         }
-
-        scene_user_ids: set[int] = set()
-        scene_player_slugs: set[str] = set()
-        for entry in party_snapshot:
-            if not isinstance(entry, dict):
-                continue
-            raw_user_id = entry.get("user_id")
-            try:
-                user_id = int(raw_user_id)
-            except (TypeError, ValueError):
-                user_id = 0
-            if user_id > 0 and user_id != viewer_user_id:
-                scene_user_ids.add(user_id)
-            slug = cls._player_slug_key(
-                entry.get("player_slug") or entry.get("name") or ""
-            )
-            if slug:
-                scene_player_slugs.add(slug)
-
-        if visible_user_ids.intersection(scene_user_ids):
-            return True
-        if visible_player_slugs.intersection(scene_player_slugs):
+        if visible_player_slugs.intersection(requested_player_slugs):
             return True
         return False
 
@@ -2569,9 +2576,8 @@ class ZorkEmulator:
         viewer_slug: str,
         viewer_location_key: str,
         viewer_private_context_key: str,
-        party_snapshot: List[Dict[str, object]],
-        player_state: Dict[str, object],
-        include_receiver_context: bool,
+        requested_player_slugs: set[str],
+        requested_npc_slugs: set[str],
     ) -> str:
         recent_lines: List[str] = []
         _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
@@ -2589,11 +2595,6 @@ class ZorkEmulator:
             name = str(info.get("name") or "").strip()
             if name:
                 player_names[user_id] = name
-        active_scene_npc_slugs = (
-            cls._active_scene_npc_slugs(campaign, player_state)
-            if include_receiver_context
-            else set()
-        )
 
         for turn in turns:
             content = (turn.content or "").strip()
@@ -2608,13 +2609,12 @@ class ZorkEmulator:
             )
             if (
                 not visible
-                and include_receiver_context
+                and (requested_player_slugs or requested_npc_slugs)
                 and turn.user_id == viewer_user_id
                 and cls._turn_relevant_to_scene_receivers(
                     turn,
-                    viewer_user_id=viewer_user_id,
-                    party_snapshot=party_snapshot,
-                    active_scene_npc_slugs=active_scene_npc_slugs,
+                    requested_player_slugs=requested_player_slugs,
+                    requested_npc_slugs=requested_npc_slugs,
                 )
             ):
                 visible = True
@@ -11945,9 +11945,8 @@ class ZorkEmulator:
             viewer_slug=_viewer_slug,
             viewer_location_key=_viewer_location_key,
             viewer_private_context_key=_viewer_private_context_key,
-            party_snapshot=party_snapshot,
-            player_state=player_state,
-            include_receiver_context=False,
+            requested_player_slugs=set(),
+            requested_npc_slugs=set(),
         )
         rails_context = cls._build_rails_context(player_state, party_snapshot)
 
@@ -12928,7 +12927,17 @@ class ZorkEmulator:
                         else ""
                     )
                     if first_tool_name != "recent_turns":
-                        first_payload = {"tool_call": "recent_turns"}
+                        receiver_hints = cls._recent_turn_receiver_hints(
+                            campaign,
+                            viewer_user_id=player.user_id,
+                            party_snapshot=party_snapshot,
+                            player_state=player_state,
+                        )
+                        first_payload = {
+                            "tool_call": "recent_turns",
+                            "player_slugs": receiver_hints.get("player_slugs") or [],
+                            "npc_slugs": receiver_hints.get("npc_slugs") or [],
+                        }
                         _zork_log(
                             "FORCED RECENT TURNS",
                             "recent_turns injected before any other tool or final narration",
@@ -13022,6 +13031,32 @@ class ZorkEmulator:
 
                         if tool_name == "recent_turns":
                             recent_turns_loaded = True
+                            raw_player_slugs = first_payload.get("player_slugs")
+                            if isinstance(raw_player_slugs, list):
+                                requested_player_slugs = {
+                                    cls._player_slug_key(item)
+                                    for item in raw_player_slugs
+                                    if cls._player_slug_key(item)
+                                }
+                            elif isinstance(raw_player_slugs, str):
+                                requested_player_slugs = {
+                                    cls._player_slug_key(raw_player_slugs)
+                                } if cls._player_slug_key(raw_player_slugs) else set()
+                            else:
+                                requested_player_slugs = set()
+                            raw_npc_slugs = first_payload.get("npc_slugs")
+                            if isinstance(raw_npc_slugs, list):
+                                requested_npc_slugs = {
+                                    str(item or "").strip()
+                                    for item in raw_npc_slugs
+                                    if str(item or "").strip()
+                                }
+                            elif isinstance(raw_npc_slugs, str):
+                                requested_npc_slugs = {
+                                    str(raw_npc_slugs).strip()
+                                } if str(raw_npc_slugs).strip() else set()
+                            else:
+                                requested_npc_slugs = set()
                             try:
                                 recent_limit = max(
                                     1,
@@ -13043,14 +13078,14 @@ class ZorkEmulator:
                                 viewer_slug=viewer_slug,
                                 viewer_location_key=viewer_location_key,
                                 viewer_private_context_key=viewer_private_context_key,
-                                party_snapshot=party_snapshot,
-                                player_state=player_state,
-                                include_receiver_context=True,
+                                requested_player_slugs=requested_player_slugs,
+                                requested_npc_slugs=requested_npc_slugs,
                             )
                             tool_result_block = (
                                 "RECENT_TURNS_LOADED: true\n"
                                 "RECENT_TURNS_NOTE: This is the immediate visible continuity for the acting player. "
-                                "It includes prior private/limited turns when a current scene receiver still needs that context.\n"
+                                "Requested receivers add relevant prior private/limited continuity; public/local continuity remains included.\n"
+                                f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
                                 f"RECENT_TURNS:\n{recent_text}"
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
@@ -14317,7 +14352,17 @@ class ZorkEmulator:
                                 != "recent_turns"
                             )
                         ):
-                            first_payload = {"tool_call": "recent_turns"}
+                            receiver_hints = cls._recent_turn_receiver_hints(
+                                campaign,
+                                viewer_user_id=player.user_id,
+                                party_snapshot=party_snapshot,
+                                player_state=player_state,
+                            )
+                            first_payload = {
+                                "tool_call": "recent_turns",
+                                "player_slugs": receiver_hints.get("player_slugs") or [],
+                                "npc_slugs": receiver_hints.get("npc_slugs") or [],
+                            }
                             _zork_log(
                                 "FORCED RECENT TURNS",
                                 "recent_turns re-injected before continuing tool/final flow",
