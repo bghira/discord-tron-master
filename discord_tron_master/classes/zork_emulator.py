@@ -13289,6 +13289,10 @@ class ZorkEmulator:
                             turn_prompt_tail,
                             *blocks,
                         )
+                        _zork_log(
+                            "TURN AUGMENTED PROMPT",
+                            f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{tool_augmented_prompt}",
+                        )
                     tool_chain_steps = 0
                     max_tool_chain_steps = 4
                     if (
