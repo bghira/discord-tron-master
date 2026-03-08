@@ -5354,12 +5354,11 @@ class ZorkEmulator:
         )
 
         # Step 1 — token-aware dynamic chunking
-        chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target = (
-            cls._chunk_text_by_tokens(
-                text,
-                min_chunk_tokens=min_chunk_tokens,
-                max_chunks=cls.ATTACHMENT_MAX_CHUNKS,
-            )
+        chunks, total_tokens, target_chunk_tokens, chars_per_tok, chunk_char_target = await asyncio.to_thread(
+            cls._chunk_text_by_tokens,
+            text,
+            min_chunk_tokens=min_chunk_tokens,
+            max_chunks=cls.ATTACHMENT_MAX_CHUNKS,
         )
 
         if not chunks:
@@ -5369,7 +5368,7 @@ class ZorkEmulator:
         if (
             allow_single_chunk_passthrough
             and len(chunks) == 1
-            and glm_token_count(chunks[0]) <= budget_tokens
+            and await asyncio.to_thread(glm_token_count, chunks[0]) <= budget_tokens
         ):
             return chunks[0]
 
@@ -5470,7 +5469,7 @@ class ZorkEmulator:
 
         # Step 3 — check total token length
         joined = "\n\n".join(summaries)
-        joined_tokens = glm_token_count(joined)
+        joined_tokens = await asyncio.to_thread(glm_token_count, joined)
         if joined_tokens <= budget_tokens:
             _zork_log(
                 "ATTACHMENT SUMMARY DONE",
@@ -5495,7 +5494,9 @@ class ZorkEmulator:
         target_chars_per = int(target_tokens_per * chars_per_tok)
 
         # Sort indices by token count descending (longest first)
-        summary_tok_counts = [glm_token_count(s) for s in summaries]
+        summary_tok_counts = await asyncio.to_thread(
+            lambda: [glm_token_count(s) for s in summaries]
+        )
         indexed = sorted(
             enumerate(summaries),
             key=lambda x: summary_tok_counts[x[0]],
@@ -5557,14 +5558,14 @@ class ZorkEmulator:
                         pass
 
         joined = "\n\n".join(summaries)
-        joined_tokens = glm_token_count(joined)
+        joined_tokens = await asyncio.to_thread(glm_token_count, joined)
         # Hard-truncate if still over budget (rare after condensation)
         if joined_tokens > budget_tokens:
             # Trim by chars using the ratio — slightly conservative
             max_chars = int(budget_tokens * chars_per_tok * 0.9)
             if len(joined) > max_chars:
                 joined = joined[: max_chars - len("... [truncated]")] + "... [truncated]"
-                joined_tokens = glm_token_count(joined)
+                joined_tokens = await asyncio.to_thread(glm_token_count, joined)
 
         # Step 5 — final edit + cleanup
         _zork_log(
