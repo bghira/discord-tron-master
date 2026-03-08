@@ -2562,9 +2562,15 @@ class ZorkEmulator:
             for item in list(visibility.get("visible_player_slugs") or [])
             if cls._player_slug_key(item)
         }
-        if visible_player_slugs.intersection(requested_player_slugs):
-            return True
-        return False
+        player_match = True
+        npc_match = True
+        if requested_player_slugs:
+            player_match = bool(
+                visible_player_slugs.intersection(requested_player_slugs)
+            )
+        if requested_npc_slugs:
+            npc_match = bool(aware_npc_slugs.intersection(requested_npc_slugs))
+        return player_match and npc_match
 
     @classmethod
     def _recent_turns_text_for_viewer(
