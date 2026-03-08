@@ -287,9 +287,10 @@ class ZorkEmulator:
         "- narration: string (what the player sees)\n"
         '- scene_output: object (preferred structured scene packet for this turn. Keys: "location_key" (string, optional), "context_key" (string, optional), '
         '"beats" (array), and optional "rendered_text". Each beat object MUST begin with "reasoning" and include: '
-        '"type", "speaker", "actors", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
+        '"type", "speaker", "actors", "listeners", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
         'Use short per-beat reasoning grounded in who perceives the beat and why it belongs in the scene. '
         'actors is REQUIRED on every beat and should name the character(s) actually doing the thing, even when there is no spoken speaker. '
+        'listeners is REQUIRED on every beat and should name the direct in-scene recipients/perceivers of the beat when applicable (who is being told, shown, confronted, answered, or otherwise directly receiving it). '
         'Use speaker="narrator" only for pure description/environmental framing; otherwise name the acting character. '
         'aware_discord_ids and aware_npc_slugs are REQUIRED on every beat, even if empty arrays. '
         'narration should be the plain-text render of the same scene_output when both are present.)\n'
@@ -358,8 +359,8 @@ class ZorkEmulator:
         '"current_chapter", and "current_scene" explicitly.\n'
         "- Prefer scene_output over flat narration when multiple speakers, mixed visibility, or carryover/private beats matter.\n"
         "- scene_output.beats are the canonical scene structure; narration is the compatibility render.\n"
-        '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
-        '- For non-dialogue action beats, still include actors, e.g. {"reasoning":"Chris physically moves the jar.","type":"action","speaker":"chris-crawly","actors":["chris-crawly"],"visibility":"local","aware_discord_ids":[],"aware_npc_slugs":["rent"],"text":"Chris angles the jar toward the pocket."}\n'
+        '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"listeners":["deshawn-williams"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
+        '- For non-dialogue action beats, still include actors and listeners when relevant, e.g. {"reasoning":"Chris physically moves the jar while Rent watches.","type":"action","speaker":"chris-crawly","actors":["chris-crawly"],"listeners":["rent"],"visibility":"local","aware_discord_ids":[],"aware_npc_slugs":["rent"],"text":"Chris angles the jar toward the pocket."}\n'
         "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
@@ -2981,6 +2982,18 @@ class ZorkEmulator:
             if not actors and speaker and speaker != "narrator":
                 actors.append(speaker)
 
+            listeners: List[str] = []
+            raw_listeners = raw_beat.get("listeners")
+            if isinstance(raw_listeners, list):
+                for item in raw_listeners:
+                    listener_text = str(item or "").strip()
+                    if listener_text and listener_text not in listeners:
+                        listeners.append(listener_text)
+            elif isinstance(raw_listeners, str):
+                listener_text = str(raw_listeners or "").strip()
+                if listener_text:
+                    listeners.append(listener_text)
+
             aware_discord_ids: List[int] = []
             raw_aware_ids = raw_beat.get("aware_discord_ids")
             if not isinstance(raw_aware_ids, list):
@@ -3042,6 +3055,7 @@ class ZorkEmulator:
                     "type": beat_type,
                     "speaker": speaker,
                     "actors": actors,
+                    "listeners": listeners,
                     "visibility": beat_visibility,
                     "aware_discord_ids": aware_discord_ids,
                     "aware_npc_slugs": aware_npc_slugs,
@@ -3061,6 +3075,7 @@ class ZorkEmulator:
                     "type": "narration",
                     "speaker": "narrator",
                     "actors": [],
+                    "listeners": [],
                     "visibility": base_visibility,
                     "aware_discord_ids": base_visible_user_ids
                     if base_visibility in {"private", "limited"}
@@ -3155,6 +3170,7 @@ class ZorkEmulator:
                 "type": str(beat.get("type") or "narration").strip(),
                 "speaker": str(beat.get("speaker") or "narrator").strip(),
                 "actors": list(beat.get("actors") or []),
+                "listeners": list(beat.get("listeners") or []),
                 "visibility": str(beat.get("visibility") or "local").strip(),
                 "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
                 "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
@@ -3238,6 +3254,7 @@ class ZorkEmulator:
                         "type": str(beat.get("type") or "narration").strip(),
                         "speaker": str(beat.get("speaker") or "narrator").strip(),
                         "actors": list(beat.get("actors") or []),
+                        "listeners": list(beat.get("listeners") or []),
                         "visibility": str(beat.get("visibility") or "local").strip(),
                         "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
                         "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
@@ -3344,6 +3361,7 @@ class ZorkEmulator:
             "type": beat_type,
             "speaker": speaker,
             "actors": actors,
+            "listeners": [],
             "visibility": scope,
             "aware_discord_ids": visible_user_ids,
             "aware_npc_slugs": aware_npc_slugs,
