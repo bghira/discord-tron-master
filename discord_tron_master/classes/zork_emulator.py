@@ -3845,6 +3845,168 @@ class ZorkEmulator:
         return len(normalized_lines), stored_msg
 
     @classmethod
+    def _campaign_export_transcript(cls, campaign: ZorkCampaign) -> str:
+        turns = (
+            ZorkTurn.query.filter_by(campaign_id=campaign.id)
+            .order_by(ZorkTurn.id.asc())
+            .all()
+        )
+        registry = cls._campaign_player_registry(campaign.id)
+        by_user_id = registry.get("by_user_id", {})
+        lines: list[str] = []
+        for turn in turns:
+            content = str(turn.content or "").strip()
+            if not content:
+                continue
+            if turn.kind == "narrator":
+                content = cls._strip_ephemeral_context_lines(content)
+                content = cls._strip_narration_footer(content)
+            if not content:
+                continue
+            if turn.kind == "player":
+                entry = by_user_id.get(turn.user_id) or {}
+                name = str(entry.get("name") or f"Player {turn.user_id}").strip()
+                lines.append(f"[TURN {turn.id}] PLAYER {name}: {content}")
+            elif turn.kind == "narrator":
+                lines.append(f"[TURN {turn.id}] NARRATOR: {content}")
+            else:
+                lines.append(f"[TURN {turn.id}] {str(turn.kind or 'system').upper()}: {content}")
+        return "\n".join(lines).strip()
+
+    @classmethod
+    async def _generate_campaign_export_artifacts(
+        cls,
+        campaign: ZorkCampaign,
+        ctx_message,
+        *,
+        channel=None,
+    ) -> dict[str, str]:
+        transcript = cls._campaign_export_transcript(campaign)
+        if not transcript:
+            return {}
+
+        campaign_state = cls.get_campaign_state(campaign)
+        characters = cls.get_campaign_characters(campaign)
+        campaign_players = cls._campaign_players_for_prompt(campaign.id, limit=24)
+        story_outline = campaign_state.get("story_outline") if isinstance(campaign_state, dict) else {}
+        plot_threads = campaign_state.get("plot_threads") if isinstance(campaign_state, dict) else []
+        chapter_plan = campaign_state.get("chapters") if isinstance(campaign_state, dict) else []
+        consequences = campaign_state.get("consequences") if isinstance(campaign_state, dict) else []
+        model_state = cls._build_model_state(campaign_state if isinstance(campaign_state, dict) else {})
+        model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
+        export_summary = await cls._summarise_long_text(
+            transcript,
+            ctx_message,
+            channel=channel,
+            campaign=campaign,
+            summary_instructions=(
+                "Summarise this full campaign playthrough faithfully for export. Preserve lasting facts, "
+                "character arcs, relationship changes, major reveals, locations, items, chapter beats, "
+                "timeline changes, unresolved threads, and the current open state. "
+                "When facts conflict, prefer the later explicit outcome and the persisted world state."
+            ),
+            allow_single_chunk_passthrough=False,
+        )
+        source_payload = cls._source_material_prompt_payload(campaign.id)
+        source_index_hint = cls._auto_rulebook_source_index_hint(source_payload)
+        source_tool_instructions = ""
+        if source_index_hint:
+            source_tool_instructions = (
+                "\nYou may inspect existing source material while resolving canon.\n"
+                'To list keys: {"tool_call": "source_browse"}\n'
+                'To browse one doc: {"tool_call": "source_browse", "document_key": "doc-key"}\n'
+                'To search canon: {"tool_call": "memory_search", "category": "source", "queries": ["keyword1", "keyword2"]}\n'
+                "To call a tool, return ONLY the JSON tool_call object. Otherwise return ONLY the requested final text.\n"
+            )
+
+        export_context = {
+            "campaign_name": campaign.name,
+            "campaign_summary": cls._strip_inventory_mentions(campaign.summary or ""),
+            "story_outline": story_outline,
+            "chapter_plan": chapter_plan,
+            "plot_threads": plot_threads,
+            "consequences": consequences,
+            "current_state": model_state,
+            "characters": characters,
+            "campaign_players": campaign_players,
+        }
+
+        rulebook_system = (
+            "You convert a completed campaign playthrough into a retrievable rulebook for recreating that tale.\n"
+            "Output ONLY plain text rulebook lines. No markdown. No headers. No bullets. No numbering.\n"
+            "Every line must be fully self-contained and use exactly CATEGORY-TAG: fact text\n"
+            "Use category families such as TONE, SCENE, SETTING, CHAR, PLOT, INTERACTION, GM-RULE, and venue-specific tags.\n"
+            "Treat WORLD_CHARACTERS as NPC-only and CAMPAIGN_PLAYERS as real human player characters. "
+            "In multiplayer campaigns there is no single main character; preserve ensemble structure.\n"
+            "Conflict resolution priority:\n"
+            "1. Persisted current state / current character roster / current chapter state\n"
+            "2. Later explicit turn outcomes in the playthrough summary\n"
+            "3. Repeated consistent facts across the transcript\n"
+            "4. Existing source material for unchanged background canon\n"
+            "If a fact remains uncertain, omit it or phrase it cautiously instead of inventing certainty.\n"
+            "Preserve major arcs, resolved outcomes, and unresolved threads so the tale can be recreated faithfully.\n"
+            f"{source_tool_instructions}"
+        )
+        rulebook_user = (
+            f"Generate a campaign rulebook export for '{campaign.name}'.\n"
+            f"{source_index_hint}"
+            "Use the full playthrough summary and current campaign data below.\n"
+            "This export should describe how to faithfully recreate the tale as it was actually played, not just the initial setup.\n\n"
+            f"PLAYTHROUGH SUMMARY:\n{export_summary or '(none)'}\n\n"
+            f"CAMPAIGN DATA:\n{json.dumps(export_context, indent=2)}\n"
+        )
+        _zork_log(
+            f"CAMPAIGN EXPORT RULEBOOK campaign={campaign.id}",
+            f"--- SYSTEM ---\n{rulebook_system}\n--- USER ---\n{rulebook_user}",
+        )
+        rulebook_response = await cls._setup_tool_loop(
+            rulebook_system,
+            rulebook_user,
+            campaign,
+            temperature=0.4,
+            max_tokens=cls.AUTO_RULEBOOK_MAX_TOKENS,
+            final_response_instruction="Return your final rulebook text now.",
+        )
+        rulebook_lines = cls._normalize_generated_rulebook_lines(rulebook_response or "")
+        rulebook_text = "\n".join(rulebook_lines).strip()
+
+        story_prompt_system = (
+            "You convert a completed campaign playthrough into a reusable story generator prompt.\n"
+            "Output ONLY plain text. No markdown fences.\n"
+            "Write a prompt that could recreate the same campaign faithfully: tone, setting, cast, arcs, open threads, "
+            "facts, and the current shape of the story.\n"
+            "Use clear section labels in plain text such as TITLE, GENRE, FORMAT, PLAY MODE, SETTING, PLAYER CHARACTERS, "
+            "NPC CAST, CANON FACTS, MAJOR ARCS, RELATIONSHIPS, OPEN THREADS, OPENING/START STATE, and RECREATION RULES.\n"
+            "If this was multiplayer, state clearly that it is an ensemble campaign with multiple real player characters and no single protagonist.\n"
+            "Resolve conflicts using the same priority order as the rulebook export: persisted current state, later explicit outcomes, repeated consistent facts, then source canon.\n"
+            "Do not write prose fiction. Write a practical generator prompt for reconstructing the campaign."
+        )
+        story_prompt_user = (
+            f"Generate a story generator prompt export for '{campaign.name}'.\n"
+            "This should function like a canonical recreation prompt for the whole played campaign.\n\n"
+            f"PLAYTHROUGH SUMMARY:\n{export_summary or '(none)'}\n\n"
+            f"CAMPAIGN DATA:\n{json.dumps(export_context, indent=2)}\n"
+        )
+        _zork_log(
+            f"CAMPAIGN EXPORT STORY PROMPT campaign={campaign.id}",
+            f"--- SYSTEM ---\n{story_prompt_system}\n--- USER ---\n{story_prompt_user}",
+        )
+        story_prompt_text = await cls._new_gpt(campaign=campaign).turbo_completion(
+            story_prompt_system,
+            story_prompt_user,
+            temperature=0.5,
+            max_tokens=6000,
+        )
+        story_prompt_text = str(story_prompt_text or "").strip()
+
+        out: dict[str, str] = {}
+        if rulebook_text:
+            out["campaign-rulebook.txt"] = rulebook_text
+        if story_prompt_text:
+            out["campaign-story-prompt.txt"] = story_prompt_text
+        return out
+
+    @classmethod
     async def _setup_generate_storyline_variants(
         cls, campaign, setup_data, user_guidance: str = None
     ) -> str:

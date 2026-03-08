@@ -622,6 +622,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
+            f"- `{prefix}zork campaign-export` export a reconstructed campaign rulebook and story-generator prompt from the full playthrough\n"
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
@@ -1540,6 +1541,57 @@ class Zork(commands.Cog):
 
         if sent <= 0:
             await ctx.send("Source-material export produced no files.")
+
+    @zork.command(name="campaign-export")
+    async def zork_campaign_export(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign_id = campaign.id
+            campaign_name = campaign.name
+
+        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        try:
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign_id)
+                if campaign is None:
+                    await ctx.send("No active campaign in this channel.")
+                    return
+                export_files = await ZorkEmulator._generate_campaign_export_artifacts(
+                    campaign,
+                    ctx.message,
+                    channel=ctx.channel,
+                )
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(ctx)
+
+        if not export_files:
+            await ctx.send("Campaign export produced no files.")
+            return
+
+        files: list[discord.File] = []
+        for filename, export_text in export_files.items():
+            payload = str(export_text or "").encode("utf-8")
+            files.append(discord.File(fp=io.BytesIO(payload), filename=filename))
+        await ctx.send(
+            content=f"Campaign export for `{campaign_name}` ({len(files)} file(s)).",
+            files=files,
+        )
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):
