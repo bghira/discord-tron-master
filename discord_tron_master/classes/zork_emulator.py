@@ -510,13 +510,13 @@ class ZorkEmulator:
     )
     RECENT_TURNS_TOOL_PROMPT = (
         "\nYou have a recent_turns tool for immediate visible continuity.\n"
-        "Use it when you need the latest visible scene history before narrating.\n"
+        "You MUST call it before final narration/state JSON on every normal gameplay turn.\n"
         "Return ONLY:\n"
         '{"tool_call": "recent_turns"}\n'
         "Optional limit example:\n"
         '{"tool_call": "recent_turns", "limit": 12}\n'
         "The system will return recent visible turns filtered for the acting player, current location, active private/limited context, and any relevant recipients.\n"
-        "This tool is preferred over guessing what just happened in the room.\n"
+        "This tool is required before guessing what just happened in the room.\n"
     )
     SMS_TOOL_PROMPT = (
         "\nYou also have SMS tools for in-game communications with off-scene NPCs:\n"
@@ -548,8 +548,8 @@ class ZorkEmulator:
         '{"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
         "If results are weak or empty, you may immediately call memory_search again with refined queries.\n"
         "\nTOOL USAGE POLICY (HIGH PRIORITY):\n"
-        "- On MOST turns, call at least one tool BEFORE final narration/state JSON.\n"
-        "- Default behavior: call recent_turns first for immediate continuity, then memory_search for deeper recall when needed.\n"
+        "- On every normal gameplay turn, call recent_turns BEFORE final narration/state JSON.\n"
+        "- After recent_turns, call memory_search for deeper recall when needed.\n"
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
         "use sms_write when sending or replying. Use sms_schedule for delayed replies.\n"
         "- Phone/text/SMS turns should normally be private or limited, not local/public, unless the player explicitly shares the content out loud.\n"
@@ -12894,6 +12894,7 @@ class ZorkEmulator:
                         except Exception:
                             first_payload = None
                     auto_forced_memory_search = False
+                    recent_turns_loaded = False
                     empty_response_repair_count = 0
                     anti_echo_retry_count = 0
                     used_tool_names = set()
@@ -12926,6 +12927,17 @@ class ZorkEmulator:
                                 "FORCED MEMORY SEARCH",
                                 f"queries={forced_queries}",
                             )
+                    first_tool_name = (
+                        str(first_payload.get("tool_call") or "").strip()
+                        if isinstance(first_payload, dict)
+                        else ""
+                    )
+                    if first_tool_name != "recent_turns":
+                        first_payload = {"tool_call": "recent_turns"}
+                        _zork_log(
+                            "FORCED RECENT TURNS",
+                            "recent_turns injected before any other tool or final narration",
+                        )
                     while (
                         first_payload
                         and cls._is_tool_call(first_payload)
@@ -13014,6 +13026,7 @@ class ZorkEmulator:
                             continue
 
                         if tool_name == "recent_turns":
+                            recent_turns_loaded = True
                             try:
                                 recent_limit = max(
                                     1,
@@ -14301,6 +14314,19 @@ class ZorkEmulator:
                         except Exception:
                             first_payload = None
                             break
+                        if (
+                            not recent_turns_loaded
+                            and (
+                                not isinstance(first_payload, dict)
+                                or str(first_payload.get("tool_call") or "").strip()
+                                != "recent_turns"
+                            )
+                        ):
+                            first_payload = {"tool_call": "recent_turns"}
+                            _zork_log(
+                                "FORCED RECENT TURNS",
+                                "recent_turns re-injected before continuing tool/final flow",
+                            )
 
                     # Hard-stop infinite tool loops.
                     if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
