@@ -285,6 +285,12 @@ class ZorkEmulator:
         "Return ONLY valid JSON with these keys:\n"
         "- reasoning: string (first key in final turn JSON; concise internal grounding for this turn: what evidence/context you used, which actors are involved, and why the chosen outcome follows)\n"
         "- narration: string (what the player sees)\n"
+        '- scene_output: object (preferred structured scene packet for this turn. Keys: "location_key" (string, optional), "context_key" (string, optional), '
+        '"beats" (array), and optional "rendered_text". Each beat object MUST begin with "reasoning" and include: '
+        '"type", "speaker", "visibility", "aware_discord_ids", "aware_npc_slugs", and "text". '
+        'Use short per-beat reasoning grounded in who perceives the beat and why it belongs in the scene. '
+        'aware_discord_ids and aware_npc_slugs are REQUIRED on every beat, even if empty arrays. '
+        'narration should be the plain-text render of the same scene_output when both are present.)\n'
         "- state_update: object (REQUIRED in every final non-tool JSON response. It must ALWAYS include at least "
         '"game_time", "current_chapter", and "current_scene", even when they are unchanged this turn. '
         "Use it for world state patches; set a key to null to remove it when no longer relevant. "
@@ -348,6 +354,9 @@ class ZorkEmulator:
         "- In final non-tool responses, include reasoning and put it as the first key.\n"
         '- In final non-tool responses, state_update is REQUIRED and must ALWAYS include "game_time", '
         '"current_chapter", and "current_scene" explicitly.\n'
+        "- Prefer scene_output over flat narration when multiple speakers, mixed visibility, or carryover/private beats matter.\n"
+        "- scene_output.beats are the canonical scene structure; narration is the compatibility render.\n"
+        '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
         "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
@@ -2635,6 +2644,7 @@ class ZorkEmulator:
             content = (turn.content or "").strip()
             if not content:
                 continue
+            meta = cls._safe_turn_meta(turn)
             visible = cls._turn_visible_to_viewer(
                 turn,
                 viewer_user_id,
@@ -2656,11 +2666,24 @@ class ZorkEmulator:
             if not visible:
                 continue
 
+            scene_output_lines = cls._scene_output_recent_lines(
+                turn,
+                cls.get_campaign_state(campaign),
+                meta.get("scene_output"),
+            )
+            if scene_output_lines and turn.kind == "narrator":
+                recent_lines.extend(scene_output_lines)
+                continue
+
             turn_prefix = cls._turn_context_prefix(turn, cls.get_campaign_state(campaign))
             if turn.kind == "player":
                 if _OOC_RE.match(content):
                     continue
-                clipped = cls._strip_inventory_mentions(content)
+                clipped = cls._strip_prompt_artifacts(
+                    cls._strip_inventory_mentions(content)
+                )
+                if not clipped:
+                    continue
                 name = player_names.get(turn.user_id)
                 mention = f"<@{turn.user_id}>" if turn.user_id else ""
                 if name and mention:
@@ -2675,7 +2698,9 @@ class ZorkEmulator:
             elif turn.kind == "narrator":
                 if content.lower() in _ERROR_PHRASES:
                     continue
-                clipped = cls._strip_ephemeral_context_lines(content)
+                clipped = cls._strip_prompt_artifacts(
+                    cls._strip_ephemeral_context_lines(content)
+                )
                 clipped = cls._strip_narration_footer(clipped)
                 if not clipped:
                     continue
@@ -2739,6 +2764,325 @@ class ZorkEmulator:
             "location_key": str(location_key or "").strip(),
             "channel_id": channel_id,
         }
+
+    @classmethod
+    def _scene_output_text_from_raw(cls, raw_scene_output: object) -> str:
+        if not isinstance(raw_scene_output, dict):
+            return ""
+        rendered = str(raw_scene_output.get("rendered_text") or "").strip()
+        if rendered:
+            return cls._trim_text(rendered, cls.MAX_NARRATION_CHARS)
+        raw_beats = raw_scene_output.get("beats")
+        if not isinstance(raw_beats, list):
+            return ""
+        texts: List[str] = []
+        for beat in raw_beats:
+            if not isinstance(beat, dict):
+                continue
+            text = str(beat.get("text") or beat.get("summary") or "").strip()
+            if not text:
+                continue
+            texts.append(text)
+        if not texts:
+            return ""
+        return cls._trim_text("\n\n".join(texts), cls.MAX_NARRATION_CHARS)
+
+    @classmethod
+    def _normalize_scene_output(
+        cls,
+        campaign: ZorkCampaign,
+        raw_scene_output: object,
+        *,
+        fallback_narration: str,
+        turn_visibility: Dict[str, object],
+        fallback_location_key: str,
+        actor_user_id: Optional[int],
+        actor_player_slug: str,
+    ) -> Optional[Dict[str, object]]:
+        base_visibility = (
+            str(turn_visibility.get("scope") or "").strip().lower() or "local"
+        )
+        base_visible_user_ids = []
+        for item in list(turn_visibility.get("visible_user_ids") or []):
+            try:
+                base_visible_user_ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        base_aware_npc_slugs = [
+            str(item or "").strip()
+            for item in list(turn_visibility.get("aware_npc_slugs") or [])
+            if str(item or "").strip()
+        ]
+        scene_output = raw_scene_output if isinstance(raw_scene_output, dict) else {}
+        raw_beats = scene_output.get("beats")
+        if not isinstance(raw_beats, list):
+            raw_beats = []
+
+        characters = cls.get_campaign_characters(campaign)
+        beats: List[Dict[str, object]] = []
+        for raw_beat in raw_beats[:24]:
+            if not isinstance(raw_beat, dict):
+                continue
+            text = str(raw_beat.get("text") or raw_beat.get("summary") or "").strip()
+            if not text:
+                continue
+            beat_visibility = (
+                str(raw_beat.get("visibility") or "").strip().lower() or base_visibility
+            )
+            if beat_visibility not in {"public", "private", "limited", "local"}:
+                beat_visibility = base_visibility
+            reasoning = cls._trim_text(
+                str(raw_beat.get("reasoning") or "").strip(),
+                180,
+            )
+            if not reasoning:
+                if beat_visibility == "private":
+                    reasoning = "Private beat for the acting character."
+                elif beat_visibility == "limited":
+                    reasoning = "Limited beat for explicit participants."
+                elif beat_visibility == "local":
+                    reasoning = "Visible to the current room."
+                else:
+                    reasoning = "Public beat visible to everyone."
+            beat_type = str(raw_beat.get("type") or "narration").strip().lower() or "narration"
+            speaker = str(raw_beat.get("speaker") or "narrator").strip() or "narrator"
+
+            aware_discord_ids: List[int] = []
+            raw_aware_ids = raw_beat.get("aware_discord_ids")
+            if not isinstance(raw_aware_ids, list):
+                raw_aware_ids = raw_beat.get("aware_user_ids")
+            if isinstance(raw_aware_ids, list):
+                for item in raw_aware_ids:
+                    try:
+                        aware_id = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if aware_id not in aware_discord_ids:
+                        aware_discord_ids.append(aware_id)
+            if not aware_discord_ids and beat_visibility in {"private", "limited"}:
+                for item in base_visible_user_ids:
+                    if item not in aware_discord_ids:
+                        aware_discord_ids.append(item)
+            if not aware_discord_ids and beat_visibility == "private" and actor_user_id is not None:
+                aware_discord_ids.append(int(actor_user_id))
+
+            aware_npc_slugs: List[str] = []
+            raw_aware_npcs = raw_beat.get("aware_npc_slugs")
+            if isinstance(raw_aware_npcs, list):
+                for item in raw_aware_npcs:
+                    candidate = str(item or "").strip()
+                    if not candidate:
+                        continue
+                    resolved = (
+                        cls._resolve_existing_character_slug(characters, candidate)
+                        if isinstance(characters, dict)
+                        else None
+                    )
+                    final_slug = resolved or candidate
+                    if final_slug not in aware_npc_slugs:
+                        aware_npc_slugs.append(final_slug)
+            if not aware_npc_slugs and beat_visibility in {"private", "limited"}:
+                for slug in base_aware_npc_slugs:
+                    if slug not in aware_npc_slugs:
+                        aware_npc_slugs.append(slug)
+
+            beat_location_key = (
+                str(raw_beat.get("location_key") or "").strip()
+                or str(scene_output.get("location_key") or "").strip()
+                or str(turn_visibility.get("location_key") or "").strip()
+                or str(fallback_location_key or "").strip()
+            )
+            aware_npc_slugs = cls._filter_aware_npc_slugs_for_location_key(
+                campaign,
+                beat_location_key,
+                aware_npc_slugs,
+            )
+            beat_context_key = (
+                str(raw_beat.get("context_key") or "").strip()
+                or str(scene_output.get("context_key") or "").strip()
+                or str(turn_visibility.get("context_key") or "").strip()
+            )
+            beats.append(
+                {
+                    "reasoning": reasoning,
+                    "type": beat_type,
+                    "speaker": speaker,
+                    "visibility": beat_visibility,
+                    "aware_discord_ids": aware_discord_ids,
+                    "aware_npc_slugs": aware_npc_slugs,
+                    "text": cls._trim_text(text, 600),
+                    "location_key": beat_location_key or None,
+                    "context_key": beat_context_key or None,
+                }
+            )
+
+        if not beats:
+            fallback_text = str(fallback_narration or "").strip()
+            if not fallback_text:
+                return None
+            beats = [
+                {
+                    "reasoning": "Compatibility fallback from plain narration.",
+                    "type": "narration",
+                    "speaker": "narrator",
+                    "visibility": base_visibility,
+                    "aware_discord_ids": base_visible_user_ids
+                    if base_visibility in {"private", "limited"}
+                    else ([] if actor_user_id is None or base_visibility != "private" else [int(actor_user_id)]),
+                    "aware_npc_slugs": base_aware_npc_slugs if base_visibility in {"private", "limited"} else [],
+                    "text": cls._trim_text(fallback_text, 600),
+                    "location_key": str(turn_visibility.get("location_key") or fallback_location_key or "").strip() or None,
+                    "context_key": str(turn_visibility.get("context_key") or "").strip() or None,
+                }
+            ]
+
+        rendered_text = str(scene_output.get("rendered_text") or "").strip()
+        if not rendered_text:
+            rendered_text = cls._trim_text(
+                "\n\n".join(str(beat.get("text") or "").strip() for beat in beats if str(beat.get("text") or "").strip()),
+                cls.MAX_NARRATION_CHARS,
+            )
+
+        normalized = {
+            "location_key": (
+                str(scene_output.get("location_key") or "").strip()
+                or str(turn_visibility.get("location_key") or "").strip()
+                or str(fallback_location_key or "").strip()
+                or None
+            ),
+            "context_key": (
+                str(scene_output.get("context_key") or "").strip()
+                or str(turn_visibility.get("context_key") or "").strip()
+                or None
+            ),
+            "actor_player_slug": actor_player_slug or None,
+            "beats": beats,
+            "rendered_text": rendered_text or None,
+        }
+        return normalized
+
+    @classmethod
+    def _scene_output_rendered_text(
+        cls, scene_output: Optional[Dict[str, object]]
+    ) -> str:
+        if not isinstance(scene_output, dict):
+            return ""
+        rendered = str(scene_output.get("rendered_text") or "").strip()
+        if rendered:
+            return cls._trim_text(rendered, cls.MAX_NARRATION_CHARS)
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list):
+            return ""
+        texts = [
+            str(beat.get("text") or "").strip()
+            for beat in beats
+            if isinstance(beat, dict) and str(beat.get("text") or "").strip()
+        ]
+        if not texts:
+            return ""
+        return cls._trim_text("\n\n".join(texts), cls.MAX_NARRATION_CHARS)
+
+    @classmethod
+    def _scene_output_jsonl(
+        cls,
+        *,
+        turn_id: Optional[int],
+        game_time: Dict[str, int],
+        scene_output: Optional[Dict[str, object]],
+        turn_visibility: Optional[Dict[str, object]],
+    ) -> str:
+        if not isinstance(scene_output, dict):
+            return ""
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list) or not beats:
+            return ""
+        lines: List[str] = []
+        header = {
+            "kind": "turn",
+            "turn_id": turn_id,
+            "day": cls._coerce_non_negative_int(game_time.get("day", 1), default=1) if isinstance(game_time, dict) else 1,
+            "hour": cls._coerce_non_negative_int(game_time.get("hour", 0), default=0) if isinstance(game_time, dict) else 0,
+            "minute": cls._coerce_non_negative_int(game_time.get("minute", 0), default=0) if isinstance(game_time, dict) else 0,
+            "location_key": scene_output.get("location_key"),
+            "context_key": scene_output.get("context_key"),
+            "visibility": str((turn_visibility or {}).get("scope") or "").strip().lower() or "local",
+        }
+        lines.append(json.dumps(header, ensure_ascii=False, separators=(",", ":")))
+        for index, beat in enumerate(beats):
+            if not isinstance(beat, dict):
+                continue
+            line = {
+                "kind": "beat",
+                "turn_id": turn_id,
+                "index": index,
+                "reasoning": str(beat.get("reasoning") or "").strip(),
+                "type": str(beat.get("type") or "narration").strip(),
+                "speaker": str(beat.get("speaker") or "narrator").strip(),
+                "visibility": str(beat.get("visibility") or "local").strip(),
+                "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
+                "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
+                "location_key": beat.get("location_key"),
+                "context_key": beat.get("context_key"),
+                "text": str(beat.get("text") or "").strip(),
+            }
+            lines.append(json.dumps(line, ensure_ascii=False, separators=(",", ":")))
+        return "\n".join(lines)
+
+    @classmethod
+    def _scene_output_recent_lines(
+        cls,
+        turn: ZorkTurn,
+        campaign_state: Dict[str, object],
+        scene_output: object,
+    ) -> List[str]:
+        if not isinstance(scene_output, dict):
+            return []
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list) or not beats:
+            return []
+        turn_number = int(getattr(turn, "id", 0) or 0)
+        index = campaign_state.get(cls.TURN_TIME_INDEX_KEY) if isinstance(campaign_state, dict) else {}
+        if not isinstance(index, dict):
+            index = {}
+        entry = index.get(str(turn_number))
+        header = {
+            "kind": "turn",
+            "turn_id": turn_number,
+            "location_key": scene_output.get("location_key"),
+            "context_key": scene_output.get("context_key"),
+        }
+        if isinstance(entry, dict):
+            header["day"] = cls._coerce_non_negative_int(entry.get("day", 1), default=1) or 1
+            header["hour"] = min(23, max(0, cls._coerce_non_negative_int(entry.get("hour", 0), default=0)))
+            header["minute"] = min(59, max(0, cls._coerce_non_negative_int(entry.get("minute", 0), default=0)))
+        visibility = cls._safe_turn_meta(turn).get("visibility")
+        if isinstance(visibility, dict):
+            header["visibility"] = str(visibility.get("scope") or "").strip().lower() or None
+        lines = [json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
+        for index, beat in enumerate(beats):
+            if not isinstance(beat, dict):
+                continue
+            lines.append(
+                json.dumps(
+                    {
+                        "kind": "beat",
+                        "turn_id": turn_number,
+                        "index": index,
+                        "reasoning": str(beat.get("reasoning") or "").strip(),
+                        "type": str(beat.get("type") or "narration").strip(),
+                        "speaker": str(beat.get("speaker") or "narrator").strip(),
+                        "visibility": str(beat.get("visibility") or "local").strip(),
+                        "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
+                        "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
+                        "location_key": beat.get("location_key"),
+                        "context_key": beat.get("context_key"),
+                        "text": str(beat.get("text") or "").strip(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        return lines
 
     @classmethod
     def _format_game_time_label(cls, game_time: Dict[str, int]) -> str:
@@ -7719,6 +8063,35 @@ class ZorkEmulator:
         return cls._strip_ephemeral_context_lines(text)
 
     @classmethod
+    def _strip_prompt_artifacts(cls, text: str) -> str:
+        if not text:
+            return ""
+        cleaned = re.sub(
+            r"\[SYSTEM NOTE: FOR THIS RESPONSE ONLY:.*?\]",
+            "",
+            str(text),
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        kept_lines = []
+        skipping_attachment = False
+        for line in cleaned.splitlines():
+            stripped = line.strip()
+            upper = stripped.upper()
+            if upper.startswith("TURN_ATTACHMENT_CONTEXT:"):
+                skipping_attachment = True
+                continue
+            if skipping_attachment:
+                if not stripped:
+                    skipping_attachment = False
+                continue
+            if upper.startswith("PLAYER_ACTION"):
+                continue
+            kept_lines.append(line)
+        cleaned = "\n".join(kept_lines)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @classmethod
     def _set_turn_ephemeral_notices(
         cls,
         campaign_id: int,
@@ -8059,6 +8432,76 @@ class ZorkEmulator:
         if str(turn_visibility.get("scope") or "").strip().lower() in {"private", "limited"} and len(same_scene_slugs) == 1:
             _add(same_scene_slugs[0])
         return out
+
+    @classmethod
+    def _filter_aware_npc_slugs_for_scene(
+        cls,
+        campaign: ZorkCampaign,
+        player_state: Dict[str, object],
+        aware_npc_slugs: object,
+    ) -> List[str]:
+        if not isinstance(aware_npc_slugs, list):
+            return []
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict):
+            return []
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in aware_npc_slugs:
+            candidate = str(item or "").strip()
+            if not candidate:
+                continue
+            resolved_slug = cls._resolve_existing_character_slug(characters, candidate)
+            if not resolved_slug or resolved_slug in seen:
+                continue
+            payload = characters.get(resolved_slug)
+            if not isinstance(payload, dict) or payload.get("deceased_reason"):
+                continue
+            char_state = {
+                "location": payload.get("location"),
+                "room_title": payload.get("room_title"),
+                "room_summary": payload.get("room_summary"),
+                "room_id": payload.get("room_id"),
+            }
+            if not cls._same_scene(player_state, char_state):
+                continue
+            seen.add(resolved_slug)
+            out.append(resolved_slug)
+        return out
+
+    @classmethod
+    def _filter_aware_npc_slugs_for_location_key(
+        cls,
+        campaign: ZorkCampaign,
+        location_key: object,
+        aware_npc_slugs: object,
+    ) -> List[str]:
+        location_text = str(location_key or "").strip()
+        if not location_text:
+            return []
+        return cls._filter_aware_npc_slugs_for_scene(
+            campaign,
+            {"location": location_text},
+            aware_npc_slugs,
+        )
+
+    @classmethod
+    def _sanitize_turn_awareness_for_scene(
+        cls,
+        campaign: ZorkCampaign,
+        player_state: Dict[str, object],
+        turn_visibility: Dict[str, object],
+    ) -> Dict[str, object]:
+        if not isinstance(turn_visibility, dict):
+            return turn_visibility
+        filtered = cls._filter_aware_npc_slugs_for_scene(
+            campaign,
+            player_state,
+            turn_visibility.get("aware_npc_slugs"),
+        )
+        result = dict(turn_visibility)
+        result["aware_npc_slugs"] = filtered
+        return result
 
     _REASONING_PREFIXES = re.compile(
         r"^(I need to |I should |I'll |Let me |I want to |I will |First,? I |"
@@ -14921,6 +15364,7 @@ class ZorkEmulator:
                     player_state_update = {}
                     story_progression = None
                     turn_visibility = None
+                    scene_output_raw = None
                     scene_image_prompt = None
                     character_updates = {}
                     give_item = None
@@ -14934,9 +15378,14 @@ class ZorkEmulator:
                     if json_text:
                         try:
                             payload = cls._parse_json_lenient(json_text)
+                            scene_output_raw = payload.get("scene_output")
                             narration_candidate = str(
                                 payload.get("narration") or ""
                             ).strip()
+                            if not narration_candidate:
+                                narration_candidate = cls._scene_output_text_from_raw(
+                                    scene_output_raw
+                                )
                             if not narration_candidate:
                                 narration_candidate = cls._fallback_narration_from_payload(
                                     payload
@@ -15056,9 +15505,14 @@ class ZorkEmulator:
                                 if json_text:
                                     try:
                                         payload = cls._parse_json_lenient(json_text)
+                                        scene_output_raw = payload.get("scene_output")
                                         narration_candidate = str(
                                             payload.get("narration") or ""
                                         ).strip()
+                                        if not narration_candidate:
+                                            narration_candidate = cls._scene_output_text_from_raw(
+                                                scene_output_raw
+                                            )
                                         if not narration_candidate:
                                             narration_candidate = (
                                                 cls._fallback_narration_from_payload(
@@ -15103,10 +15557,15 @@ class ZorkEmulator:
                         try:
                             salvage = json.loads(cls._extract_json(narration) or "{}")
                             if isinstance(salvage, dict) and salvage:
+                                scene_output_raw = salvage.get("scene_output")
                                 narration = str(salvage.get("narration", "")).strip()
                                 reasoning = cls._sanitize_reasoning(
                                     salvage.get("reasoning")
                                 )
+                                if not narration:
+                                    narration = cls._scene_output_text_from_raw(
+                                        scene_output_raw
+                                    )
                                 if not narration:
                                     narration = cls._fallback_narration_from_payload(
                                         salvage
@@ -15148,7 +15607,12 @@ class ZorkEmulator:
                                 if _rj:
                                     try:
                                         _rp = cls._parse_json_lenient(_rj)
+                                        scene_output_raw = _rp.get("scene_output")
                                         _rn = str(_rp.get("narration") or "").strip()
+                                        if not _rn:
+                                            _rn = cls._scene_output_text_from_raw(
+                                                scene_output_raw
+                                            )
                                         if not _rn:
                                             _rn = cls._fallback_narration_from_payload(_rp)
                                         if _rn:
@@ -15220,9 +15684,16 @@ class ZorkEmulator:
                                     _repair_payload = cls._parse_json_lenient(
                                         _repair_json
                                     )
+                                    scene_output_raw = _repair_payload.get(
+                                        "scene_output"
+                                    )
                                     _repair_narration = str(
                                         _repair_payload.get("narration") or ""
                                     ).strip()
+                                    if not _repair_narration:
+                                        _repair_narration = cls._scene_output_text_from_raw(
+                                            scene_output_raw
+                                        )
                                     if not _repair_narration:
                                         _repair_narration = (
                                             cls._fallback_narration_from_payload(
@@ -15295,9 +15766,16 @@ class ZorkEmulator:
                                     _clock_payload = cls._parse_json_lenient(
                                         _clock_retry_json
                                     )
+                                    scene_output_raw = _clock_payload.get(
+                                        "scene_output"
+                                    )
                                     _clock_narration = str(
                                         _clock_payload.get("narration") or ""
                                     ).strip()
+                                    if not _clock_narration:
+                                        _clock_narration = cls._scene_output_text_from_raw(
+                                            scene_output_raw
+                                        )
                                     if not _clock_narration:
                                         _clock_narration = cls._fallback_narration_from_payload(
                                             _clock_payload
@@ -15353,9 +15831,16 @@ class ZorkEmulator:
                                     _anti_payload = cls._parse_json_lenient(
                                         _anti_echo_json
                                     )
+                                    scene_output_raw = _anti_payload.get(
+                                        "scene_output"
+                                    )
                                     _anti_narration = str(
                                         _anti_payload.get("narration") or ""
                                     ).strip()
+                                    if not _anti_narration:
+                                        _anti_narration = cls._scene_output_text_from_raw(
+                                            scene_output_raw
+                                        )
                                     if not _anti_narration:
                                         _anti_narration = cls._fallback_narration_from_payload(
                                             _anti_payload
@@ -15519,6 +16004,11 @@ class ZorkEmulator:
                     )
                     if inferred_aware_npc_slugs:
                         turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
+                    turn_visibility = cls._sanitize_turn_awareness_for_scene(
+                        campaign,
+                        player_state,
+                        turn_visibility,
+                    )
 
                     _zork_log(
                         f"TURN RESULT campaign={campaign.id}",
@@ -15817,6 +16307,11 @@ class ZorkEmulator:
                     player_state = cls._apply_state_update(
                         player_state, player_state_update
                     )
+                    turn_visibility = cls._sanitize_turn_awareness_for_scene(
+                        campaign,
+                        player_state,
+                        turn_visibility,
+                    )
                     player.state_json = cls._dump_json(player_state)
                     cls._sync_main_party_room_state(
                         campaign.id,
@@ -15968,8 +16463,33 @@ class ZorkEmulator:
                     if isinstance(xp_awarded, int) and xp_awarded > 0:
                         player.xp += xp_awarded
 
-                    clean_narration = cls._strip_ephemeral_context_lines(
-                        cls._strip_narration_footer(narration)
+                    scene_output = cls._normalize_scene_output(
+                        campaign,
+                        scene_output_raw,
+                        fallback_narration=narration,
+                        turn_visibility=turn_visibility,
+                        fallback_location_key=cls._room_key_from_player_state(player_state),
+                        actor_user_id=ctx.author.id,
+                        actor_player_slug=str(
+                            turn_visibility.get("actor_player_slug") or ""
+                        ).strip(),
+                    )
+                    rendered_scene_output = cls._scene_output_rendered_text(
+                        scene_output
+                    )
+                    if rendered_scene_output:
+                        narration = rendered_scene_output
+                        raw_narration = rendered_scene_output
+                    if scene_output:
+                        _zork_log(
+                            f"SCENE OUTPUT campaign={campaign.id}",
+                            json.dumps(scene_output, indent=2, ensure_ascii=False),
+                        )
+
+                    clean_narration = cls._strip_prompt_artifacts(
+                        cls._strip_ephemeral_context_lines(
+                            cls._strip_narration_footer(narration)
+                        )
                     )
                     persisted_narration = clean_narration
                     display_narration = clean_narration
@@ -16091,6 +16611,14 @@ class ZorkEmulator:
                     }
                     if reasoning:
                         narrator_turn_meta_payload["reasoning"] = reasoning
+                    if scene_output:
+                        narrator_turn_meta_payload["scene_output"] = scene_output
+                        narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                            turn_id=None,
+                            game_time=post_turn_game_time,
+                            scene_output=scene_output,
+                            turn_visibility=turn_visibility,
+                        )
                     narrator_turn_meta = cls._dump_json(narrator_turn_meta_payload)
 
                     # Don't store OOC meta-messages in turn history.
@@ -16116,6 +16644,16 @@ class ZorkEmulator:
                     )
                     db.session.add(narrator_turn)
                     db.session.flush()
+                    if scene_output:
+                        narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                            turn_id=narrator_turn.id,
+                            game_time=post_turn_game_time,
+                            scene_output=scene_output,
+                            turn_visibility=turn_visibility,
+                        )
+                        narrator_turn.meta_json = cls._dump_json(
+                            narrator_turn_meta_payload
+                        )
                     if player_turn is not None:
                         cls._record_turn_game_time(
                             campaign_state,
@@ -16385,6 +16923,7 @@ class ZorkEmulator:
                 xp_awarded = 0
                 player_state_update = {}
                 turn_visibility = None
+                scene_output_raw = None
                 character_updates = {}
                 calendar_update = None
 
@@ -16392,7 +16931,12 @@ class ZorkEmulator:
                 if json_text:
                     try:
                         payload = cls._parse_json_lenient(json_text)
+                        scene_output_raw = payload.get("scene_output")
                         narration_candidate = str(payload.get("narration") or "").strip()
+                        if not narration_candidate:
+                            narration_candidate = cls._scene_output_text_from_raw(
+                                scene_output_raw
+                            )
                         if not narration_candidate:
                             narration_candidate = cls._fallback_narration_from_payload(
                                 payload
@@ -16423,9 +16967,14 @@ class ZorkEmulator:
                             if json_text:
                                 try:
                                     payload = cls._parse_json_lenient(json_text)
+                                    scene_output_raw = payload.get("scene_output")
                                     narration_candidate = str(
                                         payload.get("narration") or ""
                                     ).strip()
+                                    if not narration_candidate:
+                                        narration_candidate = cls._scene_output_text_from_raw(
+                                            scene_output_raw
+                                        )
                                     if not narration_candidate:
                                         narration_candidate = (
                                             cls._fallback_narration_from_payload(
@@ -16461,10 +17010,15 @@ class ZorkEmulator:
                     try:
                         salvage = json.loads(cls._extract_json(narration) or "{}")
                         if isinstance(salvage, dict) and salvage:
+                            scene_output_raw = salvage.get("scene_output")
                             narration = str(salvage.get("narration", "")).strip()
                             reasoning = cls._sanitize_reasoning(
                                 salvage.get("reasoning")
                             )
+                            if not narration:
+                                narration = cls._scene_output_text_from_raw(
+                                    scene_output_raw
+                                )
                             if not narration:
                                 narration = cls._fallback_narration_from_payload(
                                     salvage
@@ -16628,6 +17182,11 @@ class ZorkEmulator:
                 player_state = cls._apply_state_update(
                     player_state, player_state_update
                 )
+                turn_visibility = cls._sanitize_turn_awareness_for_scene(
+                    campaign,
+                    player_state,
+                    turn_visibility,
+                )
                 active_player.state_json = cls._dump_json(player_state)
                 cls._sync_main_party_room_state(
                     campaign.id,
@@ -16677,6 +17236,26 @@ class ZorkEmulator:
                 if isinstance(xp_awarded, int) and xp_awarded > 0:
                     active_player.xp += xp_awarded
 
+                scene_output = cls._normalize_scene_output(
+                    campaign,
+                    scene_output_raw,
+                    fallback_narration=narration,
+                    turn_visibility=turn_visibility,
+                    fallback_location_key=cls._room_key_from_player_state(player_state),
+                    actor_user_id=active_player.user_id,
+                    actor_player_slug=str(
+                        turn_visibility.get("actor_player_slug") or ""
+                    ).strip(),
+                )
+                rendered_scene_output = cls._scene_output_rendered_text(scene_output)
+                if rendered_scene_output:
+                    narration = rendered_scene_output
+                if scene_output:
+                    _zork_log(
+                        f"TIMED EVENT SCENE OUTPUT campaign={campaign.id}",
+                        json.dumps(scene_output, indent=2, ensure_ascii=False),
+                    )
+
                 narration = cls._strip_narration_footer(narration)
                 post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                 calendar_event_notifications = cls._calendar_collect_fired_events(
@@ -16698,6 +17277,14 @@ class ZorkEmulator:
                 }
                 if reasoning:
                     timed_turn_meta_payload["reasoning"] = reasoning
+                if scene_output:
+                    timed_turn_meta_payload["scene_output"] = scene_output
+                    timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                        turn_id=None,
+                        game_time=post_turn_game_time,
+                        scene_output=scene_output,
+                        turn_visibility=turn_visibility,
+                    )
 
                 narrator_turn = ZorkTurn(
                     campaign_id=campaign.id,
@@ -16709,6 +17296,14 @@ class ZorkEmulator:
                 )
                 db.session.add(narrator_turn)
                 db.session.flush()
+                if scene_output:
+                    timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                        turn_id=narrator_turn.id,
+                        game_time=post_turn_game_time,
+                        scene_output=scene_output,
+                        turn_visibility=turn_visibility,
+                    )
+                    narrator_turn.meta_json = cls._dump_json(timed_turn_meta_payload)
                 cls._record_turn_game_time(
                     campaign_state,
                     narrator_turn.id,
