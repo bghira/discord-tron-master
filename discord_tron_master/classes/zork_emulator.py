@@ -11694,6 +11694,91 @@ class ZorkEmulator:
         )
 
     @classmethod
+    def _merge_system_notes(cls, *notes: object) -> str:
+        parts: List[str] = []
+        for raw_note in notes:
+            text = str(raw_note or "").strip()
+            if not text:
+                continue
+            if text.startswith("[SYSTEM NOTE: FOR THIS RESPONSE ONLY: ") and text.endswith("]"):
+                text = text[len("[SYSTEM NOTE: FOR THIS RESPONSE ONLY: ") : -1].strip()
+            elif text.startswith("[SYSTEM NOTE: ") and text.endswith("]"):
+                text = text[len("[SYSTEM NOTE: ") : -1].strip()
+            if text:
+                parts.append(text)
+        if not parts:
+            return ""
+        return f"[SYSTEM NOTE: FOR THIS RESPONSE ONLY: {' '.join(parts)}]"
+
+    @classmethod
+    def _turn_response_style_note(cls, difficulty: object) -> str:
+        return cls._merge_system_notes(
+            cls.RESPONSE_STYLE_NOTE,
+            cls._difficulty_response_note(difficulty),
+            (
+                'Return final JSON only. Include reasoning first. '
+                'state_update is required and must include "game_time", "current_chapter", and "current_scene" explicitly.'
+            ),
+        )
+
+    @classmethod
+    def _build_turn_prompt_tail(
+        cls,
+        player: ZorkPlayer,
+        player_state: Dict[str, object],
+        action: str,
+        turn_attachment_context: Optional[str],
+        response_style_note: str,
+        extra_lines: Optional[List[str]] = None,
+    ) -> str:
+        active_name = str(player_state.get("character_name") or "").strip()
+        active_mention = f"<@{player.user_id}>" if getattr(player, "user_id", None) else ""
+        if active_name and active_mention:
+            action_label = f"PLAYER_ACTION {active_mention} ({active_name.upper()})"
+        elif active_name:
+            action_label = f"PLAYER_ACTION ({active_name.upper()})"
+        else:
+            action_label = "PLAYER_ACTION"
+        parts = [f"{action_label}: {action}"]
+        if turn_attachment_context:
+            parts.append(f"TURN_ATTACHMENT_CONTEXT:\n{turn_attachment_context}")
+        for line in extra_lines or []:
+            text = str(line or "").strip()
+            if text:
+                parts.append(text)
+        if response_style_note:
+            parts.append(response_style_note)
+        return "\n".join(parts)
+
+    @classmethod
+    def _recompose_prompt_with_tail(
+        cls,
+        prompt: str,
+        turn_prompt_tail: str,
+        *inserted_blocks: object,
+    ) -> str:
+        prompt_text = str(prompt or "")
+        tail_text = str(turn_prompt_tail or "").strip()
+        base = prompt_text
+        if tail_text:
+            with_newline = f"\n{tail_text}\n"
+            without_newline = f"\n{tail_text}"
+            if prompt_text.endswith(with_newline):
+                base = prompt_text[: -len(with_newline)]
+            elif prompt_text.endswith(without_newline):
+                base = prompt_text[: -len(without_newline)]
+            elif prompt_text.endswith(tail_text):
+                base = prompt_text[: -len(tail_text)]
+        parts = [base.rstrip("\n")]
+        for block in inserted_blocks:
+            text = str(block or "").strip()
+            if text:
+                parts.append(text)
+        if tail_text:
+            parts.append(tail_text)
+        return "\n".join(part for part in parts if part)
+
+    @classmethod
     def cancel_pending_timer(cls, campaign_id: int) -> Optional[dict]:
         """Cancel a pending timer and return its context dict (or None)."""
         ctx_dict = cls._pending_timers.pop(campaign_id, None)
@@ -12168,6 +12253,7 @@ class ZorkEmulator:
         is_new_player: bool = False,
         turn_attachment_context: Optional[str] = None,
         turn_visibility_default: str = "public",
+        tail_extra_lines: Optional[List[str]] = None,
     ) -> Tuple[str, str]:
         summary = cls._strip_inventory_mentions(campaign.summary or "")
         summary = cls._trim_text(summary, cls.MAX_SUMMARY_CHARS)
@@ -12259,10 +12345,7 @@ class ZorkEmulator:
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
         _difficulty = cls.normalize_difficulty(state.get("difficulty", "normal"))
-        _difficulty_note = cls._difficulty_response_note(_difficulty)
-        _response_style_note = cls.RESPONSE_STYLE_NOTE
-        if _difficulty_note:
-            _response_style_note = f"{_response_style_note}\n{_difficulty_note}"
+        _response_style_note = cls._turn_response_style_note(_difficulty)
         _calendar_state_before = json.dumps(
             state.get("calendar") or [],
             ensure_ascii=True,
@@ -12375,23 +12458,21 @@ class ZorkEmulator:
             )
         if story_context:
             user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
-        _active_name = (player_state.get("character_name") or "").strip()
-        _active_mention = f"<@{player.user_id}>" if player.user_id else ""
-        if _active_name and _active_mention:
-            _action_label = f"PLAYER_ACTION {_active_mention} ({_active_name.upper()})"
-        elif _active_name:
-            _action_label = f"PLAYER_ACTION ({_active_name.upper()})"
-        else:
-            _action_label = "PLAYER_ACTION"
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
-            f"{_response_style_note}\n"
-            f"{_action_label}: {action}\n"
         )
-        if turn_attachment_context:
-            user_prompt += f"TURN_ATTACHMENT_CONTEXT:\n{turn_attachment_context}\n"
+        turn_prompt_tail = cls._build_turn_prompt_tail(
+            player,
+            player_state,
+            action,
+            turn_attachment_context,
+            _response_style_note,
+            extra_lines=tail_extra_lines,
+        )
+        if turn_prompt_tail:
+            user_prompt += f"{turn_prompt_tail}\n"
         system_prompt = cls.SYSTEM_PROMPT
         if guardrails_enabled:
             system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
@@ -13090,6 +13171,7 @@ class ZorkEmulator:
                                 f"thread={thread_key!r} sender={sms_sender!r} recipient={sms_recipient!r}",
                             )
 
+                    campaign_state = cls.get_campaign_state(campaign)
                     turns = cls.get_recent_turns(campaign.id)
                     turn_attachment_context = await cls._build_turn_attachment_context(
                         ctx
@@ -13118,6 +13200,22 @@ class ZorkEmulator:
                     viewer_private_context_key = str(
                         (viewer_private_context or {}).get("context_key") or ""
                     ).strip()
+                    turn_tail_extra_lines: List[str] = []
+                    if timer_interrupt_context:
+                        turn_tail_extra_lines.append(
+                            "TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
+                            f'The interrupted event was: "{timer_interrupt_context}"\n'
+                            f'The player\'s action that interrupted it: "{action}"\n'
+                            "Incorporate the interruption naturally into your narration."
+                        )
+                    if action_clean in ("time skip", "time-skip", "timeskip"):
+                        turn_tail_extra_lines.append(
+                            "TIME_SKIP: The player requests a time skip. Fast-forward past "
+                            "any idle, repetitive, or low-stakes moments and jump ahead to "
+                            "the next meaningful story beat — a new encounter, discovery, "
+                            "twist, or decision point. Summarise skipped time in one brief "
+                            "sentence, then narrate the new moment in full."
+                        )
                     system_prompt, user_prompt = cls.build_prompt(
                         campaign,
                         player,
@@ -13131,27 +13229,23 @@ class ZorkEmulator:
                             if getattr(ctx, "guild", None) is None
                             else "public"
                         ),
+                        tail_extra_lines=turn_tail_extra_lines,
+                    )
+                    turn_prompt_tail = cls._build_turn_prompt_tail(
+                        player,
+                        player_state,
+                        action,
+                        turn_attachment_context,
+                        cls._turn_response_style_note(
+                            cls.normalize_difficulty(
+                                cls.get_campaign_state(campaign).get("difficulty", "normal")
+                            )
+                        ),
+                        extra_lines=turn_tail_extra_lines,
                     )
                     memory_lookup_enabled = (
                         "memory_lookup_enabled: true" in user_prompt.lower()
                     )
-                    if timer_interrupt_context:
-                        user_prompt = (
-                            f"{user_prompt}\n"
-                            f"TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
-                            f'The interrupted event was: "{timer_interrupt_context}"\n'
-                            f'The player\'s action that interrupted it: "{action}"\n'
-                            f"Incorporate the interruption naturally into your narration.\n"
-                        )
-                    if action_clean in ("time skip", "time-skip", "timeskip"):
-                        user_prompt = (
-                            f"{user_prompt}\n"
-                            "TIME_SKIP: The player requests a time skip. Fast-forward past "
-                            "any idle, repetitive, or low-stakes moments and jump ahead to "
-                            "the next meaningful story beat — a new encounter, discovery, "
-                            "twist, or decision point. Summarise skipped time in one brief "
-                            "sentence, then narrate the new moment in full.\n"
-                        )
                     gpt = cls._new_gpt(
                         campaign=campaign,
                         channel_id=getattr(ctx.channel, "id", None),
@@ -13188,6 +13282,13 @@ class ZorkEmulator:
                     # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
                     # The model can refine queries when the first search has no useful hits.
                     tool_augmented_prompt = user_prompt
+                    def _append_tool_prompt(*blocks: object) -> None:
+                        nonlocal tool_augmented_prompt
+                        tool_augmented_prompt = cls._recompose_prompt_with_tail(
+                            tool_augmented_prompt,
+                            turn_prompt_tail,
+                            *blocks,
+                        )
                     tool_chain_steps = 0
                     max_tool_chain_steps = 4
                     if (
@@ -13252,9 +13353,7 @@ class ZorkEmulator:
                                 "Skipped duplicate execution.\n"
                                 "Do NOT repeat identical tool calls. Use a distinct tool/payload or return final JSON (no tool_call)."
                             )
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13294,9 +13393,7 @@ class ZorkEmulator:
                                 "(early campaign context is still within prompt budget). "
                                 "Do NOT call memory_* tools; continue with direct context or use non-memory tools."
                             )
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13377,23 +13474,26 @@ class ZorkEmulator:
                                 "Requested receivers add relevant prior private/limited continuity; public/local continuity remains included.\n"
                                 f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
                                 f"RECENT_TURNS:\n{recent_text}\n"
-                                "RECENT_TURNS_NEXT_ACTIONS:\n"
-                                "- Do NOT call recent_turns again this turn unless the system explicitly says it was not loaded.\n"
-                                "- If you need deeper or older recall beyond this immediate continuity, use memory_search next.\n"
-                                '- Example: {"tool_call": "memory_search", "queries": ["character name", "location", "event"]}\n'
-                                "- Otherwise return final narration/state JSON.\n"
-                                "FINAL_RESPONSE_RULES:\n"
-                                "- Do NOT echo or paraphrase the player's wording back to them.\n"
-                                "- NPC first lines must add new information, a decision, a consequence, a demand, or a direct question.\n"
-                                "- Return final JSON with reasoning included.\n"
-                                "- Put reasoning first in the final JSON.\n"
-                                '- state_update is REQUIRED and MUST include "game_time", "current_chapter", and "current_scene" explicitly, even if unchanged.\n'
-                                "- If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
+                            )
+                            recent_turns_system_note = cls._merge_system_notes(
+                                cls.RESPONSE_STYLE_NOTE,
+                                (
+                                    "RECENT_TURNS is loaded. Do not call recent_turns again this turn unless the system explicitly says it was not loaded."
+                                ),
+                                (
+                                    'If you need deeper or older recall beyond this immediate continuity, use memory_search next, e.g. '
+                                    '{"tool_call": "memory_search", "queries": ["character name", "location", "event"]}.'
+                                ),
+                                (
+                                    'Return final JSON only. Include reasoning first. state_update is required and must include "game_time", '
+                                    '"current_chapter", and "current_scene" explicitly, even if unchanged.'
+                                ),
+                                (
+                                    "If ON-RAILS mode is enabled, use state_update.current_chapter/current_scene to advance or restate the current beat."
+                                ),
                             )
                             _zork_log("RECENT TURNS BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block, recent_turns_system_note)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13742,9 +13842,7 @@ class ZorkEmulator:
                                         + "\n".join(hint_lines)
                                     )
                             _zork_log("MEMORY RECALL BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13802,9 +13900,7 @@ class ZorkEmulator:
                                     f"{full_text}"
                                 )
                             _zork_log("MEMORY TURN BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13845,9 +13941,7 @@ class ZorkEmulator:
                                     f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}): none"
                                 )
                             _zork_log("MEMORY TERMS BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13921,9 +14015,7 @@ class ZorkEmulator:
                                 f"- existing_terms_after_count: {len(post_terms)}"
                             )
                             _zork_log("MEMORY STORE BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -13979,9 +14071,7 @@ class ZorkEmulator:
                                     f"{wildcard_meta}): no entries found"
                                 )
                             _zork_log("SOURCE BROWSE BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14044,9 +14134,7 @@ class ZorkEmulator:
                                     "or fewer filters."
                                 )
                             _zork_log("NAME GENERATE BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14093,9 +14181,7 @@ class ZorkEmulator:
                                 )
                             tool_result_block = "\n".join(lines)
                             _zork_log("PLOT PLAN BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14149,9 +14235,7 @@ class ZorkEmulator:
                                     )
                                 tool_result_block = "\n".join(lines)
                             _zork_log("CHAPTER PLAN BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14207,9 +14291,7 @@ class ZorkEmulator:
                                 )
                             tool_result_block = "\n".join(lines)
                             _zork_log("CONSEQUENCE LOG BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14251,9 +14333,7 @@ class ZorkEmulator:
                                     f"SMS_LIST_RESULT (wildcard={wildcard!r}): none"
                                 )
                             _zork_log("SMS LIST BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14338,9 +14418,7 @@ class ZorkEmulator:
                                     + "\n".join(lines)
                                 )
                             _zork_log("SMS READ BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14406,9 +14484,7 @@ class ZorkEmulator:
                                     f"- {entry.get('from')} -> {entry.get('to')}: {entry.get('message')}"
                                 )
                             _zork_log("SMS WRITE BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14488,9 +14564,7 @@ class ZorkEmulator:
                                     "Do NOT narrate this delayed SMS as already received in the current scene."
                                 )
                             _zork_log("SMS SCHEDULE BLOCK", tool_result_block)
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14580,9 +14654,7 @@ class ZorkEmulator:
                                     f"interruptible={interruptible} scope={interrupt_scope}"
                                 ),
                             )
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14615,9 +14687,7 @@ class ZorkEmulator:
                             tool_result_block = (
                                 f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
                             )
-                            tool_augmented_prompt = (
-                                f"{tool_augmented_prompt}\n{tool_result_block}\n"
-                            )
+                            _append_tool_prompt(tool_result_block)
                             response = await gpt.turbo_completion(
                                 system_prompt,
                                 tool_augmented_prompt,
@@ -14672,9 +14742,8 @@ class ZorkEmulator:
 
                     # Hard-stop infinite tool loops.
                     if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
-                        tool_augmented_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "TOOL_CHAIN_LIMIT_REACHED: Stop calling tools now. Return final narration/state JSON directly.\n"
+                        _append_tool_prompt(
+                            "TOOL_CHAIN_LIMIT_REACHED: Stop calling tools now. Return final narration/state JSON directly."
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
@@ -14699,10 +14768,9 @@ class ZorkEmulator:
                     # never leak to players as fallback narration.
                     if first_payload and cls._is_tool_call(first_payload):
                         unresolved_tool = str(first_payload.get("tool_call") or "unknown")
-                        tool_augmented_prompt = (
-                            f"{tool_augmented_prompt}\n"
+                        _append_tool_prompt(
                             f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
-                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning.\n"
+                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning."
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
