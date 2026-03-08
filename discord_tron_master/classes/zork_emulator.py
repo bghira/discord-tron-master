@@ -12118,7 +12118,7 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_PROMPT}"
         else:
             system_prompt = f"{system_prompt}{cls.MEMORY_TOOL_DISABLED_PROMPT}"
-            system_prompt = f"{system_prompt}{cls.SMS_TOOL_PROMPT}"
+        system_prompt = f"{system_prompt}{cls.SMS_TOOL_PROMPT}"
         if state.get("timed_events_enabled", True):
             system_prompt = f"{system_prompt}{cls.TIMER_TOOL_PROMPT}"
         if story_context:
