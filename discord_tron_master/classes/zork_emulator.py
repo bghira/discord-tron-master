@@ -1352,12 +1352,7 @@ class ZorkEmulator:
         source_material_available: bool = False,
         action_text: object = None,
     ) -> bool:
-        summary_len = len(str(summary_text or "").strip())
-        if summary_len >= cls.MEMORY_LOOKUP_MIN_SUMMARY_CHARS:
-            return True
-        if source_material_available and cls._source_lookup_requested_by_action(action_text):
-            return True
-        return False
+        return True
 
     @classmethod
     def _increment_auto_fix_counter(
