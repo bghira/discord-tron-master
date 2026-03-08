@@ -2792,7 +2792,7 @@ class ZorkEmulator:
                 recent_lines.extend(scene_output_lines)
                 continue
 
-            turn_prefix = cls._turn_context_prefix(turn, cls.get_campaign_state(campaign))
+            campaign_state = cls.get_campaign_state(campaign)
             if turn.kind == "player":
                 if _OOC_RE.match(content):
                     continue
@@ -2802,16 +2802,14 @@ class ZorkEmulator:
                 if not clipped:
                     continue
                 name = player_names.get(turn.user_id)
-                mention = f"<@{turn.user_id}>" if turn.user_id else ""
-                if name and mention:
-                    label = f"PLAYER {mention} ({name.upper()})"
-                elif name:
-                    label = f"PLAYER ({name.upper()})"
-                elif mention:
-                    label = f"PLAYER {mention}"
-                else:
-                    label = "PLAYER"
-                recent_lines.append(f"{turn_prefix} {label}: {clipped}")
+                recent_lines.extend(
+                    cls._recent_turn_fallback_lines(
+                        turn,
+                        campaign_state,
+                        content_text=clipped,
+                        player_name=name,
+                    )
+                )
             elif turn.kind == "narrator":
                 if content.lower() in _ERROR_PHRASES:
                     continue
@@ -2821,7 +2819,13 @@ class ZorkEmulator:
                 clipped = cls._strip_narration_footer(clipped)
                 if not clipped:
                     continue
-                recent_lines.append(f"{turn_prefix} NARRATOR: {clipped}")
+                recent_lines.extend(
+                    cls._recent_turn_fallback_lines(
+                        turn,
+                        campaign_state,
+                        content_text=clipped,
+                    )
+                )
         return "\n".join(recent_lines) if recent_lines else "None"
 
     @classmethod
@@ -3246,6 +3250,111 @@ class ZorkEmulator:
                 )
             )
         return lines
+
+    @classmethod
+    def _recent_turn_fallback_lines(
+        cls,
+        turn: ZorkTurn,
+        campaign_state: Dict[str, object],
+        *,
+        content_text: str,
+        player_name: str = "",
+    ) -> List[str]:
+        text = str(content_text or "").strip()
+        if not text:
+            return []
+        turn_number = int(getattr(turn, "id", 0) or 0)
+        index = (
+            campaign_state.get(cls.TURN_TIME_INDEX_KEY)
+            if isinstance(campaign_state, dict)
+            else {}
+        )
+        if not isinstance(index, dict):
+            index = {}
+        entry = index.get(str(turn_number))
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        scope = "public"
+        visible_user_ids: List[int] = []
+        aware_npc_slugs: List[str] = []
+        actor_slug = ""
+        location_key = str(meta.get("location_key") or "").strip() or None
+        context_key = str(meta.get("context_key") or "").strip() or None
+        if isinstance(visibility, dict):
+            scope = str(visibility.get("scope") or "").strip().lower() or "public"
+            actor_slug = cls._player_slug_key(
+                visibility.get("actor_player_slug") or ""
+            )
+            location_key = (
+                str(visibility.get("location_key") or location_key or "").strip()
+                or None
+            )
+            context_key = (
+                str(visibility.get("context_key") or context_key or "").strip()
+                or None
+            )
+            for item in list(visibility.get("visible_user_ids") or []):
+                try:
+                    user_id = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if user_id not in visible_user_ids:
+                    visible_user_ids.append(user_id)
+            aware_npc_slugs = [
+                str(item or "").strip()
+                for item in list(visibility.get("aware_npc_slugs") or [])
+                if str(item or "").strip()
+            ]
+        if not actor_slug and turn.kind == "player":
+            actor_slug = cls._player_slug_key(player_name) or f"player-{turn.user_id}"
+        header = {
+            "kind": "turn",
+            "turn_id": turn_number,
+            "location_key": location_key,
+            "context_key": context_key,
+            "visibility": scope,
+        }
+        if isinstance(entry, dict):
+            header["day"] = (
+                cls._coerce_non_negative_int(entry.get("day", 1), default=1) or 1
+            )
+            header["hour"] = min(
+                23,
+                max(0, cls._coerce_non_negative_int(entry.get("hour", 0), default=0)),
+            )
+            header["minute"] = min(
+                59,
+                max(
+                    0,
+                    cls._coerce_non_negative_int(entry.get("minute", 0), default=0),
+                ),
+            )
+        beat_type = "player_action" if turn.kind == "player" else "narration"
+        speaker = actor_slug or ("narrator" if turn.kind == "narrator" else "player")
+        actors = [actor_slug] if actor_slug else []
+        beat = {
+            "kind": "beat",
+            "turn_id": turn_number,
+            "index": 0,
+            "reasoning": (
+                "Compatibility fallback from player turn text."
+                if turn.kind == "player"
+                else "Compatibility fallback from plain narration."
+            ),
+            "type": beat_type,
+            "speaker": speaker,
+            "actors": actors,
+            "visibility": scope,
+            "aware_discord_ids": visible_user_ids,
+            "aware_npc_slugs": aware_npc_slugs,
+            "location_key": location_key,
+            "context_key": context_key,
+            "text": text,
+        }
+        return [
+            json.dumps(header, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(beat, ensure_ascii=False, separators=(",", ":")),
+        ]
 
     @classmethod
     def _format_game_time_label(cls, game_time: Dict[str, int]) -> str:
