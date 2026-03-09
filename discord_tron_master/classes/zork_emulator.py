@@ -7475,7 +7475,7 @@ class ZorkEmulator:
                     )
                 _append_if_relevant(recent_lines, summary_candidate)
 
-        lines = recent_lines + persisted_lines
+        lines = persisted_lines + recent_lines
 
         if not lines:
             active_chapters = cls._chapters_for_prompt(
@@ -7492,10 +7492,22 @@ class ZorkEmulator:
                 if fallback:
                     lines.append(fallback)
 
-        composed = "\n".join(lines)
         if max_chars is None:
             max_chars = cls.MAX_SUMMARY_CHARS
-        return cls._trim_text(composed, max_chars) if composed else ""
+        if not lines:
+            return ""
+
+        # Compose WORLD_SUMMARY as a chronological rolling window rather than
+        # prefixing recent lines and hard-trimming characters. When we exceed the
+        # budget, drop the oldest lines first so the summary behaves like FIFO.
+        summary_lines = list(lines)
+        while len(summary_lines) > 1 and len("\n".join(summary_lines)) > max_chars:
+            summary_lines.pop(0)
+
+        composed = "\n".join(summary_lines)
+        if len(composed) > max_chars:
+            composed = cls._trim_text(composed, max_chars)
+        return composed
 
     @classmethod
     def _scene_output_is_summary_public_safe(
