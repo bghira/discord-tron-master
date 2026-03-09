@@ -49,6 +49,56 @@ def _zork_log(section: str, body: str = "") -> None:
 
 
 class ZorkEmulator:
+    KNOWN_JSON_STRING_FIELDS = {
+        "reasoning",
+        "narration",
+        "summary_update",
+        "scene_image_prompt",
+        "type",
+        "speaker",
+        "text",
+        "location_key",
+        "context_key",
+        "title",
+        "summary",
+        "main_character",
+        "name",
+        "description",
+        "period",
+        "date_label",
+        "thread",
+        "from",
+        "to",
+        "message",
+        "event_description",
+        "interrupt_action",
+        "interrupt_scope",
+        "current_scene",
+        "current_status",
+        "allegiance",
+        "relationship",
+        "deceased_reason",
+        "resolution",
+        "trigger",
+        "consequence",
+        "severity",
+        "slug",
+        "id",
+        "label",
+        "wildcard",
+        "document_key",
+        "target",
+        "reason",
+        "status",
+        "room_title",
+        "room_summary",
+        "room_description",
+        "location",
+        "event_key",
+        "notes",
+        "details",
+        "time",
+    }
     DEFAULT_STYLE_DIRECTION = AppConfig.DEFAULT_ZORK_STYLE
     BASE_POINTS = 10
     POINTS_PER_LEVEL = 5
@@ -14676,12 +14726,65 @@ class ZorkEmulator:
         return pattern.sub(_replace, text)
 
     @classmethod
+    def _repair_unquoted_json_keys(cls, text: str) -> str:
+        if not text:
+            return text
+        pattern = re.compile(r'(?P<prefix>[{,]\s*)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P<suffix>\s*:)')
+
+        def _replace(match: re.Match[str]) -> str:
+            key = str(match.group("key") or "").strip()
+            if not key:
+                return match.group(0)
+            return f'{match.group("prefix")}"{key}"{match.group("suffix")}'
+
+        return pattern.sub(_replace, text)
+
+    @classmethod
+    def _repair_trailing_json_commas(cls, text: str) -> str:
+        if not text:
+            return text
+        return re.sub(r",\s*([}\]])", r"\1", text)
+
+    @classmethod
+    def _repair_known_schema_string_fields(cls, text: str) -> str:
+        if not text:
+            return text
+        field_names = "|".join(sorted(re.escape(name) for name in cls.KNOWN_JSON_STRING_FIELDS))
+        pattern = re.compile(
+            rf'("(?P<key>{field_names})"\s*:\s*)'
+            r'(?!(?:"|\{|\[|true\s*[,}\]]|false\s*[,}\]]|null\s*[,}\]]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\s*[,}\]]))'
+            r'(?P<value>.*?)'
+            r'(?=,\s*"[^"]+"\s*:|,\s*\{|\s*[}\]])',
+            re.DOTALL,
+        )
+
+        def _replace(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            raw_value = str(match.group("value") or "").strip()
+            if not raw_value:
+                return match.group(0)
+            if raw_value.endswith('"') and not raw_value.startswith('"'):
+                raw_value = raw_value[:-1].strip()
+            return f"{prefix}{json.dumps(raw_value, ensure_ascii=False)}"
+
+        return pattern.sub(_replace, text)
+
+    @classmethod
+    def _repair_json_lenient_text(cls, text: str) -> str:
+        repaired = str(text or "")
+        repaired = cls._repair_unquoted_json_keys(repaired)
+        repaired = cls._repair_trailing_json_commas(repaired)
+        repaired = cls._repair_unquoted_json_string_fields(repaired)
+        repaired = cls._repair_known_schema_string_fields(repaired)
+        return repaired
+
+    @classmethod
     def _parse_json_lenient(cls, text: str) -> dict:
         """Parse a JSON object from *text*, tolerating common LLM quirks.
 
         Tries in order:
         1. Standard json.loads
-        1b. Repair common unquoted string-field omissions, then json.loads
+        1b. Apply common syntax/schema repairs, then json.loads
         2. Python dict literal (single quotes) via ast.literal_eval
         3. JSONL-style (multiple JSON objects) via raw_decode + merge
         """
@@ -14691,7 +14794,7 @@ class ZorkEmulator:
                 return result
             return {}
         except json.JSONDecodeError as exc:
-            repaired = cls._repair_unquoted_json_string_fields(text)
+            repaired = cls._repair_json_lenient_text(text)
             if repaired != text:
                 try:
                     result = json.loads(repaired)
