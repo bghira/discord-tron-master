@@ -15671,8 +15671,12 @@ class ZorkEmulator:
 
                     def _tool_budget_note() -> str:
                         remaining = max(0, max_tool_chain_steps - tool_chain_steps)
-                        if remaining <= 1:
-                            return f"TOOL_BUDGET: {remaining} call(s) remaining. Return ready_to_write or final JSON now."
+                        if remaining <= 0:
+                            return f"TOOL_BUDGET: 0 call(s) remaining. Return final JSON now (no tool_call)."
+                        if remaining == 1:
+                            if current_prompt_stage == cls.PROMPT_STAGE_FINAL:
+                                return f"TOOL_BUDGET: 1 call(s) remaining. Return final JSON now (no tool_call)."
+                            return f"TOOL_BUDGET: 1 call(s) remaining. Return ready_to_write or final JSON now."
                         return f"TOOL_BUDGET: {remaining} call(s) remaining."
 
                     def _switch_prompt_stage(next_stage: str) -> None:
@@ -17265,8 +17269,10 @@ class ZorkEmulator:
                             break
                     # Hard-stop infinite tool loops.
                     if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
+                        _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
                         _append_tool_prompt(
-                            "TOOL_CHAIN_LIMIT_REACHED (0 remaining): Stop calling tools now. Return final narration/state JSON directly."
+                            "TOOL_CHAIN_LIMIT_REACHED (0 remaining): Stop calling tools now. Return final narration/state JSON directly.\n"
+                            "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
@@ -17291,9 +17297,11 @@ class ZorkEmulator:
                     # never leak to players as fallback narration.
                     if first_payload and cls._is_tool_call(first_payload):
                         unresolved_tool = str(first_payload.get("tool_call") or "unknown")
+                        _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
                         _append_tool_prompt(
                             f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
-                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning."
+                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning.\n"
+                            "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
                         )
                         response = await gpt.turbo_completion(
                             system_prompt,
