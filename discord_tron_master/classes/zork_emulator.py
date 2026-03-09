@@ -13055,9 +13055,23 @@ class ZorkEmulator:
                 if not isinstance(fire_hour, (int, float)) or isinstance(fire_hour, bool):
                     time_alias = str(entry.get("time") or "").strip()
                     if time_alias:
-                        match = re.match(r"^\s*(\d{1,2}):(\d{2})", time_alias)
+                        match = re.search(
+                            r"(?:day\s*(?P<day>\d+)[,\s-]*)?(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>[ap]m)?",
+                            time_alias,
+                            re.IGNORECASE,
+                        )
                         if match:
-                            fire_hour = int(match.group(1))
+                            if not isinstance(fire_day, (int, float)) or isinstance(fire_day, bool):
+                                day_group = match.group("day")
+                                if day_group:
+                                    fire_day = int(day_group)
+                            parsed_hour = int(match.group("hour"))
+                            ampm = str(match.group("ampm") or "").strip().lower()
+                            if ampm == "pm" and parsed_hour < 12:
+                                parsed_hour += 12
+                            elif ampm == "am" and parsed_hour == 12:
+                                parsed_hour = 0
+                            fire_hour = parsed_hour
                 if (
                     isinstance(fire_day, (int, float))
                     and not isinstance(fire_day, bool)
@@ -13085,10 +13099,20 @@ class ZorkEmulator:
                     "created_day": current_day,
                     "created_hour": current_hour,
                     "description": str(
-                        entry.get("description") or entry.get("notes") or ""
+                        entry.get("description")
+                        or entry.get("notes")
+                        or entry.get("details")
+                        or ""
                     )[:200],
                     "known_by": cls._calendar_known_by_from_event(entry),
                 }
+                location_text = str(entry.get("location") or "").strip()
+                if location_text and not str(event.get("description") or "").strip():
+                    event["description"] = f"Location: {location_text}"[:200]
+                elif location_text:
+                    event["description"] = (
+                        f"{str(event.get('description') or '').strip()} Location: {location_text}"
+                    )[:200]
                 target_players = cls._calendar_target_tokens_from_event(entry)
                 visibility = str(entry.get("visibility") or "").strip().lower()
                 if (
@@ -13119,6 +13143,48 @@ class ZorkEmulator:
 
         campaign_state["calendar"] = calendar
         return campaign_state
+
+    @classmethod
+    def _extract_calendar_update_from_state_update(
+        cls,
+        state_update: object,
+        calendar_update: object,
+    ) -> Tuple[object, object]:
+        if not isinstance(state_update, dict):
+            return state_update, calendar_update
+        merged_calendar = (
+            dict(calendar_update) if isinstance(calendar_update, dict) else {}
+        )
+        merged_add = list(merged_calendar.get("add") or [])
+        changed = False
+        cleaned_state_update = dict(state_update)
+
+        def _consume_events(raw_entry: object) -> None:
+            nonlocal changed
+            if isinstance(raw_entry, dict) and isinstance(raw_entry.get("events"), list):
+                for item in raw_entry.get("events") or []:
+                    if isinstance(item, dict):
+                        merged_add.append(dict(item))
+                        changed = True
+            elif isinstance(raw_entry, list):
+                for item in raw_entry:
+                    if isinstance(item, dict):
+                        merged_add.append(dict(item))
+                        changed = True
+
+        for legacy_key in ("calendar", "cal", "events"):
+            raw_entry = cleaned_state_update.get(legacy_key)
+            if raw_entry is None:
+                continue
+            before_count = len(merged_add)
+            _consume_events(raw_entry)
+            if len(merged_add) != before_count:
+                cleaned_state_update.pop(legacy_key, None)
+
+        if not changed:
+            return state_update, calendar_update
+        merged_calendar["add"] = merged_add
+        return cleaned_state_update, merged_calendar
 
     @classmethod
     def _compose_character_portrait_prompt(cls, name: str, appearance: str) -> str:
@@ -17350,6 +17416,10 @@ class ZorkEmulator:
                         campaign_state,
                         state_update,
                     )
+                    state_update, calendar_update = cls._extract_calendar_update_from_state_update(
+                        state_update,
+                        calendar_update,
+                    )
 
                     turn_visibility = cls._normalize_turn_visibility(
                         campaign,
@@ -18651,6 +18721,10 @@ class ZorkEmulator:
                         resolution_context=resolution_context,
                         campaign_state=campaign_state,
                     )
+                state_update, calendar_update = cls._extract_calendar_update_from_state_update(
+                    state_update,
+                    calendar_update,
+                )
                 pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                 campaign_state = cls._apply_state_update(campaign_state, state_update)
                 campaign_state = cls._ensure_game_time_progress(
