@@ -2974,6 +2974,21 @@ class ZorkEmulator:
         return value
 
     @classmethod
+    def _unescape_jsonish_text(cls, text: object) -> str:
+        value = str(text or "")
+        if "\\" not in value:
+            return value.strip()
+        # Some model outputs arrive double-escaped from JSON-shaped text fields.
+        value = value.replace("\\r\\n", "\n")
+        value = value.replace("\\n", "\n")
+        value = value.replace("\\r", "\n")
+        value = value.replace("\\t", "\t")
+        value = value.replace('\\"', '"')
+        value = value.replace("\\'", "'")
+        value = value.replace("\\\\", "\\")
+        return value.strip()
+
+    @classmethod
     def _memory_tool_jsonl(cls, records: List[Dict[str, object]]) -> str:
         lines: List[str] = []
         for record in records:
@@ -3074,7 +3089,7 @@ class ZorkEmulator:
     def _scene_output_text_from_raw(cls, raw_scene_output: object) -> str:
         if not isinstance(raw_scene_output, dict):
             return ""
-        rendered = str(raw_scene_output.get("rendered_text") or "").strip()
+        rendered = cls._unescape_jsonish_text(raw_scene_output.get("rendered_text"))
         if rendered:
             return cls._trim_text(rendered, cls.MAX_NARRATION_CHARS)
         raw_beats = raw_scene_output.get("beats")
@@ -3084,7 +3099,9 @@ class ZorkEmulator:
         for beat in raw_beats:
             if not isinstance(beat, dict):
                 continue
-            text = str(beat.get("text") or beat.get("summary") or "").strip()
+            text = cls._unescape_jsonish_text(
+                beat.get("text") or beat.get("summary") or ""
+            )
             if not text:
                 continue
             texts.append(text)
@@ -3128,7 +3145,9 @@ class ZorkEmulator:
         for raw_beat in raw_beats[:24]:
             if not isinstance(raw_beat, dict):
                 continue
-            text = str(raw_beat.get("text") or raw_beat.get("summary") or "").strip()
+            text = cls._unescape_jsonish_text(
+                raw_beat.get("text") or raw_beat.get("summary") or ""
+            )
             if not text:
                 continue
             beat_visibility = (
@@ -3270,7 +3289,7 @@ class ZorkEmulator:
                 }
             ]
 
-        rendered_text = str(scene_output.get("rendered_text") or "").strip()
+        rendered_text = cls._unescape_jsonish_text(scene_output.get("rendered_text"))
         if not rendered_text:
             rendered_text = cls._trim_text(
                 "\n\n".join(str(beat.get("text") or "").strip() for beat in beats if str(beat.get("text") or "").strip()),
@@ -3301,16 +3320,16 @@ class ZorkEmulator:
     ) -> str:
         if not isinstance(scene_output, dict):
             return ""
-        rendered = str(scene_output.get("rendered_text") or "").strip()
+        rendered = cls._unescape_jsonish_text(scene_output.get("rendered_text"))
         if rendered:
             return cls._trim_text(rendered, cls.MAX_NARRATION_CHARS)
         beats = scene_output.get("beats")
         if not isinstance(beats, list):
             return ""
         texts = [
-            str(beat.get("text") or "").strip()
+            cls._unescape_jsonish_text(beat.get("text") or "")
             for beat in beats
-            if isinstance(beat, dict) and str(beat.get("text") or "").strip()
+            if isinstance(beat, dict) and cls._unescape_jsonish_text(beat.get("text") or "")
         ]
         if not texts:
             return ""
@@ -3359,7 +3378,7 @@ class ZorkEmulator:
                 "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
                 "location_key": beat.get("location_key"),
                 "context_key": beat.get("context_key"),
-                "text": str(beat.get("text") or "").strip(),
+                "text": cls._unescape_jsonish_text(beat.get("text") or ""),
             }
             lines.append(json.dumps(line, ensure_ascii=False, separators=(",", ":")))
         return "\n".join(lines)
