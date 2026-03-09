@@ -108,6 +108,16 @@ CREATE TABLE IF NOT EXISTS source_material_chunks (
 CREATE INDEX IF NOT EXISTS idx_sm_campaign ON source_material_chunks(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_sm_campaign_doc ON source_material_chunks(campaign_id, document_key);
 
+CREATE TABLE IF NOT EXISTS source_material_digests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER NOT NULL,
+    document_key    TEXT    NOT NULL,
+    digest_text     TEXT    NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_smd_campaign_doc
+    ON source_material_digests(campaign_id, document_key);
+
 CREATE TABLE IF NOT EXISTS turn_embedding_visible_players (
     turn_id      INTEGER NOT NULL,
     campaign_id  INTEGER NOT NULL,
@@ -1076,6 +1086,13 @@ class ZorkMemory:
                 """,
                 (campaign_id, key),
             )
+            conn.execute(
+                """
+                DELETE FROM source_material_digests
+                WHERE campaign_id = ? AND document_key = ?
+                """,
+                (campaign_id, key),
+            )
             conn.commit()
             return int(getattr(cur, "rowcount", 0) or 0)
         except Exception:
@@ -1093,6 +1110,13 @@ class ZorkMemory:
             cur = conn.execute(
                 """
                 DELETE FROM source_material_chunks
+                WHERE campaign_id = ?
+                """,
+                (campaign_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM source_material_digests
                 WHERE campaign_id = ?
                 """,
                 (campaign_id,),
@@ -1169,6 +1193,96 @@ class ZorkMemory:
                 campaign_id,
             )
             return 0, "source-material"
+
+    @classmethod
+    def store_source_material_digest(
+        cls,
+        campaign_id: int,
+        document_key: str,
+        digest_text: str,
+    ) -> bool:
+        try:
+            key = cls._normalize_source_document_key(document_key)
+            text = str(digest_text or "").strip()
+            if not key or not text:
+                return False
+            conn = cls._get_conn()
+            conn.execute(
+                """
+                INSERT INTO source_material_digests (campaign_id, document_key, digest_text)
+                VALUES (?, ?, ?)
+                ON CONFLICT(campaign_id, document_key)
+                DO UPDATE SET digest_text = excluded.digest_text,
+                              created_at = CURRENT_TIMESTAMP
+                """,
+                (campaign_id, key, text),
+            )
+            conn.commit()
+            return True
+        except Exception:
+            logger.exception(
+                "Zork memory: store digest failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return False
+
+    @classmethod
+    def get_source_material_digest(
+        cls,
+        campaign_id: int,
+        document_key: str,
+    ) -> Optional[str]:
+        try:
+            key = cls._normalize_source_document_key(document_key)
+            if not key:
+                return None
+            conn = cls._get_conn()
+            row = conn.execute(
+                """
+                SELECT digest_text
+                FROM source_material_digests
+                WHERE campaign_id = ? AND document_key = ?
+                """,
+                (campaign_id, key),
+            ).fetchone()
+            if row and str(row[0] or "").strip():
+                return str(row[0]).strip()
+            return None
+        except Exception:
+            logger.exception(
+                "Zork memory: get digest failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return None
+
+    @classmethod
+    def get_all_source_material_digests(
+        cls,
+        campaign_id: int,
+    ) -> Dict[str, str]:
+        try:
+            conn = cls._get_conn()
+            rows = conn.execute(
+                """
+                SELECT document_key, digest_text
+                FROM source_material_digests
+                WHERE campaign_id = ?
+                """,
+                (campaign_id,),
+            ).fetchall()
+            return {
+                str(row[0]): str(row[1]).strip()
+                for row in rows
+                if str(row[0] or "").strip() and str(row[1] or "").strip()
+            }
+        except Exception:
+            logger.exception(
+                "Zork memory: get all digests failed for campaign %s",
+                campaign_id,
+            )
+            return {}
 
     @classmethod
     def search_source_material(

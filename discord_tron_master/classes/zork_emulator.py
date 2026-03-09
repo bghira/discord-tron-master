@@ -7384,6 +7384,58 @@ class ZorkEmulator:
             f"({stored_count} snippet(s), {source_format} format, ~{total_tokens} tokens). "
             f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
+
+        # Generate recursive summary digest for story/rulebook material
+        if source_format in (
+            cls.SOURCE_MATERIAL_FORMAT_STORY,
+            cls.SOURCE_MATERIAL_FORMAT_RULEBOOK,
+        ):
+            try:
+                digest_progress_msg = None
+                if progress_channel is not None:
+                    try:
+                        digest_progress_msg = await progress_channel.send(
+                            f"Generating narrative digest for `{resolved_label}`..."
+                        )
+                    except Exception:
+                        digest_progress_msg = None
+
+                digest = await cls._summarise_long_text(
+                    raw_text,
+                    ctx_message=message,
+                    channel=progress_channel,
+                    campaign=campaign,
+                    summary_instructions=(
+                        "This is source material for a text-adventure campaign. "
+                        "Produce a comprehensive narrative digest preserving all characters, "
+                        "locations, plot arcs, factions, key events, world rules, and "
+                        "relationships. Maintain chronological order where applicable. "
+                        "Be detailed and concrete — this digest will be used to ground "
+                        "the campaign world."
+                    ),
+                    show_progress=bool(progress_channel is not None),
+                    allow_single_chunk_passthrough=False,
+                    progress_label="Generating source material digest",
+                )
+                if digest and digest.strip():
+                    await asyncio.to_thread(
+                        ZorkMemory.store_source_material_digest,
+                        campaign.id,
+                        document_key,
+                        digest.strip(),
+                    )
+                    result_msg += " Narrative digest generated."
+
+                if digest_progress_msg is not None:
+                    try:
+                        await digest_progress_msg.delete()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(
+                    f"Source material digest generation failed for campaign {campaign.id}: {e}"
+                )
+
         if status_msg is not None:
             try:
                 await status_msg.edit(content=result_msg)
@@ -7444,12 +7496,14 @@ class ZorkEmulator:
                     "keys": document_keys,
                 }
             )
+        digests = ZorkMemory.get_all_source_material_digests(campaign_id)
         return {
             "available": bool(compact_docs),
             "document_count": len(compact_docs),
             "chunk_count": total_chunk_count,
             "docs": compact_docs,
             "keys": source_keys,
+            "digests": digests,
         }
 
     @classmethod
@@ -15262,6 +15316,12 @@ class ZorkEmulator:
                 f"SOURCE_MATERIAL_KEYS: {cls._dump_json(_source_payload.get('keys') or [])}\n"
                 f"SOURCE_MATERIAL_CHUNK_COUNT: {_source_payload.get('chunk_count')}\n"
             )
+            _source_digests = _source_payload.get("digests") or {}
+            if _source_digests:
+                for _digest_key, _digest_text in _source_digests.items():
+                    user_prompt += (
+                        f"SOURCE_MATERIAL_DIGEST [{_digest_key}]:\n{_digest_text}\n"
+                    )
         user_prompt += (
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
