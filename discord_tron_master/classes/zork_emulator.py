@@ -2812,6 +2812,10 @@ class ZorkEmulator:
                 turn,
                 cls.get_campaign_state(campaign),
                 meta.get("scene_output"),
+                viewer_user_id=viewer_user_id,
+                viewer_slug=viewer_slug,
+                viewer_location_key=viewer_location_key,
+                viewer_private_context_key=viewer_private_context_key,
             )
             if scene_output_lines and turn.kind == "narrator":
                 recent_lines.extend(scene_output_lines)
@@ -3308,6 +3312,11 @@ class ZorkEmulator:
         turn: ZorkTurn,
         campaign_state: Dict[str, object],
         scene_output: object,
+        *,
+        viewer_user_id: Optional[int] = None,
+        viewer_slug: str = "",
+        viewer_location_key: str = "",
+        viewer_private_context_key: str = "",
     ) -> List[str]:
         if not isinstance(scene_output, dict):
             return []
@@ -3333,8 +3342,56 @@ class ZorkEmulator:
         if isinstance(visibility, dict):
             header["visibility"] = str(visibility.get("scope") or "").strip().lower() or None
         lines = [json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
+        fallback_location_key = str(scene_output.get("location_key") or "").strip().lower()
+        fallback_context_key = str(scene_output.get("context_key") or "").strip()
+        viewer_slug_key = cls._player_slug_key(viewer_slug)
+        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        viewer_private_context_key_norm = str(viewer_private_context_key or "").strip()
         for index, beat in enumerate(beats):
             if not isinstance(beat, dict):
+                continue
+            beat_visibility = str(beat.get("visibility") or "local").strip().lower() or "local"
+            beat_location_key = (
+                str(beat.get("location_key") or "").strip().lower()
+                or fallback_location_key
+            )
+            beat_context_key = (
+                str(beat.get("context_key") or "").strip()
+                or fallback_context_key
+            )
+            beat_aware_discord_ids: List[int] = []
+            for item in list(beat.get("aware_discord_ids") or []):
+                try:
+                    aware_id = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if aware_id not in beat_aware_discord_ids:
+                    beat_aware_discord_ids.append(aware_id)
+            beat_actor_listener_slugs = {
+                cls._player_slug_key(item)
+                for item in list(beat.get("actors") or []) + list(beat.get("listeners") or [])
+                if cls._player_slug_key(item)
+            }
+            beat_visible = False
+            if beat_visibility in {"", "public"}:
+                beat_visible = True
+            elif beat_visibility == "local":
+                beat_visible = bool(
+                    viewer_location_key_norm
+                    and beat_location_key
+                    and viewer_location_key_norm == beat_location_key
+                )
+            elif beat_visibility in {"private", "limited"}:
+                beat_visible = (
+                    (viewer_user_id is not None and int(viewer_user_id) in beat_aware_discord_ids)
+                    or (viewer_slug_key and viewer_slug_key in beat_actor_listener_slugs)
+                    or (
+                        viewer_private_context_key_norm
+                        and beat_context_key
+                        and viewer_private_context_key_norm == beat_context_key
+                    )
+                )
+            if not beat_visible:
                 continue
             lines.append(
                 json.dumps(
@@ -3348,7 +3405,7 @@ class ZorkEmulator:
                         "actors": list(beat.get("actors") or []),
                         "listeners": list(beat.get("listeners") or []),
                         "visibility": str(beat.get("visibility") or "local").strip(),
-                        "aware_discord_ids": list(beat.get("aware_discord_ids") or []),
+                        "aware_discord_ids": beat_aware_discord_ids,
                         "aware_npc_slugs": list(beat.get("aware_npc_slugs") or []),
                         "location_key": beat.get("location_key"),
                         "context_key": beat.get("context_key"),
@@ -9019,6 +9076,35 @@ class ZorkEmulator:
             return None
         cleaned = cleaned.replace("||", "| |")
         return f"Reasoning: ||{cleaned}||"
+
+    @classmethod
+    def _format_private_context_status(
+        cls, player_state: Dict[str, object]
+    ) -> str:
+        active_context = cls._active_private_context_from_state(player_state)
+        if isinstance(active_context, dict):
+            scope = str(active_context.get("scope") or "").strip().lower() or "private"
+            target_name = str(active_context.get("target_name") or "").strip()
+            context_key = str(active_context.get("context_key") or "").strip()
+            label = "limited" if scope == "limited" else "private"
+            if target_name:
+                return (
+                    f"Private context: {label} thread active with {target_name}. "
+                    "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
+                )
+            if context_key:
+                return (
+                    f"Private context: {label} thread active ({context_key}). "
+                    "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
+                )
+            return (
+                f"Private context: {label} thread active. "
+                "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
+            )
+        return (
+            "Private context: none. To start one, whisper, pull someone aside, ask for a private word, "
+            "or use phone/text actions."
+        )
 
     @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
@@ -17746,6 +17832,15 @@ class ZorkEmulator:
                         display_narration = f"{display_narration}\n\n{inventory_line}"
                     else:
                         display_narration = inventory_line
+                    private_context_line = cls._format_private_context_status(
+                        player_state
+                    )
+                    if private_context_line:
+                        display_narration = (
+                            f"{display_narration}\n{private_context_line}"
+                            if display_narration
+                            else private_context_line
+                        )
                     reasoning_line = cls._format_reasoning_spoiler(reasoning)
                     if reasoning_line:
                         display_narration = (
