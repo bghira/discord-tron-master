@@ -2332,13 +2332,9 @@ class ZorkEmulator:
         actor_state = cls.get_player_state(actor) if actor is not None else {}
         actor_location_key = cls._room_key_from_player_state(actor_state)
         scope = (
-            "private"
-            if is_private_context
-            else (
-                "local"
-                if actor_location_key and actor_location_key.lower() != "unknown-room"
-                else "public"
-            )
+            "local"
+            if actor_location_key and actor_location_key.lower() != "unknown-room"
+            else "public"
         )
         visible_player_slugs = [actor_slug] if actor_slug else []
         visible_user_ids = [actor_user_id] if actor_user_id is not None else []
@@ -2361,9 +2357,7 @@ class ZorkEmulator:
             "context_key": None,
             "aware_npc_slugs": [],
             "source": (
-                "dm-default"
-                if is_private_context
-                else ("local-default" if scope == "local" else "public-default")
+                "local-default" if scope == "local" else "public-default"
             ),
         }
 
@@ -15056,11 +15050,7 @@ class ZorkEmulator:
                         party_snapshot=party_snapshot,
                         is_new_player=is_new_player,
                         turn_attachment_context=turn_attachment_context,
-                        turn_visibility_default=(
-                            "private"
-                            if getattr(ctx, "guild", None) is None
-                            else "public"
-                        ),
+                        turn_visibility_default="public",
                         tail_extra_lines=turn_tail_extra_lines,
                         prompt_stage=current_prompt_stage,
                     )
@@ -15149,11 +15139,7 @@ class ZorkEmulator:
                             party_snapshot=party_snapshot,
                             is_new_player=is_new_player,
                             turn_attachment_context=turn_attachment_context,
-                            turn_visibility_default=(
-                                "private"
-                                if getattr(ctx, "guild", None) is None
-                                else "public"
-                            ),
+                            turn_visibility_default="public",
                             tail_extra_lines=turn_tail_extra_lines,
                             prompt_stage=current_prompt_stage,
                         )
@@ -18376,9 +18362,7 @@ class ZorkEmulator:
                     action,
                     turns,
                     is_new_player=False,
-                    turn_visibility_default=(
-                        "private" if timer_is_private_context else "public"
-                    ),
+                    turn_visibility_default="public",
                 )
 
                 gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
