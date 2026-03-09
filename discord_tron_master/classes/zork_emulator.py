@@ -237,9 +237,9 @@ class ZorkEmulator:
     TIMER_REALTIME_MIN_SECONDS = 5
     TIMER_REALTIME_MAX_SECONDS = 120
     RESPONSE_STYLE_NOTE = (
-        "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use classic Zork style. Minimal words. "
-        "Advance one concrete beat only. No recap of unchanged facts. No literary prose, "
-        "no novelistic inner monologue, no comic-book melodrama. Keep NPC output actionable "
+        "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use classic Zork style. Narrate in 1 to 6 beats as needed. "
+        "No recap of unchanged facts. No flowery language unless a character canonically speaks that way. "
+        "No novelistic inner monologue or comic-book melodrama. Keep NPC output actionable "
         "(intent, decision, question, or action), not repetitive reaction text. "
         "ANTI-ECHO: do NOT restate, paraphrase, or mirror the player's just-written wording. "
         "Do not quote the player's lines back to them unless one exact contested phrase is materially necessary. "
@@ -294,7 +294,7 @@ class ZorkEmulator:
 
     SYSTEM_PROMPT = (
         "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
-        "You describe outcomes in second person, terse and concrete. You track rooms, "
+        "You describe outcomes in second person. You track rooms, "
         "objects, exits, and consequences. Each player is a distinct character and "
         "may be in a different location or timeline than other players. You never break character. "
         "This is an adult-oriented game. You may include mature themes, explicit content, violence, "
@@ -381,9 +381,9 @@ class ZorkEmulator:
         "- Keep reasoning concise (roughly 1-4 short sentences, <=1200 chars).\n"
         "- Do NOT repeat the narration outside the JSON object.\n"
         "- Keep narration under 1800 characters.\n"
-        "- Write in classic Zork style: concise, concrete, and gameplay-forward.\n"
-        "- Keep narration minimal by default (roughly 1-4 sentences, usually 30-120 words).\n"
-        "- No literary flourish: avoid poetic language, novel-style interior monologue, melodrama, or comic-book framing.\n"
+        "- Write in classic Zork style: concrete and gameplay-forward.\n"
+        "- Narrate in 1 to 6 beats as needed for the turn.\n"
+        "- Avoid flowery language unless a specific character canonically speaks that way. Avoid novel-style interior monologue, melodrama, or comic-book framing.\n"
         "- ANTI-CLICHE: Avoid default narrative beats. Not every tense moment needs a drawn weapon. "
         "Not every silence is meaningful. Not every NPC encounter is adversarial-then-allied.\n"
         "- If you are about to write a beat that could appear in any story, pick the version that could only happen in THIS story with THESE characters.\n"
@@ -800,22 +800,33 @@ class ZorkEmulator:
         '"date_label": "Day N, Period"}\n'
         "Advance hour/minute naturally; when hour >= 24, increment day and wrap hour.\n"
         "Set period based on hour: 5-11=morning, 12-16=afternoon, 17-20=evening, 21-4=night.\n\n"
-        "You may also return a calendar_update key (object) to manage scheduled events:\n"
-        '- "calendar_update": {"add": [...], "remove": [...]} where each add entry is '
-        '{"name": str, "time_remaining": int, "time_unit": "hours"|"days", "description": str, "known_by": [str, ...], "target_player": str|int (optional), "target_players": [str|int, ...] (optional)} '
-        "and each remove entry is a string matching an event name.\n"
+        "CALENDAR_UPDATE — managing scheduled events:\n"
+        "Return a top-level calendar_update key with add and/or remove lists.\n"
+        "REQUIRED FORMAT — always wrap entries in an add list:\n"
+        '"calendar_update": {\n'
+        '  "add": [\n'
+        '    {"name": "Lotus - Thais", "time_remaining": 1, "time_unit": "hours", "description": "Meeting Thais at Lotus club"}\n'
+        "  ],\n"
+        '  "remove": ["Old Event Name"]\n'
+        "}\n"
+        "ADD ENTRY FIELDS:\n"
+        '- "name" (required): short label for the event.\n'
+        '- "time_remaining" (required): integer offset from current game time.\n'
+        '- "time_unit" (required): "hours" or "days".\n'
+        '- "description" (optional): brief context, max 200 chars.\n'
+        '- "known_by" (optional): list of character names who know about the event. If provided, reminders only appear when a known character is in the active scene. Omit for globally-known events.\n'
+        '- "target_player" / "target_players" (optional): Discord ID, mention, player slug, or PARTY_SNAPSHOT string such as \'<@123> (Rigby)\'. Omit for global events.\n'
+        "DO NOT include _days_until, _hours_until, _status, fire_day, fire_hour, created_day, or created_hour — "
+        "those are read-only fields the harness computes. Only provide the fields listed above.\n"
+        "Each remove entry is a string matching an event name exactly.\n\n"
         "HARNESS BEHAVIOR:\n"
-        "- The harness converts add entries into absolute due dates and stores fire_day + fire_hour (the exact in-game deadline).\n"
-        "- known_by is optional. If provided, reminders are only injected when at least one known character is in the active scene.\n"
-        "- Keep known_by to character names from PARTY_SNAPSHOT / WORLD_CHARACTERS. Omit known_by for globally-known events.\n"
-        "- target_player / target_players are optional player-specific targets. These may be a Discord ID, a Discord mention, a player slug, or a PARTY_SNAPSHOT-style string such as '<@123> (Rigby)'.\n"
-        "- If no target_player(s) are provided, the event is treated as global.\n"
-        "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining days automatically.\n"
+        "- The harness converts time_remaining + time_unit into absolute fire_day + fire_hour (the exact in-game deadline).\n"
+        "- Do NOT decrement counters manually by re-adding events each turn. The harness computes remaining time automatically.\n"
         "- You will receive CALENDAR_REMINDERS in the prompt for imminent/overdue events, including hour-level countdowns near deadline.\n"
         "- CALENDAR_REMINDERS are sparse urgency signals. Do NOT echo them every turn; only surface them in narration when relevant to the current action/scene, when the player asks, or when the event is immediate.\n"
         "- When a calendar event reaches its fire point, the harness may notify the shared channel and/or affected players directly.\n"
         "CALENDAR EVENT LIFECYCLE:\n"
-        "Events should progress through phases based on fire_day vs CURRENT_GAME_TIME.day:\n"
+        "Events should progress through phases based on _status shown in CALENDAR:\n"
         "1. UPCOMING — event is in the future. Mention it naturally when relevant (NPCs remind the player, "
         "signs/clues reference it).\n"
         "2. IMMINENT — event is today or tomorrow. Actively warn the player: NPCs urge action, "
@@ -9244,6 +9255,37 @@ class ZorkEmulator:
         return None
 
     @classmethod
+    def _fallback_private_context_from_rows(
+        cls,
+        recent_contexts: List[Dict[str, object]],
+        *,
+        viewer_location_key: str,
+    ) -> Optional[Dict[str, object]]:
+        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        if not viewer_location_key_norm:
+            return None
+        for row in list(recent_contexts or []):
+            if not isinstance(row, dict):
+                continue
+            row_location_key = str(row.get("location_key") or "").strip().lower()
+            if row_location_key != viewer_location_key_norm:
+                continue
+            scope = str(row.get("scope") or "").strip().lower()
+            context_key = str(row.get("context_key") or "").strip()
+            if scope not in {"private", "limited"} or not context_key:
+                continue
+            return {
+                "scope": scope,
+                "context_key": context_key,
+                "location_key": str(row.get("location_key") or "").strip() or None,
+                "target_name": None,
+                "target_slug": None,
+                "target_user_id": None,
+                "engagement": "resume",
+            }
+        return None
+
+    @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
         if not isinstance(payload, dict):
             return ""
@@ -10960,9 +11002,9 @@ class ZorkEmulator:
             else:
                 status = "upcoming"
             view = dict(normalized)
-            view["days_remaining"] = days_remaining
-            view["hours_remaining"] = hours_remaining
-            view["status"] = status
+            view["_days_until"] = days_remaining
+            view["_hours_until"] = hours_remaining
+            view["_status"] = status
             if campaign_id is not None and viewer_user_id is not None:
                 target_user_ids = cls._calendar_event_notification_targets(
                     int(campaign_id), raw if isinstance(raw, dict) else normalized
@@ -11057,7 +11099,7 @@ class ZorkEmulator:
                 if not (known_keys & global_tokens):
                     if not active_keys or not (known_keys & active_keys):
                         continue
-            hours = int(event.get("hours_remaining", 0))
+            hours = int(event.get("_hours_until", event.get("hours_remaining", 0)))
             name = str(event.get("name", "Unknown"))
             fire_day = int(event.get("fire_day", 1))
             fire_hour = max(0, min(23, int(event.get("fire_hour", 23))))
@@ -12906,6 +12948,67 @@ class ZorkEmulator:
             )
 
     @classmethod
+    def _normalize_calendar_update(cls, raw: object) -> Optional[Dict[str, object]]:
+        """Coerce model calendar_update payloads into canonical {"add": [...], "remove": [...]} form.
+
+        Handles common model mistakes:
+        - Flat event dict (missing add/remove wrapper)
+        - Single dict in 'add' instead of a list
+        - 'hours_remaining'/'days_remaining' echoed back instead of 'time_remaining'/'time_unit'
+        """
+        if not isinstance(raw, dict) or not raw:
+            return None
+
+        has_add = "add" in raw
+        has_remove = "remove" in raw
+
+        # --- Detect flat event dict (has 'name' but no add/remove) ---
+        if not has_add and not has_remove and raw.get("name"):
+            raw = {"add": [dict(raw)]}
+            has_add = True
+
+        result: Dict[str, object] = {}
+
+        # --- Normalize 'add' ---
+        if has_add:
+            add_val = raw["add"]
+            # Single dict instead of list
+            if isinstance(add_val, dict):
+                add_val = [add_val]
+            if isinstance(add_val, list):
+                normalized_add: List[Dict[str, object]] = []
+                for entry in add_val:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry = dict(entry)  # shallow copy for mutation
+                    # Accept 'hours_remaining' / 'days_remaining' as aliases
+                    if "time_remaining" not in entry:
+                        if "hours_remaining" in entry:
+                            entry["time_remaining"] = entry.pop("hours_remaining")
+                            entry.setdefault("time_unit", "hours")
+                        elif "days_remaining" in entry:
+                            entry["time_remaining"] = entry.pop("days_remaining")
+                            entry.setdefault("time_unit", "days")
+                    # Strip read-only prompt fields the model may echo back
+                    for echo_key in ("status", "_status",
+                                     "hours_remaining", "days_remaining",
+                                     "_hours_until", "_days_until",
+                                     "created_day", "created_hour"):
+                        entry.pop(echo_key, None)
+                    normalized_add.append(entry)
+                result["add"] = normalized_add
+
+        # --- Normalize 'remove' ---
+        if has_remove:
+            remove_val = raw["remove"]
+            if isinstance(remove_val, str):
+                remove_val = [remove_val]
+            if isinstance(remove_val, list):
+                result["remove"] = remove_val
+
+        return result if result else None
+
+    @classmethod
     def _apply_calendar_update(
         cls,
         campaign_state: Dict[str, object],
@@ -12915,6 +13018,9 @@ class ZorkEmulator:
     ) -> Dict[str, object]:
         """Process calendar add/remove ops and persist absolute fire_day entries."""
         if not isinstance(calendar_update, dict):
+            return campaign_state
+        calendar_update = cls._normalize_calendar_update(calendar_update)
+        if calendar_update is None:
             return campaign_state
         calendar_raw = list(campaign_state.get("calendar") or [])
         game_time = campaign_state.get("game_time") or {}
@@ -14172,6 +14278,21 @@ class ZorkEmulator:
                 viewer_slug=_viewer_slug,
                 viewer_location_key=_viewer_location_key,
             )
+        _provisional_private_context_key = str(
+            (_viewer_private_context or {}).get("context_key") or ""
+        ).strip()
+        _recent_private_contexts = cls._recent_private_contexts_for_prompt(
+            turns,
+            viewer_user_id=player.user_id,
+            viewer_slug=_viewer_slug,
+            active_context_key=_provisional_private_context_key,
+            limit=3,
+        )
+        if not _viewer_private_context:
+            _viewer_private_context = cls._fallback_private_context_from_rows(
+                _recent_private_contexts,
+                viewer_location_key=_viewer_location_key,
+            )
         _viewer_private_context_key = str(
             (_viewer_private_context or {}).get("context_key") or ""
         ).strip()
@@ -15045,9 +15166,9 @@ class ZorkEmulator:
                         if calendar:
                             lines.append("**Upcoming Events:**")
                             for ev in calendar:
-                                days_remaining = int(ev.get("days_remaining", 0))
+                                days_remaining = int(ev.get("_days_until", ev.get("days_remaining", 0)))
                                 hours_remaining = int(
-                                    ev.get("hours_remaining", days_remaining * 24)
+                                    ev.get("_hours_until", ev.get("hours_remaining", days_remaining * 24))
                                 )
                                 fire_day = int(ev.get("fire_day", 1))
                                 fire_hour = max(
@@ -15133,6 +15254,21 @@ class ZorkEmulator:
                             turns,
                             viewer_user_id=player.user_id,
                             viewer_slug=viewer_slug,
+                            viewer_location_key=viewer_location_key,
+                        )
+                    provisional_private_context_key = str(
+                        (viewer_private_context or {}).get("context_key") or ""
+                    ).strip()
+                    recent_private_contexts = cls._recent_private_contexts_for_prompt(
+                        turns,
+                        viewer_user_id=player.user_id,
+                        viewer_slug=viewer_slug,
+                        active_context_key=provisional_private_context_key,
+                        limit=3,
+                    )
+                    if not viewer_private_context:
+                        viewer_private_context = cls._fallback_private_context_from_rows(
+                            recent_private_contexts,
                             viewer_location_key=viewer_location_key,
                         )
                     viewer_private_context_key = str(
