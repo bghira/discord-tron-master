@@ -397,6 +397,121 @@ class Zork(commands.Cog):
         ingest_message = "; ".join(ingest_messages).strip() or None
         return attachment_summary, ingest_message
 
+    async def _handle_source_material_command(self, ctx, *, label: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+        operation, parsed_value = self._parse_source_material_options(label)
+
+        if operation == "clear":
+            with app.app_context():
+                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                removed_rows = ZorkMemory.clear_source_material_documents(campaign.id)
+            if not docs:
+                await ctx.send("No source-material documents are stored for this campaign.")
+                return
+            await ctx.send(
+                f"Cleared {len(docs)} source-material document(s) "
+                f"({removed_rows} stored snippet row(s)) from `{campaign.name}`."
+            )
+            return
+
+        if operation == "remove":
+            requested = str(parsed_value or "").strip()
+            if not requested:
+                prefix = self._prefix()
+                await ctx.send(
+                    f"Usage: `{prefix}zork source-material --remove <document-key>`"
+                )
+                return
+            with app.app_context():
+                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                requested_norm = ZorkMemory._normalize_source_document_key(requested)
+                match = None
+                for row in docs:
+                    row_key = str(row.get("document_key") or "").strip()
+                    row_label = " ".join(
+                        str(row.get("document_label") or "").strip().split()
+                    )
+                    if requested in {row_key, row_label} or requested_norm == row_key:
+                        match = row
+                        break
+                if not match:
+                    await ctx.send(
+                        "Source-material document not found. "
+                        f"Requested `{requested}`."
+                    )
+                    return
+                row_key = str(match.get("document_key") or "").strip()
+                row_label = str(match.get("document_label") or "").strip() or row_key
+                removed_rows = ZorkMemory.delete_source_material_document(
+                    campaign.id,
+                    row_key,
+                )
+            if removed_rows <= 0:
+                await ctx.send(
+                    f"Could not remove source-material document `{row_key}`."
+                )
+                return
+            await ctx.send(
+                f"Removed source-material document `{row_label}` "
+                f"(key `{row_key}`, {removed_rows} stored snippet row(s))."
+            )
+            return
+
+        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        try:
+            summary, message = await self._prepare_thread_source_material(
+                ctx,
+                campaign,
+                channel=ctx.channel,
+                default_label=label,
+                summary_instructions=None,
+            )
+            ok = True
+            if summary is None and (
+                message is None or "No `.txt` attachment found." in str(message)
+            ):
+                ok = False
+            if ok and summary and not message:
+                message = summary
+            elif ok and message and summary:
+                message = f"{summary}\n\n{message}"
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(ctx)
+
+        message_text = str(message or "")
+
+        if not ok and "No `.txt` attachment found." in message_text:
+            prefix = self._prefix()
+            await ctx.send(
+                "Attach a `.txt` file to ingest source material.\n"
+                f"Usage: `{prefix}zork source-material [label]`\n"
+                f"Or manage stored docs with `{prefix}zork source-material --remove <document-key>` "
+                f"or `{prefix}zork source-material --clear`."
+            )
+            return
+        await DiscordBot.send_large_message(
+            ctx,
+            message_text or "No source-material changes were made.",
+            max_chars=3900,
+        )
+
     async def _handle_rewind(self, message, app):
         """Process a 'rewind' reply: restore state and purge messages."""
         target_msg_id = message.reference.message_id
@@ -589,6 +704,13 @@ class Zork(commands.Cog):
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
+
+        if action is not None:
+            action_stripped = str(action or "").strip()
+            if action_stripped.startswith("source-material") or action_stripped.startswith("source_material"):
+                rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
+                await self._handle_source_material_command(ctx, label=rest)
+                return
 
         if action is None:
             with app.app_context():
@@ -1610,119 +1732,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="source-material")
     async def zork_source_material(self, ctx, *, label: str = None):
-        if not self._ensure_guild(ctx):
-            await ctx.send("Zork is only available in servers.")
-            return
-        app = AppConfig.get_flask()
-        if app is None:
-            await ctx.send("Zork is not ready yet (no Flask app).")
-            return
-
-        with app.app_context():
-            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
-                await ctx.send("No active campaign in this channel.")
-                return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
-            if campaign is None:
-                await ctx.send("No active campaign in this channel.")
-                return
-        operation, parsed_value = self._parse_source_material_options(label)
-
-        if operation == "clear":
-            with app.app_context():
-                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
-                removed_rows = ZorkMemory.clear_source_material_documents(campaign.id)
-            if not docs:
-                await ctx.send("No source-material documents are stored for this campaign.")
-                return
-            await ctx.send(
-                f"Cleared {len(docs)} source-material document(s) "
-                f"({removed_rows} stored snippet row(s)) from `{campaign.name}`."
-            )
-            return
-
-        if operation == "remove":
-            requested = str(parsed_value or "").strip()
-            if not requested:
-                prefix = self._prefix()
-                await ctx.send(
-                    f"Usage: `{prefix}zork source-material --remove <document-key>`"
-                )
-                return
-            with app.app_context():
-                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
-                requested_norm = ZorkMemory._normalize_source_document_key(requested)
-                match = None
-                for row in docs:
-                    row_key = str(row.get("document_key") or "").strip()
-                    row_label = " ".join(
-                        str(row.get("document_label") or "").strip().split()
-                    )
-                    if requested in {row_key, row_label} or requested_norm == row_key:
-                        match = row
-                        break
-                if not match:
-                    await ctx.send(
-                        "Source-material document not found. "
-                        f"Requested `{requested}`."
-                    )
-                    return
-                row_key = str(match.get("document_key") or "").strip()
-                row_label = str(match.get("document_label") or "").strip() or row_key
-                removed_rows = ZorkMemory.delete_source_material_document(
-                    campaign.id,
-                    row_key,
-                )
-            if removed_rows <= 0:
-                await ctx.send(
-                    f"Could not remove source-material document `{row_key}`."
-                )
-                return
-            await ctx.send(
-                f"Removed source-material document `{row_label}` "
-                f"(key `{row_key}`, {removed_rows} stored snippet row(s))."
-            )
-            return
-
-        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
-        try:
-            summary, message = await self._prepare_thread_source_material(
-                ctx,
-                campaign,
-                channel=ctx.channel,
-                default_label=label,
-                summary_instructions=None,
-            )
-            ok = True
-            if summary is None and (
-                message is None or "No `.txt` attachment found." in str(message)
-            ):
-                ok = False
-            if ok and summary and not message:
-                message = summary
-            elif ok and message and summary:
-                message = f"{summary}\n\n{message}"
-        finally:
-            if reaction_added:
-                await ZorkEmulator._remove_processing_reaction(ctx)
-
-        message_text = str(message or "")
-
-        if not ok and "No `.txt` attachment found." in message_text:
-            prefix = self._prefix()
-            await ctx.send(
-                "Attach a `.txt` file to ingest source material.\n"
-                f"Usage: `{prefix}zork source-material [label]`\n"
-                f"Or manage stored docs with `{prefix}zork source-material --remove <document-key>` "
-                f"or `{prefix}zork source-material --clear`."
-            )
-            return
-        await DiscordBot.send_large_message(
-            ctx,
-            message_text or "No source-material changes were made.",
-            max_chars=3900,
-        )
+        await self._handle_source_material_command(ctx, label=label)
 
     @zork.command(name="source-material-export")
     async def zork_source_material_export(self, ctx):
