@@ -381,7 +381,9 @@ class ZorkEmulator:
         "  {\"marcus\": {\"mood\": \"angry\", \"location\": \"courtyard\"}, \"west_gate\": {\"status\": \"barred\"}}\n"
         "Examples of WRONG structure (never do this):\n"
         "  {\"marcus_mood\": \"angry\", \"marcus_location\": \"courtyard\", \"west_gate_status\": \"barred\"}\n"
-        "- summary_update: string (one or two sentences of lasting changes)\n"
+        "- summary_update: string (REQUIRED. One or two sentences capturing any lasting change, discovery, decision, relationship shift, or event outcome from this turn. "
+        "If nothing durable happened, write a single sentence noting the scene's current dramatic state. "
+        "This is the ONLY mechanism that keeps WORLD_SUMMARY current — omitting it causes context drift.)\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: object (optional, player state patches)\n"
         '- story_progression: object (optional; on-rails intent hint only. Keys: "advance" (bool), "target" ("hold"|"next-scene"|"next-chapter"), "reason" (short string). Use this when a subplot beat or scene outcome should push the main outlined story forward and you are not setting explicit state_update.current_chapter/current_scene.)\n'
@@ -779,6 +781,7 @@ class ZorkEmulator:
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
         "- In EVERY final non-tool JSON response, include state_update.current_chapter and state_update.current_scene explicitly.\n"
         "- In EVERY final non-tool JSON response, include state_update.game_time explicitly.\n"
+        "- In EVERY final non-tool JSON response, include summary_update (one sentence of lasting change or current dramatic state).\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
         "- If the scene does not advance yet, still restate the current chapter/scene indexes explicitly in state_update.\n"
@@ -7388,18 +7391,25 @@ class ZorkEmulator:
         campaign: ZorkCampaign,
         campaign_state: Dict[str, object],
         *,
+        turns: Optional[List[ZorkTurn]] = None,
+        viewer_user_id: Optional[int] = None,
+        viewer_slug: str = "",
+        viewer_location_key: str = "",
+        viewer_private_context_key: str = "",
         max_chars: Optional[int] = None,
     ) -> str:
         raw_summary = cls._strip_inventory_mentions(campaign.summary or "")
         seen: set[str] = set()
-        lines: List[str] = []
-        for raw_line in raw_summary.splitlines():
-            line = " ".join(str(raw_line or "").strip().split())
+        persisted_lines: List[str] = []
+        recent_lines: List[str] = []
+
+        def _append_if_relevant(target: List[str], raw_text: object) -> None:
+            line = " ".join(str(raw_text or "").strip().split())
             if not line:
-                continue
+                return
             line_key = line.lower()
             if line_key in seen:
-                continue
+                return
             if not cls._should_keep_summary_update(
                 line,
                 state_update={},
@@ -7407,9 +7417,46 @@ class ZorkEmulator:
                 character_updates={},
                 calendar_update=None,
             ):
-                continue
+                return
             seen.add(line_key)
-            lines.append(line)
+            target.append(line)
+
+        for raw_line in raw_summary.splitlines():
+            _append_if_relevant(persisted_lines, raw_line)
+
+        if (
+            isinstance(turns, list)
+            and viewer_user_id is not None
+            and turns
+        ):
+            for turn in turns[-24:]:
+                if not isinstance(turn, ZorkTurn):
+                    continue
+                if turn.kind != "narrator":
+                    continue
+                if not cls._turn_visible_to_viewer(
+                    turn,
+                    viewer_user_id,
+                    viewer_slug,
+                    viewer_location_key,
+                    viewer_private_context_key,
+                ):
+                    continue
+                meta = cls._safe_turn_meta(turn)
+                if bool(meta.get("suppress_context")):
+                    continue
+                summary_candidate = meta.get("summary_update")
+                if not str(summary_candidate or "").strip():
+                    summary_candidate = cls._brief_event_summary(
+                        action_text="",
+                        summary_update=None,
+                        narration_text=meta.get("scene_output_rendered")
+                        or turn.content
+                        or "",
+                    )
+                _append_if_relevant(recent_lines, summary_candidate)
+
+        lines = recent_lines + persisted_lines
 
         if not lines:
             active_chapters = cls._chapters_for_prompt(
@@ -13750,7 +13797,8 @@ class ZorkEmulator:
             cls._difficulty_response_note(difficulty),
             (
                 'Return final JSON only. Include reasoning first. '
-                'state_update is required and must include "game_time", "current_chapter", and "current_scene" explicitly.'
+                'state_update is required and must include "game_time", "current_chapter", and "current_scene" explicitly. '
+                'summary_update is required — one sentence capturing any lasting change or the scene\'s current dramatic state.'
             ),
         )
 
@@ -14341,11 +14389,6 @@ class ZorkEmulator:
                 "period": "morning", "date_label": "Day 1, Morning",
             }
             campaign.state_json = cls._dump_json(state)
-        summary = cls._compose_world_summary(
-            campaign,
-            state,
-            max_chars=cls.MAX_SUMMARY_CHARS,
-        )
         guardrails_enabled = bool(state.get("guardrails_enabled", False))
         model_state = cls._build_model_state(state)
         model_state = cls._fit_state_to_budget(model_state, cls.MAX_STATE_CHARS)
@@ -14414,6 +14457,16 @@ class ZorkEmulator:
         _viewer_private_context_key = str(
             (_viewer_private_context or {}).get("context_key") or ""
         ).strip()
+        summary = cls._compose_world_summary(
+            campaign,
+            state,
+            turns=turns,
+            viewer_user_id=player.user_id,
+            viewer_slug=_viewer_slug,
+            viewer_location_key=_viewer_location_key,
+            viewer_private_context_key=_viewer_private_context_key,
+            max_chars=cls.MAX_SUMMARY_CHARS,
+        )
         _recent_private_contexts = cls._recent_private_contexts_for_prompt(
             turns,
             viewer_user_id=player.user_id,
@@ -15875,7 +15928,8 @@ class ZorkEmulator:
                             _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
                             tool_result_block = (
                                 "RESEARCH_COMPLETE: Context gathering is complete.\n"
-                                "Do NOT call any more tools now. Return final narration/state JSON directly."
+                                "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
+                                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
                             )
                             _zork_log("READY TO WRITE", tool_result_block)
                             _append_tool_prompt(tool_result_block)
@@ -17631,7 +17685,7 @@ class ZorkEmulator:
                             "- reasoning string grounded in evidence/context used\n"
                             "- narration with one concrete scene development\n"
                             '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
-                            "- summary_update with durable consequence when applicable.\n"
+                            "- summary_update string (REQUIRED — one sentence of lasting change or current dramatic state)\n"
                             "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
                         )
                         _repair_response = await gpt.turbo_completion(
@@ -18655,8 +18709,17 @@ class ZorkEmulator:
                     }
                     if reasoning:
                         narrator_turn_meta_payload["reasoning"] = reasoning
+                    if summary_update:
+                        narrator_turn_meta_payload["summary_update"] = summary_update
                     if scene_output:
                         narrator_turn_meta_payload["scene_output"] = scene_output
+                        rendered_scene_text = cls._scene_output_rendered_text(
+                            scene_output
+                        )
+                        if rendered_scene_text:
+                            narrator_turn_meta_payload["scene_output_rendered"] = (
+                                rendered_scene_text
+                            )
                         narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
                             turn_id=None,
                             game_time=post_turn_game_time,
@@ -19357,8 +19420,15 @@ class ZorkEmulator:
                 }
                 if reasoning:
                     timed_turn_meta_payload["reasoning"] = reasoning
+                if summary_update:
+                    timed_turn_meta_payload["summary_update"] = summary_update
                 if scene_output:
                     timed_turn_meta_payload["scene_output"] = scene_output
+                    rendered_scene_text = cls._scene_output_rendered_text(scene_output)
+                    if rendered_scene_text:
+                        timed_turn_meta_payload["scene_output_rendered"] = (
+                            rendered_scene_text
+                        )
                     timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
                         turn_id=None,
                         game_time=post_turn_game_time,
