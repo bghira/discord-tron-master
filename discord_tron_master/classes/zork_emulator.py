@@ -9340,6 +9340,7 @@ class ZorkEmulator:
         if turn is None:
             return None
         meta = cls._safe_turn_meta(turn)
+        player_state: Dict[str, object] = {}
         inventory_line = "Inventory: empty"
         snapshot = ZorkSnapshot.query.filter_by(turn_id=turn.id).first()
         if snapshot is not None:
@@ -9356,10 +9357,38 @@ class ZorkEmulator:
                     player_id = 0
                 if player_id != int(turn.user_id or 0):
                     continue
-                player_state = cls._load_json(row.get("state_json") or "{}")
+                raw_state = row.get("state_json")
+                if isinstance(raw_state, dict):
+                    player_state = raw_state
+                else:
+                    player_state = cls._load_json(raw_state or "{}", {})
                 inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
                 break
-        private_context_line = cls._format_turn_visibility_info(meta.get("visibility"))
+        viewer_slug = cls._player_slug_key(player_state.get("character_name"))
+        active_context_key = str(
+            (cls._active_private_context_from_state(player_state) or {}).get("context_key")
+            or ""
+        ).strip()
+        turns = (
+            ZorkTurn.query.filter(
+                ZorkTurn.campaign_id == turn.campaign_id,
+                ZorkTurn.id <= turn.id,
+            )
+            .order_by(ZorkTurn.id.asc())
+            .limit(64)
+            .all()
+        )
+        recent_contexts = cls._recent_private_contexts_for_prompt(
+            turns,
+            viewer_user_id=int(turn.user_id or 0),
+            viewer_slug=viewer_slug,
+            active_context_key=active_context_key,
+            limit=3,
+        )
+        private_context_line = cls._format_private_context_status(
+            player_state,
+            recent_contexts=recent_contexts,
+        )
         reasoning_line = cls._format_reasoning_spoiler(meta.get("reasoning")) or "Reasoning: unavailable."
         return "\n".join([inventory_line, private_context_line, reasoning_line])
 
