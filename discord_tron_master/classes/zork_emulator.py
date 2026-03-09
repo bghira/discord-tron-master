@@ -9313,6 +9313,127 @@ class ZorkEmulator:
         )
 
     @classmethod
+    def _format_turn_look_info(cls, player_state: Dict[str, object]) -> str:
+        if not isinstance(player_state, dict):
+            return "Look: unavailable."
+        room_title = str(player_state.get("room_title") or "").strip()
+        room_summary = str(player_state.get("room_summary") or "").strip()
+        room_description = str(player_state.get("room_description") or "").strip()
+        location = str(player_state.get("location") or "").strip()
+        exits = player_state.get("exits")
+        exit_list: List[str] = []
+        if isinstance(exits, list):
+            exit_list = [str(item).strip() for item in exits if str(item or "").strip()]
+        elif isinstance(exits, str) and exits.strip():
+            exit_list = [part.strip() for part in exits.split(",") if part.strip()]
+        look_bits: List[str] = []
+        title = room_title or location or "unknown"
+        if room_summary:
+            look_bits.append(room_summary)
+        elif room_description:
+            compact_desc = " ".join(room_description.split())
+            if compact_desc:
+                look_bits.append(compact_desc[:240])
+        if exit_list:
+            look_bits.append(f"Exits: {', '.join(exit_list)}")
+        if look_bits:
+            return f"Look: {title}. {' '.join(look_bits)}"
+        return f"Look: {title}."
+
+    @classmethod
+    def _format_turn_calendar_info(
+        cls,
+        campaign_state: Dict[str, object],
+        *,
+        campaign_id: Optional[int] = None,
+        viewer_user_id: Optional[int] = None,
+    ) -> str:
+        game_time = {}
+        if isinstance(campaign_state, dict):
+            raw_time = campaign_state.get("game_time")
+            if isinstance(raw_time, dict):
+                game_time = raw_time
+        day = cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1
+        hour = cls._coerce_non_negative_int(game_time.get("hour", 8), default=8)
+        minute = cls._coerce_non_negative_int(game_time.get("minute", 0), default=0)
+        calendar_entries = cls._calendar_for_prompt(
+            campaign_state,
+            campaign_id=campaign_id,
+            viewer_user_id=viewer_user_id,
+        )
+        if not calendar_entries:
+            return f"Cal: Day {day} {hour:02d}:{minute:02d}. No upcoming events."
+        items: List[str] = []
+        for entry in calendar_entries[:3]:
+            name = str(entry.get("name") or "Event").strip()
+            fire_day = cls._coerce_non_negative_int(entry.get("fire_day", day), default=day)
+            fire_hour = cls._coerce_non_negative_int(entry.get("fire_hour", 23), default=23)
+            status = str(entry.get("_status") or "").strip().lower()
+            location = str(entry.get("location") or "").strip()
+            description = str(entry.get("description") or "").strip()
+            detail = f"Day {fire_day} {fire_hour:02d}:00"
+            if location:
+                detail = f"{detail} @ {location}"
+            if description:
+                detail = f"{detail} - {description}"
+            if status and status not in {"upcoming", "today"}:
+                detail = f"{detail} [{status}]"
+            items.append(f"{name} ({detail})")
+        suffix = ""
+        if len(calendar_entries) > 3:
+            suffix = f" +{len(calendar_entries) - 3} more"
+        return f"Cal: Day {day} {hour:02d}:{minute:02d}. " + " | ".join(items) + suffix
+
+    @classmethod
+    def _format_turn_player_info(cls, player: Optional[ZorkPlayer]) -> List[str]:
+        if player is None:
+            return ["Player: unavailable."]
+        attributes = cls.get_player_attributes(player)
+        level = max(1, int(getattr(player, "level", 1) or 1))
+        xp = max(0, int(getattr(player, "xp", 0) or 0))
+        next_xp = cls.xp_needed_for_level(level)
+        total_points = cls.total_points_for_level(level)
+        spent = cls.points_spent(attributes)
+        remaining = max(0, total_points - spent)
+        if attributes:
+            attr_text = ", ".join(
+                f"{key} {value}"
+                for key, value in sorted(attributes.items(), key=lambda item: str(item[0]).lower())
+                if isinstance(value, int)
+            )
+        else:
+            attr_text = "none"
+        return [
+            f"Player: level {level}, XP {xp}/{next_xp} to level up.",
+            f"Attributes: {attr_text}. Points: {remaining}/{total_points} free.",
+            f"Level up: use `!zork level` at {next_xp}+ XP. Use `!zork attributes` to review or spend points.",
+        ]
+
+    @classmethod
+    def _format_turn_style_info(
+        cls,
+        campaign: Optional["ZorkCampaign"],
+        *,
+        channel_id: Optional[int] = None,
+    ) -> str:
+        style = cls._resolve_zork_style(campaign=campaign, channel_id=channel_id)
+        return f"Style: {style}."
+
+    @classmethod
+    def _format_turn_backend_info(
+        cls,
+        campaign: Optional["ZorkCampaign"],
+        *,
+        channel_id: Optional[int] = None,
+    ) -> str:
+        backend_config = cls._resolve_zork_backend(campaign=campaign, channel_id=channel_id)
+        backend = str(backend_config.get("backend") or "zai").strip() or "zai"
+        model = str(backend_config.get("model") or "").strip()
+        if model:
+            return f"Backend: {backend} ({model})."
+        return f"Backend: {backend}."
+
+    @classmethod
     def _format_turn_visibility_info(cls, visibility: object) -> str:
         if not isinstance(visibility, dict):
             return "Private context: public."
@@ -9339,11 +9460,24 @@ class ZorkEmulator:
         )
         if turn is None:
             return None
+        campaign = ZorkCampaign.query.get(turn.campaign_id) if turn.campaign_id else None
+        player = None
+        if turn.campaign_id and turn.user_id:
+            player = ZorkPlayer.query.filter_by(
+                campaign_id=turn.campaign_id,
+                user_id=turn.user_id,
+            ).first()
         meta = cls._safe_turn_meta(turn)
         player_state: Dict[str, object] = {}
+        campaign_state: Dict[str, object] = (
+            cls.get_campaign_state(campaign) if campaign is not None else {}
+        )
         inventory_line = "Inventory: empty"
         snapshot = ZorkSnapshot.query.filter_by(turn_id=turn.id).first()
         if snapshot is not None:
+            snapshot_campaign_state = cls._load_json(snapshot.campaign_state_json or "{}", {})
+            if isinstance(snapshot_campaign_state, dict) and snapshot_campaign_state:
+                campaign_state = snapshot_campaign_state
             try:
                 players_data = json.loads(snapshot.players_json or "[]")
             except Exception:
@@ -9364,6 +9498,9 @@ class ZorkEmulator:
                     player_state = cls._load_json(raw_state or "{}", {})
                 inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
                 break
+        if not player_state and player is not None:
+            player_state = cls.get_player_state(player)
+            inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
         viewer_slug = cls._player_slug_key(player_state.get("character_name"))
         active_context_key = str(
             (cls._active_private_context_from_state(player_state) or {}).get("context_key")
@@ -9389,8 +9526,28 @@ class ZorkEmulator:
             player_state,
             recent_contexts=recent_contexts,
         )
+        look_line = cls._format_turn_look_info(player_state)
+        calendar_line = cls._format_turn_calendar_info(
+            campaign_state,
+            campaign_id=turn.campaign_id,
+            viewer_user_id=int(turn.user_id or 0) if turn.user_id else None,
+        )
+        player_lines = cls._format_turn_player_info(player)
+        style_line = cls._format_turn_style_info(campaign, channel_id=turn.channel_id)
+        backend_line = cls._format_turn_backend_info(campaign, channel_id=turn.channel_id)
         reasoning_line = cls._format_reasoning_spoiler(meta.get("reasoning")) or "Reasoning: unavailable."
-        return "\n".join([inventory_line, private_context_line, reasoning_line])
+        return "\n".join(
+            [
+                look_line,
+                calendar_line,
+                *player_lines,
+                style_line,
+                backend_line,
+                inventory_line,
+                private_context_line,
+                reasoning_line,
+            ]
+        )
 
     @classmethod
     def _recent_private_contexts_for_prompt(
