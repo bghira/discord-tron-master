@@ -15707,12 +15707,12 @@ class ZorkEmulator:
                             player_state,
                             action,
                             turn_attachment_context,
-                        cls._turn_stage_note(
-                            prompt_difficulty,
-                            current_prompt_stage,
-                            campaign=campaign,
-                            channel_id=channel_id,
-                        ),
+                            cls._turn_stage_note(
+                                prompt_difficulty,
+                                current_prompt_stage,
+                                campaign=campaign,
+                                channel_id=getattr(ctx.channel, "id", None),
+                            ),
                             extra_lines=turn_tail_extra_lines,
                         )
                         _rebuild_tool_prompt()
