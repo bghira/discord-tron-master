@@ -123,6 +123,34 @@ class Zork(commands.Cog):
         label = " ".join(label_tokens).strip() or None
         return "ingest", label
 
+    def _parse_campaign_rules_options(
+        self, raw: str | None
+    ) -> tuple[str, str | None, str | None]:
+        if not raw:
+            return "list", None, None
+        try:
+            tokens = shlex.split(raw)
+        except ValueError:
+            tokens = str(raw).split()
+        if not tokens:
+            return "list", None, None
+
+        first = str(tokens[0] or "").strip()
+        first_low = first.lower()
+        if first_low.startswith("--add="):
+            return "add", first.split("=", 1)[1].strip() or None, " ".join(tokens[1:]).strip() or None
+        if first_low.startswith("--upsert="):
+            return "upsert", first.split("=", 1)[1].strip() or None, " ".join(tokens[1:]).strip() or None
+        if first_low == "--add":
+            key = str(tokens[1] or "").strip() if len(tokens) > 1 else None
+            value = " ".join(tokens[2:]).strip() or None
+            return "add", key, value
+        if first_low == "--upsert":
+            key = str(tokens[1] or "").strip() if len(tokens) > 1 else None
+            value = " ".join(tokens[2:]).strip() or None
+            return "upsert", key, value
+        return "get", " ".join(tokens).strip() or None, None
+
     def _parse_literary_reference_options(
         self, raw: str | None
     ) -> tuple[str, str | None]:
@@ -713,6 +741,108 @@ class Zork(commands.Cog):
             f"Characters can reference these via `literary_style` in character_updates."
         )
 
+    async def _handle_campaign_rules_command(self, ctx, *, raw: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        operation, key, value = self._parse_campaign_rules_options(raw)
+
+        if operation == "list":
+            with app.app_context():
+                rules = ZorkEmulator.list_campaign_rules(campaign.id)
+            if not rules:
+                await ctx.send("No campaign rules are stored in `campaign-rulebook`.")
+                return
+            lines = [f"`{row['key']}`" for row in rules if str(row.get("key") or "").strip()]
+            await DiscordBot.send_large_message(
+                ctx,
+                f"Campaign rules ({len(lines)}):\n" + "\n".join(lines),
+                max_chars=3900,
+            )
+            return
+
+        if operation == "get":
+            requested = str(key or "").strip()
+            if not requested:
+                await ctx.send("Provide a campaign rule key or use `--add` / `--upsert`.")
+                return
+            with app.app_context():
+                rule = ZorkEmulator.get_campaign_rule(campaign.id, requested)
+            if not rule:
+                await ctx.send(f"Campaign rule `{requested}` not found.")
+                return
+            await DiscordBot.send_large_message(
+                ctx,
+                f"`{rule['key']}`: {rule['value']}",
+                max_chars=3900,
+            )
+            return
+
+        requested_key = str(key or "").strip()
+        requested_value = str(value or "").strip()
+        if not requested_key or not requested_value:
+            prefix = self._prefix()
+            await ctx.send(
+                f"Usage: `{prefix}zork campaign-rules --{operation} <KEY> <rule text>`"
+            )
+            return
+
+        with app.app_context():
+            result = ZorkEmulator.put_campaign_rule(
+                campaign.id,
+                rule_key=requested_key,
+                rule_text=requested_value,
+                upsert=(operation == "upsert"),
+            )
+
+        if not result.get("ok"):
+            if result.get("reason") == "exists":
+                await DiscordBot.send_large_message(
+                    ctx,
+                    f"Campaign rule `{result.get('key')}` already exists.\n"
+                    f"Old: {result.get('old_value')}\n"
+                    "Use `--upsert` to replace it.",
+                    max_chars=3900,
+                )
+                return
+            await ctx.send("Could not store campaign rule.")
+            return
+
+        key_text = str(result.get("key") or requested_key)
+        new_value = str(result.get("new_value") or requested_value)
+        old_value = str(result.get("old_value") or "").strip()
+        if result.get("replaced"):
+            await DiscordBot.send_large_message(
+                ctx,
+                f"Updated campaign rule `{key_text}`.\n"
+                f"Old: {old_value}\n"
+                f"New: {new_value}",
+                max_chars=3900,
+            )
+            return
+
+        await DiscordBot.send_large_message(
+            ctx,
+            f"Added campaign rule `{key_text}`.\n"
+            f"New: {new_value}",
+            max_chars=3900,
+        )
+
     async def _handle_rewind(self, message, app):
         """Process a 'rewind' reply: restore state and purge messages."""
         target_msg_id = message.reference.message_id
@@ -912,6 +1042,10 @@ class Zork(commands.Cog):
                 rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
                 await self._handle_source_material_command(ctx, label=rest)
                 return
+            if action_stripped.startswith("campaign-rules") or action_stripped.startswith("campaign_rules"):
+                rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
+                await self._handle_campaign_rules_command(ctx, raw=rest)
+                return
             if action_stripped.startswith("literary-reference") or action_stripped.startswith("literary_reference"):
                 rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
                 await self._handle_literary_reference_command(ctx, label=rest)
@@ -1028,6 +1162,10 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
+            f"- `{prefix}zork campaign-rules` list all keys in `campaign-rulebook`\n"
+            f"- `{prefix}zork campaign-rules <KEY>` show one campaign rule\n"
+            f"- `{prefix}zork campaign-rules --add <KEY> <rule...>` add one rule without replacing\n"
+            f"- `{prefix}zork campaign-rules --upsert <KEY> <rule...>` create or replace one rule\n"
             f"- `{prefix}zork literary-reference [label]` analyse attached `.txt` prose and extract literary style profiles for characters\n"
             f"- `{prefix}zork literary-reference --list` show stored literary style profiles\n"
             f"- `{prefix}zork literary-reference --remove <label>` remove a literary style profile (and sub-keys)\n"
@@ -1054,6 +1192,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork attributes <name> <value>` set or create attribute\n"
             f"- `{prefix}zork stats` view player stats\n"
             f"- `{prefix}zork hint` view your currently visible imminent plot hints\n"
+            f"- `{prefix}zork puzzles [none|light|moderate|full]` view or set puzzle encounter mode\n"
             f"- `{prefix}zork level` level up if you have enough XP\n"
             f"- `{prefix}zork map` draw an ASCII map for your location\n"
             f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
@@ -1287,6 +1426,47 @@ class Zork(commands.Cog):
                 return
             ZorkEmulator.set_on_rails(campaign, False)
             await ctx.send(f"On-rails mode disabled for campaign `{campaign.name}`.")
+
+    @zork.command(name="puzzles")
+    async def zork_puzzles(self, ctx, *, mode: str = None):
+        """View or set puzzle mode for active campaign."""
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            state = ZorkEmulator.get_campaign_state(campaign)
+            if mode is None:
+                current = state.get("puzzle_mode", "none")
+                prefix = self._prefix()
+                await ctx.send(
+                    f"Puzzle mode is `{current}` for campaign `{campaign.name}`.\n"
+                    f"Modes: **none** (no mechanical challenges), **light** (environmental puzzles only), "
+                    f"**moderate** (+ skill checks & riddles), **full** (+ mini-games).\n"
+                    f"Set with: `{prefix}zork puzzles <mode>`"
+                )
+                return
+            normalized = mode.strip().lower()
+            valid_modes = ("none", "light", "moderate", "full")
+            if normalized not in valid_modes:
+                await ctx.send(f"Invalid mode. Choose one of: {', '.join(valid_modes)}")
+                return
+            state["puzzle_mode"] = normalized
+            campaign.state_json = ZorkEmulator._dump_json(state)
+            from discord_tron_master.classes.app_config import AppConfig as AC
+            db.session.commit()
+            await ctx.send(f"Puzzle mode set to `{normalized}` for campaign `{campaign.name}`.")
 
     @zork.group(name="timed-events", invoke_without_command=True)
     async def zork_timed_events(self, ctx):
@@ -1942,6 +2122,10 @@ class Zork(commands.Cog):
     @zork.command(name="source-material")
     async def zork_source_material(self, ctx, *, label: str = None):
         await self._handle_source_material_command(ctx, label=label)
+
+    @zork.command(name="campaign-rules")
+    async def zork_campaign_rules(self, ctx, *, raw: str = None):
+        await self._handle_campaign_rules_command(ctx, raw=raw)
 
     @zork.command(name="literary-reference")
     async def zork_literary_reference(self, ctx, *, label: str = None):

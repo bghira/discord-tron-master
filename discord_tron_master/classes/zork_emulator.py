@@ -275,6 +275,12 @@ class ZorkEmulator:
         CONSEQUENCE_STATE_KEY,
         TURN_TIME_INDEX_KEY,
         LITERARY_STYLES_STATE_KEY,
+        "_active_puzzle",
+        "_puzzle_result",
+        "_active_minigame",
+        "_minigame_result",
+        "_last_dice_check",
+        "_last_minigame_result",
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
     PRIVATE_CONTEXT_STATE_KEY = "_active_private_context"
@@ -620,6 +626,27 @@ class ZorkEmulator:
         "  * Pacing is a gift. Know when to linger on a moment and when to cut to the next beat. Not every action needs a full scene.\n"
         "  * The best turns leave the player wanting to type their next move immediately.\n"
         "- Tone lock: match narration to WORLD_STATE.tone. Player humor is allowed, but ambient world/NPC behavior should remain tonally consistent unless the story explicitly shifts tone.\n"
+        "- PUZZLE SYSTEM: When PUZZLE_CONFIG is present, the campaign has puzzle mechanics enabled.\n"
+        "  You may include dice_check in your JSON to request a skill check against player attributes.\n"
+        "  dice_check requires: attribute (string matching a PLAYER_CARD attribute), dc (integer difficulty class),\n"
+        "  context (what is being attempted), on_success (object with narration, state_update, player_state_update, xp_awarded),\n"
+        "  and on_failure (same shape). The harness rolls d20 + attribute modifier and selects the outcome.\n"
+        "  DC guidance: trivial 5, easy 8, moderate 12, hard 15, very hard 18, near-impossible 20+.\n"
+        "  Only request dice_check when the outcome is genuinely uncertain and the player has a relevant attribute.\n"
+        "- You may include puzzle_trigger to start a harness-managed puzzle: {puzzle_type, context, difficulty}.\n"
+        "  Types: \"riddle\", \"math\", \"sequence\", \"cipher\". The harness generates and validates — do not solve it yourself.\n"
+        "- You may include minigame_challenge to start a mini-game: {game_type, opponent_slug, stakes}.\n"
+        "  Types: \"tic_tac_toe\", \"nim\", \"dice_duel\", \"coin_flip\". The harness manages game state.\n"
+        "- When ACTIVE_PUZZLE or ACTIVE_MINIGAME is present, a mechanical challenge is in progress.\n"
+        "  Narrate around it — do NOT spoil puzzle answers or override minigame outcomes.\n"
+        "  When PUZZLE_RESULT or MINIGAME_RESULT is present, narrate the outcome.\n"
+        "- When LAST_DICE_CHECK is present, the previous turn had a skill check.\n"
+        "  Use the result for continuity — do not contradict it.\n"
+        "- dice_check: object (optional; request a skill check. Keys: attribute, dc, context, on_success, on_failure.\n"
+        "  on_success/on_failure each have: narration (string), state_update (object), player_state_update (object), xp_awarded (int).\n"
+        "  The harness rolls and selects one outcome.)\n"
+        "- puzzle_trigger: object (optional; start a harness-managed puzzle. Keys: puzzle_type, context, difficulty.)\n"
+        "- minigame_challenge: object (optional; start a mini-game. Keys: game_type, opponent_slug, stakes.)\n"
     )
     GUARDRAILS_SYSTEM_PROMPT = (
         "\nSTRICT RAILS MODE IS ENABLED.\n"
@@ -4249,7 +4276,7 @@ class ZorkEmulator:
         _zork_log(
             f"SETUP CLASSIFY campaign={campaign.id}",
             f"raw_name={raw_name!r}\nIMDB results:\n{imdb_text or '(none)'}"
-            f"\nattachment_summary={'yes (' + str(len(attachment_summary)) + ' chars)' if attachment_summary else 'no'}",
+            f"\npreloaded_attachment_summary={'yes (' + str(len(attachment_summary)) + ' chars)' if attachment_summary else 'no'}",
         )
 
         imdb_context = ""
@@ -4638,8 +4665,16 @@ class ZorkEmulator:
         # Check for .txt attachment
         att_text = await cls._extract_attachment_text(ctx)
         if isinstance(att_text, str) and att_text.startswith("ERROR:"):
+            _zork_log(
+                f"SETUP ATTACHMENT campaign={campaign.id}",
+                f"status=error\nmessage={att_text.replace('ERROR:', '', 1)!r}",
+            )
             await ctx.channel.send(att_text.replace("ERROR:", "", 1))
         elif att_text:
+            _zork_log(
+                f"SETUP ATTACHMENT campaign={campaign.id}",
+                f"status=found\nraw_chars={len(att_text)}",
+            )
             summary_instructions = str(
                 setup_data.get("attachment_summary_instructions") or ""
             ).strip()
@@ -4651,6 +4686,20 @@ class ZorkEmulator:
             )
             if summary:
                 setup_data["attachment_summary"] = summary
+                _zork_log(
+                    f"SETUP ATTACHMENT campaign={campaign.id}",
+                    f"status=summarised\nsummary_chars={len(summary)}",
+                )
+            else:
+                _zork_log(
+                    f"SETUP ATTACHMENT campaign={campaign.id}",
+                    "status=summary-empty",
+                )
+        else:
+            _zork_log(
+                f"SETUP ATTACHMENT campaign={campaign.id}",
+                "status=none",
+            )
 
         if user_guidance:
             setup_data["variant_user_guidance"] = user_guidance
@@ -6009,22 +6058,46 @@ class ZorkEmulator:
     async def _setup_handle_novel_questions(
         cls, ctx, content, campaign, state, setup_data
     ) -> str:
-        """Parse preferences, then finalize."""
+        """Parse preferences, then finalize. Two-step: on-rails, then puzzle mode."""
         answer = content.strip().lower()
         prefs = setup_data.get("novel_preferences", {})
+        if not isinstance(prefs, dict):
+            prefs = {}
 
-        if answer in ("on-rails", "onrails", "on rails", "rails", "strict"):
-            prefs["on_rails"] = True
+        if "on_rails" not in prefs:
+            # Step 1: parse on-rails answer, ask puzzle question
+            if answer in ("on-rails", "onrails", "on rails", "rails", "strict"):
+                prefs["on_rails"] = True
+            else:
+                prefs["on_rails"] = False
+            setup_data["novel_preferences"] = prefs
+            state["setup_data"] = setup_data
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return (
+                "2. **Puzzle encounters?** Should the campaign include mechanical challenges "
+                "(dice rolls, riddles, mini-games)?\n"
+                "Options: **none** / **light** (environmental puzzles only) / "
+                "**moderate** (+ skill checks & riddles) / **full** (+ mini-games)\n"
+            )
         else:
-            prefs["on_rails"] = False
-
-        setup_data["novel_preferences"] = prefs
-        state["setup_phase"] = "finalize"
-        state["setup_data"] = setup_data
-        campaign.state_json = cls._dump_json(state)
-        campaign.updated = db.func.now()
-        db.session.commit()
-        return await cls._setup_finalize(campaign, state, setup_data, user_id=ctx.author.id)
+            # Step 2: parse puzzle mode, finalize
+            puzzle_mode = "none"
+            if answer in ("light", "environmental"):
+                puzzle_mode = "light"
+            elif answer in ("moderate", "mod", "skill", "skill checks", "riddles"):
+                puzzle_mode = "moderate"
+            elif answer in ("full", "all", "yes", "heavy", "mini-games", "minigames"):
+                puzzle_mode = "full"
+            prefs["puzzle_mode"] = puzzle_mode
+            setup_data["novel_preferences"] = prefs
+            state["setup_phase"] = "finalize"
+            state["setup_data"] = setup_data
+            campaign.state_json = cls._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return await cls._setup_finalize(campaign, state, setup_data, user_id=ctx.author.id)
 
     @classmethod
     async def _setup_finalize(cls, campaign, state, setup_data, user_id: int = None) -> str:
@@ -6254,6 +6327,7 @@ class ZorkEmulator:
         if default_persona:
             state["default_persona"] = default_persona
         state["on_rails"] = on_rails
+        state["puzzle_mode"] = novel_prefs.get("puzzle_mode", "none")
 
         campaign.state_json = cls._dump_json(state)
         campaign.updated = db.func.now()
@@ -7377,6 +7451,46 @@ class ZorkEmulator:
             "docs": compact_docs,
             "keys": source_keys,
         }
+
+    @classmethod
+    def campaign_rulebook_document_key(cls) -> str:
+        return ZorkMemory._normalize_source_document_key(cls.AUTO_RULEBOOK_DOCUMENT_LABEL)
+
+    @classmethod
+    def list_campaign_rules(cls, campaign_id: int) -> List[Dict[str, str]]:
+        return ZorkMemory.list_rulebook_entries(
+            campaign_id,
+            cls.campaign_rulebook_document_key(),
+        )
+
+    @classmethod
+    def get_campaign_rule(
+        cls,
+        campaign_id: int,
+        rule_key: str,
+    ) -> Optional[Dict[str, str]]:
+        return ZorkMemory.get_rulebook_entry(
+            campaign_id,
+            cls.campaign_rulebook_document_key(),
+            rule_key,
+        )
+
+    @classmethod
+    def put_campaign_rule(
+        cls,
+        campaign_id: int,
+        *,
+        rule_key: str,
+        rule_text: str,
+        upsert: bool = False,
+    ) -> Dict[str, object]:
+        return ZorkMemory.put_rulebook_entry(
+            campaign_id,
+            document_label=cls.AUTO_RULEBOOK_DOCUMENT_LABEL,
+            rule_key=rule_key,
+            rule_text=rule_text,
+            replace_existing=bool(upsert),
+        )
 
     # ── End Campaign Setup ─────────────────────────────────────────────
 
@@ -14080,6 +14194,82 @@ class ZorkEmulator:
         return "\n".join(lines) if lines else None
 
     @classmethod
+    def _puzzle_system_for_prompt(cls, campaign_state: dict) -> Optional[str]:
+        """Build prompt sections for active puzzles, minigames, and dice checks."""
+        parts: list = []
+
+        puzzle_mode = campaign_state.get("puzzle_mode")
+        if puzzle_mode and puzzle_mode != "none":
+            parts.append(f"PUZZLE_CONFIG:\n  mode: {puzzle_mode}")
+
+        active_puzzle = campaign_state.get("_active_puzzle")
+        if isinstance(active_puzzle, dict):
+            ap = active_puzzle
+            lines = [
+                "ACTIVE_PUZZLE:",
+                f"  type: {ap.get('puzzle_type', '')}",
+                f"  question: \"{ap.get('question', '')}\"",
+                f"  attempts: {ap.get('attempts', 0)}/{ap.get('max_attempts', 3)}",
+                f"  hint_available: {str(ap.get('hints_used', 0) < len(ap.get('hints', []))).lower()}",
+                "  instruction: \"Player is attempting a puzzle. If their action looks like an answer, "
+                "the harness has already checked — see PUZZLE_RESULT if present. "
+                "Narrate the outcome accordingly.\"",
+            ]
+            parts.append("\n".join(lines))
+
+        puzzle_result = campaign_state.get("_puzzle_result")
+        if isinstance(puzzle_result, dict):
+            lines = ["PUZZLE_RESULT:"]
+            for k, v in puzzle_result.items():
+                lines.append(f"  {k}: {v}")
+            parts.append("\n".join(lines))
+
+        active_minigame = campaign_state.get("_active_minigame")
+        if isinstance(active_minigame, dict):
+            am = active_minigame
+            lines = [
+                "ACTIVE_MINIGAME:",
+                f"  type: {am.get('game_type', '')}",
+                f"  opponent: {am.get('opponent_slug', '')}",
+            ]
+            if am.get("stakes"):
+                lines.append(f"  stakes: \"{am['stakes']}\"")
+            else:
+                lines.append("  stakes: none")
+            lines.append(f"  status: {am.get('status', 'player_turn')}")
+            lines.append(
+                "  instruction: \"Render the board in narration. "
+                "Narrate the game action. Ask for the player's next move.\""
+            )
+            parts.append("\n".join(lines))
+
+        minigame_result = campaign_state.get("_minigame_result")
+        if isinstance(minigame_result, dict):
+            lines = ["MINIGAME_RESULT:"]
+            for k, v in minigame_result.items():
+                lines.append(f"  {k}: {v}")
+            parts.append("\n".join(lines))
+
+        last_dice = campaign_state.get("_last_dice_check")
+        if isinstance(last_dice, dict):
+            attr = last_dice.get("attribute", "skill")
+            roll_val = last_dice.get("roll", 0)
+            mod = last_dice.get("modifier", 0)
+            total = last_dice.get("total", 0)
+            dc = last_dice.get("dc", 0)
+            success = last_dice.get("success", False)
+            context = last_dice.get("context", "")
+            parts.append(
+                f"LAST_DICE_CHECK:\n"
+                f"  attribute: {attr}\n"
+                f"  roll: {roll_val} + {mod} = {total} vs DC {dc}\n"
+                f"  result: {'success' if success else 'failure'}\n"
+                f"  context: \"{context}\""
+            )
+
+        return "\n\n".join(parts) if parts else None
+
+    @classmethod
     def is_guardrails_enabled(cls, campaign: Optional[ZorkCampaign]) -> bool:
         if campaign is None:
             return False
@@ -15088,6 +15278,9 @@ class ZorkEmulator:
         _literary_styles_text = cls._literary_styles_for_prompt(state, characters_for_prompt)
         if _literary_styles_text:
             user_prompt += f"LITERARY_STYLES:\n{_literary_styles_text}\n"
+        _puzzle_text = cls._puzzle_system_for_prompt(state)
+        if _puzzle_text:
+            user_prompt += f"{_puzzle_text}\n"
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"

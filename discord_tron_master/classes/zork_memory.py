@@ -893,6 +893,122 @@ class ZorkMemory:
             return []
 
     @classmethod
+    def _normalize_rulebook_fact_key(cls, value: str) -> str:
+        return " ".join(str(value or "").strip().split())
+
+    @classmethod
+    def list_rulebook_entries(
+        cls,
+        campaign_id: int,
+        document_key: str,
+    ) -> List[Dict[str, str]]:
+        try:
+            units = cls.get_source_material_document_units(campaign_id, document_key)
+            entries: List[Dict[str, str]] = []
+            for unit in units:
+                text = str(unit or "").strip()
+                if not cls._is_rulebook_fact_line(text):
+                    continue
+                key, value = text.split(":", 1)
+                key_clean = cls._normalize_rulebook_fact_key(key)
+                value_clean = " ".join(value.strip().split())
+                if not key_clean or not value_clean:
+                    continue
+                entries.append({"key": key_clean, "value": value_clean})
+            return entries
+        except Exception:
+            logger.exception(
+                "Zork memory: list_rulebook_entries failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return []
+
+    @classmethod
+    def get_rulebook_entry(
+        cls,
+        campaign_id: int,
+        document_key: str,
+        rule_key: str,
+    ) -> Optional[Dict[str, str]]:
+        normalized_key = cls._normalize_rulebook_fact_key(rule_key).lower()
+        if not normalized_key:
+            return None
+        for entry in cls.list_rulebook_entries(campaign_id, document_key):
+            if cls._normalize_rulebook_fact_key(entry.get("key") or "").lower() == normalized_key:
+                return entry
+        return None
+
+    @classmethod
+    def put_rulebook_entry(
+        cls,
+        campaign_id: int,
+        *,
+        document_label: str,
+        rule_key: str,
+        rule_text: str,
+        replace_existing: bool = False,
+    ) -> Dict[str, object]:
+        label = " ".join(str(document_label or "").strip().split())[:120] or "campaign-rulebook"
+        document_key = cls._normalize_source_document_key(label)
+        key_clean = cls._normalize_rulebook_fact_key(rule_key)
+        value_clean = " ".join(str(rule_text or "").strip().split())
+        if not key_clean or not value_clean:
+            return {
+                "ok": False,
+                "document_key": document_key,
+                "document_label": label,
+                "reason": "invalid",
+            }
+
+        entries = cls.list_rulebook_entries(campaign_id, document_key)
+        match_index = -1
+        old_value = None
+        normalized_lookup = key_clean.lower()
+        for idx, entry in enumerate(entries):
+            entry_key = cls._normalize_rulebook_fact_key(entry.get("key") or "")
+            if entry_key.lower() == normalized_lookup:
+                match_index = idx
+                key_clean = entry_key or key_clean
+                old_value = str(entry.get("value") or "").strip()
+                break
+
+        if match_index >= 0 and not replace_existing:
+            return {
+                "ok": False,
+                "document_key": document_key,
+                "document_label": label,
+                "reason": "exists",
+                "key": key_clean,
+                "old_value": old_value or "",
+                "new_value": value_clean,
+            }
+
+        if match_index >= 0:
+            entries[match_index] = {"key": key_clean, "value": value_clean}
+        else:
+            entries.append({"key": key_clean, "value": value_clean})
+
+        lines = [f"{entry['key']}: {entry['value']}" for entry in entries if entry.get("key") and entry.get("value")]
+        stored_count, stored_key = cls.store_source_material_chunks(
+            campaign_id,
+            document_label=label,
+            chunks=["\n".join(lines)],
+            source_mode="rulebook",
+            replace_document=True,
+        )
+        return {
+            "ok": stored_count > 0,
+            "document_key": stored_key,
+            "document_label": label,
+            "key": key_clean,
+            "old_value": old_value or "",
+            "new_value": value_clean,
+            "created": match_index < 0,
+            "replaced": match_index >= 0,
+        }
+
+    @classmethod
     def _source_units_signature(cls, units: List[str]) -> str:
         normalized = "\n".join(
             " ".join(str(unit or "").strip().lower().split())
