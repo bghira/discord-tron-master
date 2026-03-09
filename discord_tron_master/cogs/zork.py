@@ -1304,31 +1304,45 @@ class Zork(commands.Cog):
 
     @zork.command(name="style")
     async def zork_style(self, ctx, *, option: str = None):
-        if not self._ensure_guild(ctx):
-            await ctx.send("Zork is only available in servers.")
-            return
         app = AppConfig.get_flask()
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
 
         with app.app_context():
-            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
-                await ctx.send("No active campaign in this channel.")
-                return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
-            if campaign is None:
-                await ctx.send("No active campaign in this channel.")
-                return
+            dm_scope = ctx.guild is None
+            if dm_scope:
+                binding = self.config.get_zork_private_dm(ctx.author.id)
+                if not binding.get("enabled") or not binding.get("campaign_id"):
+                    await ctx.send(
+                        "No private DM campaign is bound. Enable it from a campaign channel first."
+                    )
+                    return
+                campaign = ZorkCampaign.query.get(binding.get("campaign_id"))
+                if campaign is None:
+                    self.config.clear_zork_private_dm(ctx.author.id)
+                    await ctx.send(
+                        "Your private DM binding is stale. Re-enable it from the campaign channel."
+                    )
+                    return
+            else:
+                channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+                if channel.active_campaign_id is None:
+                    await ctx.send("No active campaign in this channel.")
+                    return
+                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+                if campaign is None:
+                    await ctx.send("No active campaign in this channel.")
+                    return
 
         current_style = self.config.get_zork_style(
             ctx.channel.id,
             default_value=AppConfig.DEFAULT_ZORK_STYLE,
         )
         if option is None:
+            scope_text = "this DM only" if ctx.guild is None else "this channel/thread"
             await ctx.send(
-                f"Current Zork style for this channel/thread: `{current_style}`.\n"
+                f"Current Zork style for {scope_text}: `{current_style}`.\n"
                 f"Use `{self._prefix()}zork style default` to clear the override, or "
                 f"`{self._prefix()}zork style <prompt>` to set a custom style direction."
             )
@@ -1344,7 +1358,11 @@ class Zork(commands.Cog):
             )
             return
 
-        if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+        if (
+            ctx.guild is not None
+            and campaign.created_by != ctx.author.id
+            and not await self._is_image_admin(ctx)
+        ):
             await ctx.send(
                 "Only the campaign creator or an Image Admin can change this setting."
             )
@@ -1352,16 +1370,28 @@ class Zork(commands.Cog):
 
         if style_text is None:
             self.config.clear_zork_style(ctx.channel.id)
-            await ctx.send(
-                f"Zork style for `{campaign.name}` in this channel/thread reset to "
-                f"`{AppConfig.DEFAULT_ZORK_STYLE}`."
-            )
+            if ctx.guild is None:
+                await ctx.send(
+                    f"Zork style for `{campaign.name}` in this DM reset to "
+                    f"`{AppConfig.DEFAULT_ZORK_STYLE}`. The shared campaign thread style was not changed."
+                )
+            else:
+                await ctx.send(
+                    f"Zork style for `{campaign.name}` in this channel/thread reset to "
+                    f"`{AppConfig.DEFAULT_ZORK_STYLE}`."
+                )
             return
 
         self.config.set_zork_style(ctx.channel.id, style_text)
-        await ctx.send(
-            f"Zork style for `{campaign.name}` in this channel/thread set to `{style_text}`."
-        )
+        if ctx.guild is None:
+            await ctx.send(
+                f"Zork style for `{campaign.name}` in this DM set to `{style_text}`. "
+                "The shared campaign thread style was not changed."
+            )
+        else:
+            await ctx.send(
+                f"Zork style for `{campaign.name}` in this channel/thread set to `{style_text}`."
+            )
 
     @zork.command(name="thread")
     async def zork_thread(self, ctx, *, name: str = None):

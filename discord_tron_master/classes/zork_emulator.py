@@ -14372,6 +14372,7 @@ class ZorkEmulator:
         turn_visibility_default: str = "public",
         tail_extra_lines: Optional[List[str]] = None,
         prompt_stage: str = PROMPT_STAGE_FINAL,
+        channel_id: Optional[int] = None,
     ) -> Tuple[str, str]:
         stage = str(prompt_stage or cls.PROMPT_STAGE_FINAL).strip().lower()
         if stage not in {
@@ -14505,7 +14506,10 @@ class ZorkEmulator:
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
         _difficulty = cls.normalize_difficulty(state.get("difficulty", "normal"))
-        _style_direction = cls._resolve_zork_style(campaign=campaign)
+        _style_direction = cls._resolve_zork_style(
+            campaign=campaign,
+            channel_id=channel_id,
+        )
         _stage_note = cls._turn_stage_note(
             _difficulty,
             stage,
@@ -15596,6 +15600,7 @@ class ZorkEmulator:
                         turn_visibility_default="public",
                         tail_extra_lines=turn_tail_extra_lines,
                         prompt_stage=current_prompt_stage,
+                        channel_id=getattr(ctx.channel, "id", None),
                     )
                     base_user_prompt = user_prompt
                     turn_prompt_tail = cls._build_turn_prompt_tail(
@@ -15607,6 +15612,7 @@ class ZorkEmulator:
                             prompt_difficulty,
                             current_prompt_stage,
                             campaign=campaign,
+                            channel_id=channel_id,
                         ),
                         extra_lines=turn_tail_extra_lines,
                     )
@@ -15689,6 +15695,7 @@ class ZorkEmulator:
                             turn_visibility_default="public",
                             tail_extra_lines=turn_tail_extra_lines,
                             prompt_stage=current_prompt_stage,
+                            channel_id=getattr(ctx.channel, "id", None),
                         )
                         base_user_prompt = user_prompt
                         turn_prompt_tail = cls._build_turn_prompt_tail(
@@ -15696,11 +15703,12 @@ class ZorkEmulator:
                             player_state,
                             action,
                             turn_attachment_context,
-                            cls._turn_stage_note(
-                                prompt_difficulty,
-                                current_prompt_stage,
-                                campaign=campaign,
-                            ),
+                        cls._turn_stage_note(
+                            prompt_difficulty,
+                            current_prompt_stage,
+                            campaign=campaign,
+                            channel_id=channel_id,
+                        ),
                             extra_lines=turn_tail_extra_lines,
                         )
                         _rebuild_tool_prompt()
@@ -19011,6 +19019,7 @@ class ZorkEmulator:
                     turns,
                     is_new_player=False,
                     turn_visibility_default="public",
+                    channel_id=channel_id,
                 )
 
                 gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
