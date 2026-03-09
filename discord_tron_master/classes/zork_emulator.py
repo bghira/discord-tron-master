@@ -14917,7 +14917,13 @@ class ZorkEmulator:
                             text = str(block or "").strip()
                             if text:
                                 tool_prompt_blocks.append(text)
-                        tool_prompt_blocks.append(_tool_budget_note())
+                        tool_prompt_blocks[:] = [
+                            block
+                            for block in tool_prompt_blocks
+                            if not str(block or "").strip().startswith("TOOL_BUDGET:")
+                        ]
+                        if current_prompt_stage != cls.PROMPT_STAGE_FINAL:
+                            tool_prompt_blocks.append(_tool_budget_note())
                         _rebuild_tool_prompt()
                         _zork_log(
                             "TURN AUGMENTED PROMPT",
