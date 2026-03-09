@@ -452,6 +452,7 @@ class ZorkEmulator:
         "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
         "  * Phone/text/SMS activity is private by default to the acting player. If they text or message someone off-scene, use private or limited unless they explicitly show or read it aloud to others.\n"
+        "  * Intimacy or sexual activity is NOT automatically private. If it happens openly in the same room, it is usually local unless the player explicitly hides it, whispers it, takes it off-scene, or the scene is already inside an established private thread.\n"
         "  * When a player starts a whisper, pull-aside, or private word, move that exchange into private or limited context immediately and keep it there until they clearly rejoin the room or a different conversation.\n"
         "  * Do not dump the contents of a brand-new whisper into public/local narration before privacy is established. First establish the aside, then continue the private exchange on later turns.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
