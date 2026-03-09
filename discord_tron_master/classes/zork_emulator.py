@@ -7342,6 +7342,7 @@ class ZorkEmulator:
         cls,
         scene_output: object,
     ) -> bool:
+        """Return True unless the scene contains private/limited beats that should not leak into WORLD_SUMMARY."""
         if not isinstance(scene_output, dict):
             return True
         beats = scene_output.get("beats")
@@ -7351,7 +7352,7 @@ class ZorkEmulator:
             if not isinstance(beat, dict):
                 continue
             scope = str(beat.get("visibility") or "").strip().lower() or "local"
-            if scope != "public":
+            if scope in {"private", "limited"}:
                 return False
         return True
 
@@ -17966,7 +17967,7 @@ class ZorkEmulator:
 
                     _turn_is_public = (
                         str((turn_visibility or {}).get("scope") or "").strip().lower()
-                        == "public"
+                        in {"public", "local"}
                     )
 
                     if summary_update:
@@ -18916,7 +18917,7 @@ class ZorkEmulator:
 
                 _turn_is_public = (
                     str((turn_visibility or {}).get("scope") or "").strip().lower()
-                    == "public"
+                    in {"public", "local"}
                 )
 
                 if summary_update:
