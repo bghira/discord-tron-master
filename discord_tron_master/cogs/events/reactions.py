@@ -9,6 +9,7 @@ from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.bot import clean_traceback
+from discord_tron_master.classes.zork_emulator import ZorkEmulator
 
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
@@ -37,6 +38,24 @@ class Reactions(commands.Cog):
         )
         if reaction.message.author != self.bot.user:
             logging.debug(f"Ignoring reaction on message not from me.")
+            return
+        if str(reaction.emoji) in {"ℹ️", "ℹ"}:
+            app = AppConfig.get_flask()
+            if app is None:
+                return
+            with app.app_context():
+                info_text = ZorkEmulator.get_turn_info_text_for_message(
+                    reaction.message.id
+                )
+            if not info_text:
+                return
+            if reaction.message.guild is None:
+                await DiscordBot.send_large_message(reaction.message, info_text)
+            else:
+                await DiscordBot.send_large_message(
+                    reaction.message,
+                    f"{user.mention}\n{info_text}",
+                )
             return
         image_urls = []
         img = None

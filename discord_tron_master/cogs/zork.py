@@ -320,6 +320,11 @@ class Zork(commands.Cog):
         # If a timer was just scheduled, register the message for later editing.
         if campaign_id is not None and msg is not None:
             ZorkEmulator.register_timer_message(campaign_id, msg.id)
+        if msg is not None:
+            try:
+                await msg.add_reaction("ℹ️")
+            except Exception:
+                logger.debug("Failed adding Zork info reaction", exc_info=True)
         return msg
 
     async def _prepare_thread_source_material(

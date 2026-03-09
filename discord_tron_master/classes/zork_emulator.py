@@ -471,8 +471,10 @@ class ZorkEmulator:
         "- CRITICAL — STATE/NARRATION CONSISTENCY: whenever narration moves or repositions a named entity, "
         "you MUST update structured state in the same turn (state_update.<entity>.location and/or "
         "character_updates.<slug>.location). Narrative movement without matching state updates is invalid.\n"
-        "- If a companion/pet/NPC is described as following the player (e.g. at your heels, beside you, with you), "
-        "update that entity's location to the player's current location in structured state immediately.\n"
+        "- If a companion/pet that BELONGS TO the acting player is described as following them (e.g. at your heels, beside you, travelling with you), "
+        "update that entity's location to the player's current location in structured state immediately. "
+        "Location-anchored animals (bar cats, tavern pets, stabled horses, etc.) maintain their own fixed positions per WORLD_CHARACTERS "
+        "and must NOT be relocated just because a player passes through their space or the narration mentions them as scene texture.\n"
         "- Treat each player's inventory as private and never copy items from other players.\n"
         "- For inventory changes, ONLY use player_state_update.inventory_add and player_state_update.inventory_remove arrays.\n"
         "- Do not return player_state_update.inventory full lists.\n"
@@ -9264,17 +9266,19 @@ class ZorkEmulator:
         return f"Reasoning: ||{cleaned}||"
 
     @classmethod
+    def _humanize_context_key(cls, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return " ".join(part for part in text.replace(":", " ").replace("-", " ").split())
+
+    @classmethod
     def _format_private_context_status(
         cls,
         player_state: Dict[str, object],
         *,
         recent_contexts: Optional[List[Dict[str, object]]] = None,
     ) -> str:
-        def _humanize_context_key(value: object) -> str:
-            text = str(value or "").strip()
-            if not text:
-                return ""
-            return " ".join(part for part in text.replace(":", " ").replace("-", " ").split())
 
         active_context = cls._active_private_context_from_state(player_state)
         if isinstance(active_context, dict):
@@ -9294,7 +9298,7 @@ class ZorkEmulator:
         for row in list(recent_contexts or [])[:3]:
             if not isinstance(row, dict):
                 continue
-            label = _humanize_context_key(row.get("context_key"))
+            label = cls._humanize_context_key(row.get("context_key"))
             if not label or label in recent_labels:
                 continue
             recent_labels.append(label)
@@ -9307,6 +9311,57 @@ class ZorkEmulator:
             "Private context: none. To start one, whisper, pull someone aside, ask for a private word, "
             "or use phone/text actions."
         )
+
+    @classmethod
+    def _format_turn_visibility_info(cls, visibility: object) -> str:
+        if not isinstance(visibility, dict):
+            return "Private context: public."
+        scope = str(visibility.get("scope") or "").strip().lower() or "public"
+        context_label = cls._humanize_context_key(visibility.get("context_key"))
+        if scope in {"private", "limited"}:
+            if context_label:
+                return f"Private context: {scope} thread ({context_label})."
+            return f"Private context: {scope}."
+        if scope == "local":
+            return "Private context: local room context."
+        return "Private context: public."
+
+    @classmethod
+    def get_turn_info_text_for_message(cls, discord_message_id: int) -> Optional[str]:
+        try:
+            message_id = int(discord_message_id)
+        except (TypeError, ValueError):
+            return None
+        turn = (
+            ZorkTurn.query.filter_by(discord_message_id=message_id, kind="narrator")
+            .order_by(ZorkTurn.id.desc())
+            .first()
+        )
+        if turn is None:
+            return None
+        meta = cls._safe_turn_meta(turn)
+        inventory_line = "Inventory: empty"
+        snapshot = ZorkSnapshot.query.filter_by(turn_id=turn.id).first()
+        if snapshot is not None:
+            try:
+                players_data = json.loads(snapshot.players_json or "[]")
+            except Exception:
+                players_data = []
+            for row in players_data:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    player_id = int(row.get("player_id") or 0)
+                except (TypeError, ValueError):
+                    player_id = 0
+                if player_id != int(turn.user_id or 0):
+                    continue
+                player_state = cls._load_json(row.get("state_json") or "{}")
+                inventory_line = cls._format_inventory(player_state) or "Inventory: empty"
+                break
+        private_context_line = cls._format_turn_visibility_info(meta.get("visibility"))
+        reasoning_line = cls._format_reasoning_spoiler(meta.get("reasoning")) or "Reasoning: unavailable."
+        return "\n".join([inventory_line, private_context_line, reasoning_line])
 
     @classmethod
     def _recent_private_contexts_for_prompt(
@@ -18614,44 +18669,6 @@ class ZorkEmulator:
                     )
                     persisted_narration = clean_narration
                     display_narration = clean_narration
-                    inventory_line = (
-                        cls._format_inventory(player_state) or "Inventory: empty"
-                    )
-                    if display_narration:
-                        display_narration = f"{display_narration}\n\n{inventory_line}"
-                    else:
-                        display_narration = inventory_line
-                    recent_private_contexts = cls._recent_private_contexts_for_prompt(
-                        turns,
-                        viewer_user_id=ctx.author.id,
-                        viewer_slug=cls._player_slug_key(
-                            player_state.get("character_name")
-                        ),
-                        active_context_key=str(
-                            (
-                                cls._active_private_context_from_state(player_state) or {}
-                            ).get("context_key")
-                            or ""
-                        ).strip(),
-                        limit=3,
-                    )
-                    private_context_line = cls._format_private_context_status(
-                        player_state,
-                        recent_contexts=recent_private_contexts,
-                    )
-                    if private_context_line:
-                        display_narration = (
-                            f"{display_narration}\n{private_context_line}"
-                            if display_narration
-                            else private_context_line
-                        )
-                    reasoning_line = cls._format_reasoning_spoiler(reasoning)
-                    if reasoning_line:
-                        display_narration = (
-                            f"{display_narration}\n{reasoning_line}"
-                            if display_narration
-                            else reasoning_line
-                        )
 
                     post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     calendar_event_notifications = cls._calendar_collect_fired_events(
