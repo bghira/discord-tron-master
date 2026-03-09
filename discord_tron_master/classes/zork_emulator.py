@@ -9079,32 +9079,133 @@ class ZorkEmulator:
 
     @classmethod
     def _format_private_context_status(
-        cls, player_state: Dict[str, object]
+        cls,
+        player_state: Dict[str, object],
+        *,
+        recent_contexts: Optional[List[Dict[str, object]]] = None,
     ) -> str:
+        def _humanize_context_key(value: object) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            return " ".join(part for part in text.replace(":", " ").replace("-", " ").split())
+
         active_context = cls._active_private_context_from_state(player_state)
         if isinstance(active_context, dict):
             scope = str(active_context.get("scope") or "").strip().lower() or "private"
             target_name = str(active_context.get("target_name") or "").strip()
-            context_key = str(active_context.get("context_key") or "").strip()
             label = "limited" if scope == "limited" else "private"
             if target_name:
                 return (
                     f"Private context: {label} thread active with {target_name}. "
                     "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
                 )
-            if context_key:
-                return (
-                    f"Private context: {label} thread active ({context_key}). "
-                    "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
-                )
             return (
                 f"Private context: {label} thread active. "
                 "Keep talking to continue it, or move/rejoin/speak out loud to leave it."
+            )
+        recent_labels: List[str] = []
+        for row in list(recent_contexts or [])[:3]:
+            if not isinstance(row, dict):
+                continue
+            label = _humanize_context_key(row.get("context_key"))
+            if not label or label in recent_labels:
+                continue
+            recent_labels.append(label)
+        if recent_labels:
+            return (
+                f"Private context: none active. Recent threads: {', '.join(recent_labels)}. "
+                "Whisper, pull someone aside, ask for a private word, or use phone/text actions to start or resume one."
             )
         return (
             "Private context: none. To start one, whisper, pull someone aside, ask for a private word, "
             "or use phone/text actions."
         )
+
+    @classmethod
+    def _recent_private_contexts_for_prompt(
+        cls,
+        turns: List["ZorkTurn"],
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+        active_context_key: str = "",
+        limit: int = 3,
+    ) -> List[Dict[str, object]]:
+        out: List[Dict[str, object]] = []
+        seen: set[str] = set()
+        viewer_slug_key = cls._player_slug_key(viewer_slug)
+        active_context_key = str(active_context_key or "").strip()
+        for turn in reversed(list(turns or [])):
+            meta = cls._safe_turn_meta(turn)
+            visibility = meta.get("visibility")
+            if not isinstance(visibility, dict):
+                continue
+            scope = str(visibility.get("scope") or "").strip().lower()
+            if scope not in {"private", "limited"}:
+                continue
+            context_key = str(
+                visibility.get("context_key") or meta.get("context_key") or ""
+            ).strip()
+            if not context_key or context_key in seen:
+                continue
+            actor_user_id = visibility.get("actor_user_id")
+            actor_player_slug = cls._player_slug_key(
+                visibility.get("actor_player_slug") or ""
+            )
+            visible_user_ids: List[int] = []
+            for item in list(visibility.get("visible_user_ids") or []):
+                try:
+                    visible_user_ids.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+            visible_player_slugs = [
+                cls._player_slug_key(item)
+                for item in list(visibility.get("visible_player_slugs") or [])
+                if cls._player_slug_key(item)
+            ]
+            if not (
+                (actor_user_id is not None and int(actor_user_id) == int(viewer_user_id))
+                or (viewer_user_id in visible_user_ids)
+                or (viewer_slug_key and viewer_slug_key == actor_player_slug)
+                or (viewer_slug_key and viewer_slug_key in visible_player_slugs)
+            ):
+                continue
+            row = {
+                "context_key": context_key,
+                "scope": scope,
+                "location_key": str(visibility.get("location_key") or meta.get("location_key") or "").strip() or None,
+                "actor_player_slug": actor_player_slug or None,
+                "visible_player_slugs": visible_player_slugs,
+                "visible_user_ids": visible_user_ids,
+                "aware_npc_slugs": [
+                    str(item or "").strip()
+                    for item in list(visibility.get("aware_npc_slugs") or [])
+                    if str(item or "").strip()
+                ],
+                "active": bool(active_context_key and context_key == active_context_key),
+                "turn_id": int(getattr(turn, "id", 0) or 0),
+            }
+            out.append(row)
+            seen.add(context_key)
+            if len(out) >= max(1, int(limit)):
+                break
+        if active_context_key and active_context_key not in seen:
+            out.insert(
+                0,
+                {
+                    "context_key": active_context_key,
+                    "scope": "private",
+                    "location_key": None,
+                    "actor_player_slug": viewer_slug_key or None,
+                    "visible_player_slugs": [viewer_slug_key] if viewer_slug_key else [],
+                    "visible_user_ids": [int(viewer_user_id)],
+                    "aware_npc_slugs": [],
+                    "active": True,
+                    "turn_id": None,
+                },
+            )
+        return out[: max(1, int(limit))]
 
     @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
@@ -13930,6 +14031,13 @@ class ZorkEmulator:
         _viewer_private_context_key = str(
             (_viewer_private_context or {}).get("context_key") or ""
         ).strip()
+        _recent_private_contexts = cls._recent_private_contexts_for_prompt(
+            turns,
+            viewer_user_id=player.user_id,
+            viewer_slug=_viewer_slug,
+            active_context_key=_viewer_private_context_key,
+            limit=3,
+        )
         recent_text = cls._recent_turns_text_for_viewer(
             campaign,
             turns,
@@ -14075,6 +14183,7 @@ class ZorkEmulator:
             f"CAMPAIGN_PLAYERS: {cls._dump_json(_campaign_players)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
+            f"RECENT_PRIVATE_CONTEXTS: {cls._dump_json(_recent_private_contexts)}\n"
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
             "RECENT_TURNS_LOADED: false\n"
         )
@@ -17832,8 +17941,23 @@ class ZorkEmulator:
                         display_narration = f"{display_narration}\n\n{inventory_line}"
                     else:
                         display_narration = inventory_line
+                    recent_private_contexts = cls._recent_private_contexts_for_prompt(
+                        turns,
+                        viewer_user_id=ctx.author.id,
+                        viewer_slug=cls._player_slug_key(
+                            player_state.get("character_name")
+                        ),
+                        active_context_key=str(
+                            (
+                                cls._active_private_context_from_state(player_state) or {}
+                            ).get("context_key")
+                            or ""
+                        ).strip(),
+                        limit=3,
+                    )
                     private_context_line = cls._format_private_context_status(
-                        player_state
+                        player_state,
+                        recent_contexts=recent_private_contexts,
                     )
                     if private_context_line:
                         display_narration = (
