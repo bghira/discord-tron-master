@@ -123,6 +123,43 @@ class Zork(commands.Cog):
         label = " ".join(label_tokens).strip() or None
         return "ingest", label
 
+    def _parse_literary_reference_options(
+        self, raw: str | None
+    ) -> tuple[str, str | None]:
+        """Parse options for the literary-reference command.
+
+        Returns ``(operation, value)`` where operation is one of
+        ``"analyze"``, ``"clear"``, ``"remove"``, ``"list"``.
+        """
+        if not raw:
+            return "analyze", None
+        try:
+            tokens = shlex.split(raw)
+        except ValueError:
+            tokens = str(raw).split()
+        if not tokens:
+            return "analyze", None
+
+        label_tokens: list[str] = []
+        i = 0
+        while i < len(tokens):
+            token = str(tokens[i] or "")
+            low = token.lower()
+            if low == "--clear":
+                return "clear", None
+            if low == "--list":
+                return "list", None
+            if low.startswith("--remove="):
+                value = token.split("=", 1)[1].strip() or None
+                return "remove", value
+            if low == "--remove":
+                value = str(tokens[i + 1] or "").strip() if i + 1 < len(tokens) else ""
+                return "remove", value or None
+            label_tokens.append(token)
+            i += 1
+        label = " ".join(label_tokens).strip() or None
+        return "analyze", label
+
     def _parse_campaign_export_options(
         self,
         raw: str | None,
@@ -517,6 +554,165 @@ class Zork(commands.Cog):
             max_chars=3900,
         )
 
+    async def _handle_literary_reference_command(self, ctx, *, label: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        operation, parsed_value = self._parse_literary_reference_options(label)
+
+        if operation == "list":
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign.id)
+                state = ZorkEmulator.get_campaign_state(campaign)
+                styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+            if not isinstance(styles, dict) or not styles:
+                await ctx.send("No literary style profiles stored for this campaign.")
+                return
+            lines = []
+            for key in sorted(styles.keys()):
+                entry = styles[key]
+                if not isinstance(entry, dict):
+                    continue
+                profile = str(entry.get("profile") or "").strip()
+                truncated = (profile[:120] + "...") if len(profile) > 120 else profile
+                lines.append(f"**{key}**: {truncated}")
+            await DiscordBot.send_large_message(
+                ctx,
+                f"Literary style profiles ({len(lines)}):\n" + "\n".join(lines),
+                max_chars=3900,
+            )
+            return
+
+        if operation == "clear":
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign.id)
+                state = ZorkEmulator.get_campaign_state(campaign)
+                styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+                if not isinstance(styles, dict) or not styles:
+                    await ctx.send("No literary style profiles to clear.")
+                    return
+                count = len(styles)
+                state.pop(ZorkEmulator.LITERARY_STYLES_STATE_KEY, None)
+                campaign.state_json = ZorkEmulator._dump_json(state)
+                campaign.updated = db.func.now()
+                db.session.commit()
+            await ctx.send(f"Cleared {count} literary style profile(s).")
+            return
+
+        if operation == "remove":
+            requested = str(parsed_value or "").strip()
+            if not requested:
+                prefix = self._prefix()
+                await ctx.send(
+                    f"Usage: `{prefix}zork literary-reference --remove <label>`"
+                )
+                return
+            with app.app_context():
+                campaign = ZorkCampaign.query.get(campaign.id)
+                state = ZorkEmulator.get_campaign_state(campaign)
+                styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+                if not isinstance(styles, dict) or not styles:
+                    await ctx.send("No literary style profiles stored.")
+                    return
+                # Remove exact key + all sub-keys (label-*)
+                keys_to_remove = [
+                    k for k in styles
+                    if k == requested or k.startswith(f"{requested}-")
+                ]
+                if not keys_to_remove:
+                    await ctx.send(f"No literary style profiles matching `{requested}`.")
+                    return
+                for k in keys_to_remove:
+                    styles.pop(k, None)
+                if not styles:
+                    state.pop(ZorkEmulator.LITERARY_STYLES_STATE_KEY, None)
+                campaign.state_json = ZorkEmulator._dump_json(state)
+                campaign.updated = db.func.now()
+                db.session.commit()
+            await ctx.send(
+                f"Removed {len(keys_to_remove)} literary style profile(s): "
+                + ", ".join(f"`{k}`" for k in sorted(keys_to_remove))
+            )
+            return
+
+        # Default: analyze
+        # Require .txt attachment
+        raw_text = await ZorkEmulator._extract_attachment_text(ctx.message)
+        if not raw_text:
+            prefix = self._prefix()
+            await ctx.send(
+                "Attach a `.txt` file containing literary prose to analyse.\n"
+                f"Usage: `{prefix}zork literary-reference [label]`\n"
+                f"Or manage stored profiles with `{prefix}zork literary-reference --list`, "
+                f"`{prefix}zork literary-reference --remove <label>`, "
+                f"or `{prefix}zork literary-reference --clear`."
+            )
+            return
+
+        # Derive label from argument or filename
+        if not parsed_value:
+            for attachment in ctx.message.attachments:
+                if attachment.filename.lower().endswith(".txt"):
+                    parsed_value = attachment.filename.rsplit(".", 1)[0]
+                    break
+        if not parsed_value:
+            parsed_value = "unnamed"
+        # Normalize label: lowercase, spaces->hyphens, max 60 chars
+        normalized_label = (
+            str(parsed_value).strip().lower().replace(" ", "-").replace("_", "-")[:60]
+        )
+
+        reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
+        try:
+            profiles = await ZorkEmulator._analyze_literary_style(
+                raw_text,
+                normalized_label,
+                campaign=campaign,
+                channel_id=ctx.channel.id,
+            )
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(ctx)
+
+        if not profiles:
+            await ctx.send("Could not extract any literary style profiles from the attached text.")
+            return
+
+        # Store profiles in campaign_state
+        with app.app_context():
+            campaign = ZorkCampaign.query.get(campaign.id)
+            state = ZorkEmulator.get_campaign_state(campaign)
+            styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+            if not isinstance(styles, dict):
+                styles = {}
+            styles.update(profiles)
+            state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
+            campaign.state_json = ZorkEmulator._dump_json(state)
+            campaign.updated = db.func.now()
+            db.session.commit()
+
+        keys = sorted(profiles.keys())
+        keys_text = ", ".join(f"`{k}`" for k in keys)
+        await ctx.send(
+            f"Stored {len(profiles)} literary style profile(s): {keys_text}\n"
+            f"Characters can reference these via `literary_style` in character_updates."
+        )
+
     async def _handle_rewind(self, message, app):
         """Process a 'rewind' reply: restore state and purge messages."""
         target_msg_id = message.reference.message_id
@@ -716,6 +912,10 @@ class Zork(commands.Cog):
                 rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
                 await self._handle_source_material_command(ctx, label=rest)
                 return
+            if action_stripped.startswith("literary-reference") or action_stripped.startswith("literary_reference"):
+                rest = action_stripped.split(None, 1)[1].strip() if len(action_stripped.split(None, 1)) > 1 else None
+                await self._handle_literary_reference_command(ctx, label=rest)
+                return
 
         if action is None:
             with app.app_context():
@@ -828,6 +1028,10 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material --remove <document-key>` remove one stored source document from the active campaign\n"
             f"- `{prefix}zork source-material --clear` remove all stored source documents from the active campaign\n"
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
+            f"- `{prefix}zork literary-reference [label]` analyse attached `.txt` prose and extract literary style profiles for characters\n"
+            f"- `{prefix}zork literary-reference --list` show stored literary style profiles\n"
+            f"- `{prefix}zork literary-reference --remove <label>` remove a literary style profile (and sub-keys)\n"
+            f"- `{prefix}zork literary-reference --clear` remove all literary style profiles\n"
             f"- `{prefix}zork campaign-export [--type full|raw] [--raw-format jsonl|json|markdown|script|loglines]` export the campaign and stored source docs\n"
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork style [prompt|default]` view or set the style direction for this channel/thread (max 120 chars; creator/admin only to change)\n"
@@ -1738,6 +1942,10 @@ class Zork(commands.Cog):
     @zork.command(name="source-material")
     async def zork_source_material(self, ctx, *, label: str = None):
         await self._handle_source_material_command(ctx, label=label)
+
+    @zork.command(name="literary-reference")
+    async def zork_literary_reference(self, ctx, *, label: str = None):
+        await self._handle_literary_reference_command(ctx, label=label)
 
     @zork.command(name="source-material-export")
     async def zork_source_material_export(self, ctx):

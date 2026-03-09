@@ -98,6 +98,7 @@ class ZorkEmulator:
         "notes",
         "details",
         "time",
+        "literary_style",
     }
     DEFAULT_STYLE_DIRECTION = AppConfig.DEFAULT_ZORK_STYLE
     BASE_POINTS = 10
@@ -270,8 +271,12 @@ class ZorkEmulator:
         CHAPTER_PLAN_STATE_KEY,
         CONSEQUENCE_STATE_KEY,
         TURN_TIME_INDEX_KEY,
+        LITERARY_STYLES_STATE_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
+    LITERARY_STYLES_STATE_KEY = "literary_styles"
+    MAX_LITERARY_STYLES_PROMPT_CHARS = 3000
+    MAX_LITERARY_STYLE_PROFILE_CHARS = 400
     PRIVATE_CONTEXT_STATE_KEY = "_active_private_context"
     UNREAD_SMS_LINE_PREFIXES = ("📨 unread sms:", "unread sms:")
 
@@ -292,6 +297,10 @@ class ZorkEmulator:
         "No recap of unchanged facts. No flowery language unless a character canonically speaks that way. "
         "No novelistic inner monologue or comic-book melodrama. Keep NPC output actionable "
         "(intent, decision, question, or action), not repetitive reaction text. "
+        "Vary pacing and meter between turns: sometimes clipped, sometimes patient, sometimes blunt, sometimes practical. "
+        "Do not default emotional beats to the same therapeutic language or cadence every time. "
+        "Avoid contrived emotional-summary language or therapist-speak "
+        "unless that exact voice is canonically right for the speaking character. "
         "ANTI-ECHO: do NOT restate, paraphrase, or mirror the player's just-written wording. "
         "Do not quote the player's lines back to them unless one exact contested phrase is materially necessary. "
         "Default: NPC first line should add new information, a decision, a demand, or a consequence. "
@@ -412,7 +421,8 @@ class ZorkEmulator:
         "current_status, allegiance, relationship. "
         "speech_style should be 2-3 sentences on how the character talks: sentence length, vocabulary, verbal tics, and what they avoid saying. "
         "On subsequent turns only mutable fields are accepted: "
-        "location, current_status, allegiance, relationship, relationships, deceased_reason, and any other dynamic key. "
+        "location, current_status, allegiance, relationship, relationships, literary_style, deceased_reason, and any other dynamic key. "
+        "literary_style should be a string referencing a key from LITERARY_STYLES (if available). "
         "Immutable fields (name, personality, background, appearance, speech_style) are locked at creation and silently ignored on updates. "
         "relationships is a map keyed by other character slug/name, e.g. "
         "{\"deshawn\": {\"status\": \"partner\", \"knows_about\": [\"pregnancy\"], \"doesnt_know\": [\"blood-test-result\"], \"dynamic\": \"protective-but-autonomous\"}}. "
@@ -442,6 +452,17 @@ class ZorkEmulator:
         "- Write in the current style direction.\n"
         "- Narrate in 1 to 6 beats as needed for the turn.\n"
         "- Avoid flowery language unless a specific character canonically speaks that way. Avoid novel-style interior monologue, melodrama, or comic-book framing.\n"
+        "- Vary pacing and sentence rhythm from turn to turn while staying true to the speaking character.\n"
+        "- When LITERARY_STYLES is present, it contains named style profiles extracted from real literary works. "
+        "Each profile describes prose craft: rhythm, register, texture, and avoidances.\n"
+        "- Characters may have a literary_style field referencing a LITERARY_STYLES key. "
+        "When writing for that character, apply the referenced profile to narration, atmosphere, pacing, and dialogue-tag texture. "
+        "The character's speech_style still governs their spoken words and verbal mannerisms. "
+        "Think of literary_style as the author's voice around the character, speech_style as the character's own voice.\n"
+        "- In multi-character scenes with different literary_style keys, use the dominant scene character's style for overall narration "
+        "and shift subtly when writing beats for characters with different styles. Do not abruptly switch voices.\n"
+        "- Do not let every emotional beat collapse into the same stock therapeutic or pseudo-profound language.\n"
+        "- Avoid contrived emotional shorthand or therapist-speak; examples include phrases like 'be present', 'show up', or 'hold space', unless a specific character would genuinely talk that way.\n"
         "- ANTI-CLICHE: Avoid default narrative beats. Not every tense moment needs a drawn weapon. "
         "Not every silence is meaningful. Not every NPC encounter is adversarial-then-allied.\n"
         "- If you are about to write a beat that could appear in any story, pick the version that could only happen in THIS story with THESE characters.\n"
@@ -585,6 +606,9 @@ class ZorkEmulator:
         "If the GM has a reveal or vulnerability beat planned for an NPC, the NPC should be able to reach it through multiple player paths, "
         "not only through one magic-word answer. A player who says 'I'm looking for connection' and a player who says 'I came for you' "
         "are both giving the NPC reason to open up — gate on sincerity, not on phrasing.\n"
+        "- PRESENCE / DEFLECTION RULE: the player is allowed to deflect, joke, pivot to practical talk, change register, or wander away from an emotional beat without being morally penalized for 'not being present.' "
+        "Do not frame ordinary avoidance, awkwardness, or scene drift as a failure of character.\n"
+        "- An unresolved confrontation may remain unresolved. Unless the NPC has an immediate concrete reason to stop the player right now, let the moment cool, break, or trail off instead of forcing another emotional pass in the same scene.\n"
         "- ANTI-PATTERN: Do not default NPCs to romantic or sexual availability.\n"
         "- Physical contact (tracing fingers, lingering looks, soft touches, leaning close) must be motivated by established relationship history and current emotional state.\n"
         "- Most human interactions are not foreplay. NPCs should behave like people with their own priorities unless the scene has organically built to intimacy through player and NPC choices.\n"
@@ -7038,6 +7062,97 @@ class ZorkEmulator:
             return resolved_format
 
         return cls._source_material_format_heuristic(sample)
+
+    @classmethod
+    async def _analyze_literary_style(
+        cls,
+        text: str,
+        label: str,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> Dict[str, dict]:
+        """Extract prose-craft profiles from literary text.
+
+        Returns ``{key: {"profile": str, "source_label": str, "created_at": ISO}}``
+        where *key* is ``label`` or ``label-SUFFIX`` when multiple registers exist.
+        """
+        sample = str(text or "").strip()[:8000]
+        if not sample:
+            return {}
+
+        gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
+        system_prompt = (
+            "You are a prose-craft analyst. Given a sample of literary text, extract the CRAFT — "
+            "not the content. Describe: sentence rhythm and length patterns, vocabulary register, "
+            "what the prose avoids, phrasing habits, emotional register, punctuation choices, "
+            "and any distinctive texture.\n"
+            "Do NOT summarise the plot, name characters, or describe events.\n"
+            "Return JSON: {\"profiles\": [{\"key_suffix\": null, \"profile\": \"...\"}]}\n"
+            "key_suffix is null for a single unified profile. If the sample contains distinctly "
+            "different registers (e.g. argument vs tender), you MAY split into multiple profiles "
+            "with key_suffix like \"ARGUMENT\", \"TENDER\". Each profile must be ≤400 characters.\n"
+            "Return ONLY valid JSON, no markdown, no extra text."
+        )
+        user_prompt = (
+            f"Analyse the prose craft of this sample labelled \"{label}\".\n"
+            f"Sample:\n{sample}\n"
+            "Return only the JSON object."
+        )
+        response = None
+        cleaned = ""
+        parsed = {}
+        try:
+            response = await gpt.turbo_completion(
+                system_prompt,
+                user_prompt,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+            cleaned = cls._clean_response(response or "")
+            json_text = cls._extract_json(cleaned)
+            if json_text:
+                parsed = cls._parse_json_lenient(json_text)
+        except Exception as e:
+            logger.warning("Literary style analysis failed (LLM parse): %s", e)
+
+        if not isinstance(parsed, dict):
+            parsed = {}
+
+        profiles_raw = parsed.get("profiles")
+        if not isinstance(profiles_raw, list):
+            profiles_raw = []
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        result: Dict[str, dict] = {}
+        for entry in profiles_raw:
+            if not isinstance(entry, dict):
+                continue
+            profile_text = str(entry.get("profile") or "").strip()
+            if not profile_text:
+                continue
+            profile_text = profile_text[: cls.MAX_LITERARY_STYLE_PROFILE_CHARS]
+            suffix = entry.get("key_suffix")
+            if suffix:
+                full_key = f"{label}-{str(suffix).strip().upper()}"
+            else:
+                full_key = label
+            result[full_key] = {
+                "profile": profile_text,
+                "source_label": label,
+                "created_at": now_iso,
+            }
+
+        if not result and cleaned:
+            # Fallback: treat entire cleaned response as a single profile.
+            fallback = cleaned[: cls.MAX_LITERARY_STYLE_PROFILE_CHARS]
+            result[label] = {
+                "profile": fallback,
+                "source_label": label,
+                "created_at": now_iso,
+            }
+
+        return result
 
     @classmethod
     async def ingest_source_material_attachment(
@@ -13886,6 +14001,7 @@ class ZorkEmulator:
                     "_slug": slug,
                     "name": effective_char.get("name", slug),
                     "speech_style": effective_char.get("speech_style"),
+                    "literary_style": effective_char.get("literary_style"),
                     "location": effective_char.get("location"),
                     "current_status": effective_char.get("current_status"),
                     "allegiance": effective_char.get("allegiance"),
@@ -13914,6 +14030,54 @@ class ZorkEmulator:
                 return characters_list
             characters_list = characters_list[:-1]
         return []
+
+    @classmethod
+    def _literary_styles_for_prompt(
+        cls,
+        campaign_state: dict,
+        characters_for_prompt: list,
+    ) -> Optional[str]:
+        """Build the LITERARY_STYLES prompt section from campaign_state.
+
+        Returns ``None`` if no styles are stored.
+        """
+        styles = campaign_state.get(cls.LITERARY_STYLES_STATE_KEY)
+        if not isinstance(styles, dict) or not styles:
+            return None
+
+        # Collect actively-referenced style keys from characters in the scene.
+        active_refs: set = set()
+        for char in characters_for_prompt or []:
+            if not isinstance(char, dict):
+                continue
+            ref = char.get("literary_style")
+            if ref:
+                active_refs.add(str(ref).strip())
+
+        # Sort: actively-referenced first, then alphabetical.
+        def _sort_key(key: str):
+            return (0 if key in active_refs else 1, key)
+
+        sorted_keys = sorted(styles.keys(), key=_sort_key)
+
+        lines: list = []
+        budget = cls.MAX_LITERARY_STYLES_PROMPT_CHARS
+        for key in sorted_keys:
+            entry = styles[key]
+            if not isinstance(entry, dict):
+                continue
+            profile = str(entry.get("profile") or "").strip()
+            if not profile:
+                continue
+            line = f"  {key}: {profile}"
+            if len(line) > budget:
+                break
+            lines.append(line)
+            budget -= len(line) + 1  # +1 for newline
+            if budget <= 0:
+                break
+
+        return "\n".join(lines) if lines else None
 
     @classmethod
     def is_guardrails_enabled(cls, campaign: Optional[ZorkCampaign]) -> bool:
@@ -14921,6 +15085,9 @@ class ZorkEmulator:
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
             "RECENT_TURNS_LOADED: false\n"
         )
+        _literary_styles_text = cls._literary_styles_for_prompt(state, characters_for_prompt)
+        if _literary_styles_text:
+            user_prompt += f"LITERARY_STYLES:\n{_literary_styles_text}\n"
         user_prompt += (
             f"WORLD_CHARACTERS: {cls._dump_json(characters_for_prompt)}\n"
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
