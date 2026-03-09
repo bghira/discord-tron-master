@@ -17981,35 +17981,6 @@ class ZorkEmulator:
                         in {"public", "local"}
                     )
 
-                    if summary_update:
-                        summary_update = summary_update.strip()
-                        summary_update = cls._strip_inventory_mentions(summary_update)
-                        if not _turn_is_public:
-                            _zork_log(
-                            f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
-                            summary_update,
-                        )
-                        elif not cls._scene_output_is_summary_public_safe(scene_output):
-                            _zork_log(
-                                f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
-                                summary_update,
-                            )
-                        elif cls._should_keep_summary_update(
-                            summary_update,
-                            state_update=state_update,
-                            player_state_update=player_state_update,
-                            character_updates=character_updates,
-                            calendar_update=calendar_update,
-                        ):
-                            campaign.summary = cls._append_summary(
-                                campaign.summary, summary_update
-                            )
-                        else:
-                            _zork_log(
-                                f"SUMMARY FILTERED campaign={campaign.id}",
-                                summary_update,
-                            )
-
                     player_state = cls.get_player_state(player)
                     _pre_update_inv = {
                         e["name"].lower(): e["name"]
@@ -18224,6 +18195,35 @@ class ZorkEmulator:
                             f"SCENE OUTPUT campaign={campaign.id}",
                             json.dumps(scene_output, indent=2, ensure_ascii=False),
                         )
+
+                    if summary_update:
+                        summary_update = summary_update.strip()
+                        summary_update = cls._strip_inventory_mentions(summary_update)
+                        if not _turn_is_public:
+                            _zork_log(
+                                f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
+                                summary_update,
+                            )
+                        elif not cls._scene_output_is_summary_public_safe(scene_output):
+                            _zork_log(
+                                f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
+                                summary_update,
+                            )
+                        elif cls._should_keep_summary_update(
+                            summary_update,
+                            state_update=state_update,
+                            player_state_update=player_state_update,
+                            character_updates=character_updates,
+                            calendar_update=calendar_update,
+                        ):
+                            campaign.summary = cls._append_summary(
+                                campaign.summary, summary_update
+                            )
+                        else:
+                            _zork_log(
+                                f"SUMMARY FILTERED campaign={campaign.id}",
+                                summary_update,
+                            )
 
                     clean_narration = cls._strip_prompt_artifacts(
                         cls._strip_ephemeral_context_lines(
