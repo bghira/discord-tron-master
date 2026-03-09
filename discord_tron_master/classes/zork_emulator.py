@@ -10893,6 +10893,9 @@ class ZorkEmulator:
     def _calendar_for_prompt(
         cls,
         campaign_state: Dict[str, object],
+        *,
+        campaign_id: Optional[int] = None,
+        viewer_user_id: Optional[int] = None,
     ) -> List[Dict[str, object]]:
         game_time = campaign_state.get("game_time") if isinstance(campaign_state, dict) else {}
         if not isinstance(game_time, dict):
@@ -10960,6 +10963,15 @@ class ZorkEmulator:
             view["days_remaining"] = days_remaining
             view["hours_remaining"] = hours_remaining
             view["status"] = status
+            if campaign_id is not None and viewer_user_id is not None:
+                target_user_ids = cls._calendar_event_notification_targets(
+                    int(campaign_id), raw if isinstance(raw, dict) else normalized
+                )
+                if target_user_ids and int(viewer_user_id) not in target_user_ids:
+                    kept_calendar.append(
+                        dict(raw) if isinstance(raw, dict) else dict(normalized)
+                    )
+                    continue
             entries.append(view)
             kept_calendar.append(dict(raw) if isinstance(raw, dict) else dict(normalized))
         entries.sort(
@@ -12899,6 +12911,7 @@ class ZorkEmulator:
         campaign_state: Dict[str, object],
         calendar_update: dict,
         resolution_context: str = "",
+        actor_user_id: Optional[int] = None,
     ) -> Dict[str, object]:
         """Process calendar add/remove ops and persist absolute fire_day entries."""
         if not isinstance(calendar_update, dict):
@@ -13025,11 +13038,26 @@ class ZorkEmulator:
             for entry in to_add:
                 if not isinstance(entry, dict):
                     continue
-                name = str(entry.get("name") or "").strip()
+                name = str(
+                    entry.get("name")
+                    or entry.get("title")
+                    or entry.get("event_key")
+                    or ""
+                ).strip()
                 if not name:
                     continue
                 fire_day = entry.get("fire_day")
                 fire_hour = entry.get("fire_hour")
+                if not isinstance(fire_day, (int, float)) or isinstance(fire_day, bool):
+                    day_alias = entry.get("day")
+                    if isinstance(day_alias, (int, float)) and not isinstance(day_alias, bool):
+                        fire_day = int(day_alias)
+                if not isinstance(fire_hour, (int, float)) or isinstance(fire_hour, bool):
+                    time_alias = str(entry.get("time") or "").strip()
+                    if time_alias:
+                        match = re.match(r"^\s*(\d{1,2}):(\d{2})", time_alias)
+                        if match:
+                            fire_hour = int(match.group(1))
                 if (
                     isinstance(fire_day, (int, float))
                     and not isinstance(fire_day, bool)
@@ -13056,10 +13084,19 @@ class ZorkEmulator:
                     "fire_hour": resolved_fire_hour,
                     "created_day": current_day,
                     "created_hour": current_hour,
-                    "description": str(entry.get("description") or "")[:200],
+                    "description": str(
+                        entry.get("description") or entry.get("notes") or ""
+                    )[:200],
                     "known_by": cls._calendar_known_by_from_event(entry),
                 }
                 target_players = cls._calendar_target_tokens_from_event(entry)
+                visibility = str(entry.get("visibility") or "").strip().lower()
+                if (
+                    not target_players
+                    and visibility == "private"
+                    and actor_user_id is not None
+                ):
+                    target_players = [str(int(actor_user_id))]
                 if target_players:
                     event["target_players"] = target_players
                 calendar.append(event)
@@ -14117,7 +14154,11 @@ class ZorkEmulator:
             ensure_ascii=True,
             sort_keys=True,
         )
-        _calendar = cls._calendar_for_prompt(state)
+        _calendar = cls._calendar_for_prompt(
+            state,
+            campaign_id=campaign.id,
+            viewer_user_id=player.user_id,
+        )
         _calendar_state_after = json.dumps(
             state.get("calendar") or [],
             ensure_ascii=True,
@@ -17713,6 +17754,7 @@ class ZorkEmulator:
                             resolution_context=(
                                 f"{action}\n{raw_narration}\n{summary_update or ''}"
                             ),
+                            actor_user_id=ctx.author.id,
                         )
                         campaign.state_json = cls._dump_json(campaign_state)
 
@@ -18658,6 +18700,7 @@ class ZorkEmulator:
                         campaign_state,
                         calendar_update,
                         resolution_context=resolution_context,
+                        actor_user_id=active_player.user_id,
                     )
                     campaign.state_json = cls._dump_json(campaign_state)
 
