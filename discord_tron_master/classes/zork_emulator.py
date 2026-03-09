@@ -246,6 +246,9 @@ class ZorkEmulator:
     MEMORY_SEARCH_USAGE_KEY = "_memory_search_term_usage"
     MEMORY_SEARCH_USAGE_MAX_TERMS = 300
     MEMORY_SEARCH_ROSTER_HINT_THRESHOLD = 3
+    LITERARY_STYLES_STATE_KEY = "literary_styles"
+    MAX_LITERARY_STYLES_PROMPT_CHARS = 3000
+    MAX_LITERARY_STYLE_PROFILE_CHARS = 400
     MODEL_STATE_EXCLUDE_KEYS = ROOM_STATE_KEYS | {
         "last_narration",
         "room_scene_images",
@@ -274,9 +277,6 @@ class ZorkEmulator:
         LITERARY_STYLES_STATE_KEY,
     }
     PLAYER_STATE_EXCLUDE_KEYS = {"inventory", "room_description", PLAYER_STATS_KEY}
-    LITERARY_STYLES_STATE_KEY = "literary_styles"
-    MAX_LITERARY_STYLES_PROMPT_CHARS = 3000
-    MAX_LITERARY_STYLE_PROFILE_CHARS = 400
     PRIVATE_CONTEXT_STATE_KEY = "_active_private_context"
     UNREAD_SMS_LINE_PREFIXES = ("📨 unread sms:", "unread sms:")
 
