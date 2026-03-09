@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
         "local_model_path": None,
     },
     "zork_backends": {},
+    "zork_styles": {},
     "users": {},
     "mysql": {
         "user": "diffusion",
@@ -95,6 +96,7 @@ DEFAULT_USER_CONFIG = {
 class AppConfig:
     flask = None
     ZORK_BACKEND_OPTIONS = ("zai", "codex", "claude", "gemini", "opencode")
+    DEFAULT_ZORK_STYLE = "classic Zork"
 
     def __init__(self):
         parent = os.path.dirname(Path(__file__).resolve().parent)
@@ -337,6 +339,57 @@ class AppConfig:
         if not isinstance(mapping, dict):
             mapping = {}
             self.config["zork_backends"] = mapping
+        mapping.pop(str(channel_id), None)
+        self._save_config()
+
+    @classmethod
+    def normalize_zork_style(cls, value, default=None, max_chars=120):
+        text = " ".join(str(value or "").strip().split())
+        if not text:
+            return default
+        return text[: max(1, int(max_chars))]
+
+    def get_zork_style(self, channel_id=None, default_value=None):
+        self.reload_config()
+        resolved_default = self.normalize_zork_style(
+            default_value if default_value is not None else self.DEFAULT_ZORK_STYLE,
+            default=self.DEFAULT_ZORK_STYLE,
+        )
+        mapping = self.config.get("zork_styles", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+        if channel_id is not None:
+            configured = self.normalize_zork_style(
+                mapping.get(str(channel_id)),
+                default=None,
+            )
+            if configured:
+                return configured
+        configured_default = self.normalize_zork_style(
+            self.config.get("zork_style"),
+            default=None,
+        )
+        if configured_default:
+            return configured_default
+        return resolved_default
+
+    def set_zork_style(self, channel_id, style):
+        mapping = self.config.setdefault("zork_styles", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+            self.config["zork_styles"] = mapping
+        style_text = self.normalize_zork_style(style, default=None)
+        if style_text:
+            mapping[str(channel_id)] = style_text
+        else:
+            mapping.pop(str(channel_id), None)
+        self._save_config()
+
+    def clear_zork_style(self, channel_id):
+        mapping = self.config.setdefault("zork_styles", {})
+        if not isinstance(mapping, dict):
+            mapping = {}
+            self.config["zork_styles"] = mapping
         mapping.pop(str(channel_id), None)
         self._save_config()
 

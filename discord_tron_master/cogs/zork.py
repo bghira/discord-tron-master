@@ -703,6 +703,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork source-material-export` export stored source documents back into `.txt` attachments in this thread/channel\n"
             f"- `{prefix}zork campaign-export [--type full|raw] [--raw-format jsonl|json|markdown|script|loglines]` export the campaign and stored source docs\n"
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
+            f"- `{prefix}zork style [prompt|default]` view or set the style direction for this channel/thread (max 120 chars; creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
@@ -1299,6 +1300,67 @@ class Zork(commands.Cog):
         model_text = f" with model `{model}`" if model else " with the backend default model"
         await ctx.send(
             f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`{model_text}."
+        )
+
+    @zork.command(name="style")
+    async def zork_style(self, ctx, *, option: str = None):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.active_campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        current_style = self.config.get_zork_style(
+            ctx.channel.id,
+            default_value=AppConfig.DEFAULT_ZORK_STYLE,
+        )
+        if option is None:
+            await ctx.send(
+                f"Current Zork style for this channel/thread: `{current_style}`.\n"
+                f"Use `{self._prefix()}zork style default` to clear the override, or "
+                f"`{self._prefix()}zork style <prompt>` to set a custom style direction."
+            )
+            return
+
+        style_text = AppConfig.normalize_zork_style(option, default=None, max_chars=120)
+        lowered = str(option or "").strip().lower()
+        if lowered in {"default", "clear", "reset"}:
+            style_text = None
+        elif not style_text:
+            await ctx.send(
+                f"Style prompt must be 1-120 characters, or use `{self._prefix()}zork style default`."
+            )
+            return
+
+        if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+            await ctx.send(
+                "Only the campaign creator or an Image Admin can change this setting."
+            )
+            return
+
+        if style_text is None:
+            self.config.clear_zork_style(ctx.channel.id)
+            await ctx.send(
+                f"Zork style for `{campaign.name}` in this channel/thread reset to "
+                f"`{AppConfig.DEFAULT_ZORK_STYLE}`."
+            )
+            return
+
+        self.config.set_zork_style(ctx.channel.id, style_text)
+        await ctx.send(
+            f"Zork style for `{campaign.name}` in this channel/thread set to `{style_text}`."
         )
 
     @zork.command(name="thread")

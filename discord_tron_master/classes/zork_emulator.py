@@ -49,6 +49,7 @@ def _zork_log(section: str, body: str = "") -> None:
 
 
 class ZorkEmulator:
+    DEFAULT_STYLE_DIRECTION = AppConfig.DEFAULT_ZORK_STYLE
     BASE_POINTS = 10
     POINTS_PER_LEVEL = 5
     MAX_ATTRIBUTE_VALUE = 20
@@ -237,7 +238,7 @@ class ZorkEmulator:
     TIMER_REALTIME_MIN_SECONDS = 5
     TIMER_REALTIME_MAX_SECONDS = 120
     RESPONSE_STYLE_NOTE = (
-        "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use classic Zork style. Narrate in 1 to 6 beats as needed. "
+        "[SYSTEM NOTE: FOR THIS RESPONSE ONLY: use the current style direction. Narrate in 1 to 6 beats as needed. "
         "No recap of unchanged facts. No flowery language unless a character canonically speaks that way. "
         "No novelistic inner monologue or comic-book melodrama. Keep NPC output actionable "
         "(intent, decision, question, or action), not repetitive reaction text. "
@@ -294,7 +295,7 @@ class ZorkEmulator:
     }
 
     SYSTEM_PROMPT = (
-        "You are the ZorkEmulator, a classic text-adventure GM with light RPG rules. "
+        "You are the ZorkEmulator, a text-adventure GM with light RPG rules. "
         "You describe outcomes in second person. You track rooms, "
         "objects, exits, and consequences. Each player is a distinct character and "
         "may be in a different location or timeline than other players. You never break character. "
@@ -3816,6 +3817,22 @@ class ZorkEmulator:
         return cfg.get_zork_backend_config(
             channel_id=resolved_channel_id,
             default_backend="zai",
+        )
+
+    @classmethod
+    def _resolve_zork_style(
+        cls,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> str:
+        cfg = AppConfig()
+        resolved_channel_id = cls._resolve_zork_backend_channel_id(
+            campaign=campaign,
+            channel_id=channel_id,
+        )
+        return cfg.get_zork_style(
+            channel_id=resolved_channel_id,
+            default_value=cls.DEFAULT_STYLE_DIRECTION,
         )
 
     @classmethod
@@ -13650,8 +13667,19 @@ class ZorkEmulator:
         return f"[SYSTEM NOTE: FOR THIS RESPONSE ONLY: {' '.join(parts)}]"
 
     @classmethod
-    def _turn_response_style_note(cls, difficulty: object) -> str:
+    def _turn_response_style_note(
+        cls,
+        difficulty: object,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> str:
+        style_direction = cls._resolve_zork_style(
+            campaign=campaign,
+            channel_id=channel_id,
+        )
         return cls._merge_system_notes(
+            f"Style direction: {style_direction}.",
             cls.RESPONSE_STYLE_NOTE,
             cls._difficulty_response_note(difficulty),
             (
@@ -13661,10 +13689,18 @@ class ZorkEmulator:
         )
 
     @classmethod
-    def _turn_stage_note(cls, difficulty: object, prompt_stage: str) -> str:
+    def _turn_stage_note(
+        cls,
+        difficulty: object,
+        prompt_stage: str,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> str:
         stage = str(prompt_stage or cls.PROMPT_STAGE_FINAL).strip().lower()
         if stage == cls.PROMPT_STAGE_RESEARCH:
             return cls._merge_system_notes(
+                f"Style direction: {cls._resolve_zork_style(campaign=campaign, channel_id=channel_id)}.",
                 cls._difficulty_response_note(difficulty),
                 (
                     "RECENT_TURNS is loaded. Do not call recent_turns again this turn."
@@ -13676,7 +13712,11 @@ class ZorkEmulator:
                     'When research is sufficient, return ONLY {"tool_call": "ready_to_write"}. Do not narrate yet.'
                 ),
             )
-        return cls._turn_response_style_note(difficulty)
+        return cls._turn_response_style_note(
+            difficulty,
+            campaign=campaign,
+            channel_id=channel_id,
+        )
 
     @classmethod
     def _build_turn_prompt_tail(
@@ -14346,8 +14386,12 @@ class ZorkEmulator:
         _game_time = state.get("game_time", {})
         _speed_mult = state.get("speed_multiplier", 1.0)
         _difficulty = cls.normalize_difficulty(state.get("difficulty", "normal"))
-        _response_style_note = cls._turn_response_style_note(_difficulty)
-        _stage_note = cls._turn_stage_note(_difficulty, stage)
+        _style_direction = cls._resolve_zork_style(campaign=campaign)
+        _stage_note = cls._turn_stage_note(
+            _difficulty,
+            stage,
+            campaign=campaign,
+        )
         _calendar_state_before = json.dumps(
             state.get("calendar") or [],
             ensure_ascii=True,
@@ -14512,7 +14556,11 @@ class ZorkEmulator:
             _zork_log("WARNING", "PROMPT_STAGE_BOOTSTRAP reached unexpectedly; falling back to RESEARCH")
             stage = cls.PROMPT_STAGE_RESEARCH
         if stage == cls.PROMPT_STAGE_RESEARCH:
-            system_prompt = cls.RESEARCH_SYSTEM_PROMPT
+            system_prompt = (
+                f"Current style direction: {_style_direction}. Treat it as the overall voice lens "
+                "unless a specific character canonically speaks otherwise.\n"
+                f"{cls.RESEARCH_SYSTEM_PROMPT}"
+            )
             if guardrails_enabled:
                 system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
             if on_rails:
@@ -14534,7 +14582,11 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
             system_prompt = f"{system_prompt}{cls.READY_TO_WRITE_TOOL_PROMPT}"
         else:
-            system_prompt = cls.SYSTEM_PROMPT
+            system_prompt = (
+                f"Current style direction: {_style_direction}. Treat it as the overall voice lens "
+                "unless a specific character canonically speaks otherwise.\n"
+                f"{cls.SYSTEM_PROMPT}"
+            )
             if guardrails_enabled:
                 system_prompt = f"{system_prompt}{cls.GUARDRAILS_SYSTEM_PROMPT}"
             if on_rails:
@@ -14594,10 +14646,20 @@ class ZorkEmulator:
 
     @classmethod
     def _repair_unquoted_json_string_fields(cls, text: str) -> str:
+        """Fix missing opening quotes on JSON string values.
+
+        Matches ``"key": SomeText...`` where the value starts with a letter
+        but is NOT a JSON literal (true/false/null).  Wraps the bare value
+        in quotes so ``json.loads`` can parse it.
+        """
         if not text:
             return text
         pattern = re.compile(
-            r'("(?P<key>[^"]+)"\s*:\s*)(?!["{\[\-0-9tfn])(?P<value>.*?)(?=(?:,\s*"[^"]+"\s*:)|(?:\s*[}\]]))',
+            r'("(?P<key>[^"]+)"\s*:\s*)'
+            r'(?!true\s*[,}\]]|false\s*[,}\]]|null\s*[,}\]])'
+            r'(?=[A-Za-z])'
+            r'(?P<value>.*?)'
+            r'(?=,\s*"[^"]+"\s*:|,\s*\{|\s*[}\]])',
             re.DOTALL,
         )
 
@@ -14606,6 +14668,9 @@ class ZorkEmulator:
             raw_value = str(match.group("value") or "").strip()
             if not raw_value:
                 return match.group(0)
+            # Strip orphan trailing quote when model wrote closing " but no opening "
+            if raw_value.endswith('"') and not raw_value.startswith('"'):
+                raw_value = raw_value[:-1].strip()
             return f"{prefix}{json.dumps(raw_value, ensure_ascii=False)}"
 
         return pattern.sub(_replace, text)
@@ -15366,7 +15431,11 @@ class ZorkEmulator:
                         player_state,
                         action,
                         turn_attachment_context,
-                        cls._turn_stage_note(prompt_difficulty, current_prompt_stage),
+                        cls._turn_stage_note(
+                            prompt_difficulty,
+                            current_prompt_stage,
+                            campaign=campaign,
+                        ),
                         extra_lines=turn_tail_extra_lines,
                     )
                     memory_lookup_enabled = (
@@ -15456,7 +15525,9 @@ class ZorkEmulator:
                             action,
                             turn_attachment_context,
                             cls._turn_stage_note(
-                                prompt_difficulty, current_prompt_stage
+                                prompt_difficulty,
+                                current_prompt_stage,
+                                campaign=campaign,
                             ),
                             extra_lines=turn_tail_extra_lines,
                         )

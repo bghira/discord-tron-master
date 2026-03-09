@@ -21,6 +21,7 @@
         "local_model_path": null
     },
     "zork_backends": {},
+    "zork_styles": {},
     "users": {
     },
     "mysql": {
