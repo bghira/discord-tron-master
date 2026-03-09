@@ -2964,6 +2964,22 @@ class ZorkEmulator:
         }
 
     @classmethod
+    def _memory_tool_text_value(cls, text: object, max_chars: int = 4000) -> str:
+        value = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(value) > max_chars:
+            value = value[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+        return value
+
+    @classmethod
+    def _memory_tool_jsonl(cls, records: List[Dict[str, object]]) -> str:
+        lines: List[str] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            lines.append(json.dumps(record, ensure_ascii=True, separators=(",", ":")))
+        return "\n".join(lines) if lines else "None"
+
+    @classmethod
     def _compute_recent_turns_metadata(
         cls,
         recent_turns: List["ZorkTurn"],
@@ -15955,7 +15971,7 @@ class ZorkEmulator:
                                 if queries
                                 else []
                             )
-                            recall_sections = []
+                            recall_records: List[Dict[str, object]] = []
                             if queries:
                                 _zork_log(
                                     "MEMORY SEARCH",
@@ -16015,7 +16031,7 @@ class ZorkEmulator:
                                     ]
                                     # Sort chronologically so the model sees events in order.
                                     relevant.sort(key=lambda row: int(row.get("turn_id") or 0))
-                                    recall_lines = []
+                                    query_records: List[Dict[str, object]] = []
                                     for row in relevant:
                                         turn_id = int(row.get("turn_id") or 0)
                                         kind = str(row.get("kind") or "")
@@ -16032,10 +16048,24 @@ class ZorkEmulator:
                                             meta_bits.append(f"visibility {turn_scope}")
                                         if location_key:
                                             meta_bits.append(f"location {location_key}")
-                                        recall_lines.append(
-                                            f"- [{kind} turn {turn_id}, {', '.join(meta_bits)}]: {content[:300]}"
+                                        query_records.append(
+                                            {
+                                                "kind": "memory_hit",
+                                                "query": query,
+                                                "memory_type": "turn",
+                                                "turn_id": turn_id,
+                                                "turn_kind": kind,
+                                                "relevance": round(score, 3),
+                                                "actor_player_slug": actor_slug or None,
+                                                "visibility_scope": turn_scope or "public",
+                                                "location_key": location_key or None,
+                                                "text": cls._memory_tool_text_value(
+                                                    content,
+                                                    max_chars=300,
+                                                ),
+                                            }
                                         )
-                                    manual_lines = []
+                                    manual_records: List[Dict[str, object]] = []
                                     if category_scope and not source_scope and not structured_turn_scope:
                                         manual_hits = ZorkMemory.search_manual_memories(
                                             query,
@@ -16046,10 +16076,20 @@ class ZorkEmulator:
                                         for mem_category, mem_content, mem_score in manual_hits:
                                             if mem_score < 0.35:
                                                 continue
-                                            manual_lines.append(
-                                                f"- [manual {mem_category}, relevance {mem_score:.2f}]: {mem_content[:300]}"
+                                            manual_records.append(
+                                                {
+                                                    "kind": "memory_hit",
+                                                    "query": query,
+                                                    "memory_type": "manual",
+                                                    "category": mem_category,
+                                                    "relevance": round(float(mem_score or 0.0), 3),
+                                                    "text": cls._memory_tool_text_value(
+                                                        mem_content,
+                                                        max_chars=300,
+                                                    ),
+                                                }
                                             )
-                                    source_lines = []
+                                    source_records: List[Dict[str, object]] = []
                                     if has_source_material and (
                                         source_scope or not category_scope
                                     ):
@@ -16094,30 +16134,48 @@ class ZorkEmulator:
                                                     .strip()
                                                     + "..."
                                                 )
-                                            source_lines.append(
-                                                "- [source "
-                                                f"{source_doc_label} ({source_doc_key}) snippet {source_chunk_index}, "
-                                                f"relevance {source_score:.2f}]:\n    {source_text}"
+                                            source_records.append(
+                                                {
+                                                    "kind": "memory_hit",
+                                                    "query": query,
+                                                    "memory_type": "source",
+                                                    "document_key": source_doc_key,
+                                                    "document_label": source_doc_label,
+                                                    "chunk_index": int(source_chunk_index or 0),
+                                                    "relevance": round(float(source_score or 0.0), 3),
+                                                    "text": cls._memory_tool_text_value(
+                                                        source_text,
+                                                        max_chars=4000,
+                                                    ),
+                                                }
                                             )
-                                    if recall_lines or manual_lines or source_lines:
-                                        lines = []
-                                        if recall_lines:
-                                            lines.append("Narrator turn matches:")
-                                            lines.extend(recall_lines)
-                                        if manual_lines:
-                                            lines.append("Manual memory matches:")
-                                            lines.extend(manual_lines)
-                                        if source_lines:
-                                            lines.append("Source material matches:")
-                                            lines.extend(source_lines)
-                                        recall_sections.append(
-                                            f"Results for '{query}':\n"
-                                            + "\n".join(lines)
+                                    if query_records or manual_records or source_records:
+                                        recall_records.append(
+                                            {
+                                                "kind": "memory_query_result",
+                                                "query": query,
+                                                "category": category_scope or None,
+                                                "hit_count": len(query_records)
+                                                + len(manual_records)
+                                                + len(source_records),
+                                            }
                                         )
-                            if recall_sections:
+                                        recall_records.extend(query_records)
+                                        recall_records.extend(manual_records)
+                                        recall_records.extend(source_records)
+                                    else:
+                                        recall_records.append(
+                                            {
+                                                "kind": "memory_query_result",
+                                                "query": query,
+                                                "category": category_scope or None,
+                                                "hit_count": 0,
+                                            }
+                                        )
+                            if recall_records:
                                 tool_result_block = (
-                                    "MEMORY_RECALL (results from memory_search):\n"
-                                    + "\n".join(recall_sections)
+                                    "MEMORY_RECALL:\n"
+                                    + cls._memory_tool_jsonl(recall_records)
                                 )
                             elif queries:
                                 if category_scope:
@@ -16143,9 +16201,14 @@ class ZorkEmulator:
                             emit_full_memory_help = not memory_recall_help_emitted
                             if has_source_material and emit_full_memory_help:
                                 source_index_lines = [
-                                    (
-                                        "SOURCE_MATERIAL_INDEX: "
-                                        f"{len(source_docs)} document(s), {source_total_chunks} total snippet(s)."
+                                    cls._memory_tool_jsonl(
+                                        [
+                                            {
+                                                "kind": "source_index_meta",
+                                                "document_count": len(source_docs),
+                                                "snippet_count": source_total_chunks,
+                                            }
+                                        ]
                                     )
                                 ]
                                 for row in source_docs[:5]:
@@ -16153,11 +16216,17 @@ class ZorkEmulator:
                                         str(row.get("sample_chunk") or "")
                                     )
                                     source_index_lines.append(
-                                        "- "
-                                        f"key='{row.get('document_key')}' "
-                                        f"label='{row.get('document_label')}' "
-                                        f"format='{source_format}' "
-                                        f"snippets={row.get('chunk_count')}"
+                                        cls._memory_tool_jsonl(
+                                            [
+                                                {
+                                                    "kind": "source_index_entry",
+                                                    "document_key": row.get("document_key"),
+                                                    "document_label": row.get("document_label"),
+                                                    "format": source_format,
+                                                    "snippet_count": int(row.get("chunk_count") or 0),
+                                                }
+                                            ]
+                                        )
                                     )
                                 tool_result_block = (
                                     f"{tool_result_block}\n"
@@ -16259,8 +16328,16 @@ class ZorkEmulator:
                                 target_turn = None
                             if target_turn is None:
                                 tool_result_block = (
-                                    "MEMORY_TURN_RESULT: turn not found in this campaign.\n"
-                                    "Try another hit turn_id from MEMORY_RECALL, or run memory_search again."
+                                    "MEMORY_TURN_RESULT:\n"
+                                    + cls._memory_tool_jsonl(
+                                        [
+                                            {
+                                                "kind": "memory_turn_result",
+                                                "status": "not_found",
+                                                "turn_id": turn_id or None,
+                                            }
+                                        ]
+                                    )
                                 )
                             elif not cls._turn_visible_to_viewer(
                                 target_turn,
@@ -16269,8 +16346,16 @@ class ZorkEmulator:
                                 cls._room_key_from_player_state(player_state).lower(),
                             ):
                                 tool_result_block = (
-                                    "MEMORY_TURN_RESULT: that turn exists, but it is not visible to this player.\n"
-                                    "Use a different hit from MEMORY_RECALL."
+                                    "MEMORY_TURN_RESULT:\n"
+                                    + cls._memory_tool_jsonl(
+                                        [
+                                            {
+                                                "kind": "memory_turn_result",
+                                                "status": "not_visible",
+                                                "turn_id": int(target_turn.id or 0) or None,
+                                            }
+                                        ]
+                                    )
                                 )
                             else:
                                 full_text = (target_turn.content or "").strip()
@@ -16278,11 +16363,21 @@ class ZorkEmulator:
                                     full_text = "(empty turn content)"
                                 tool_result_block = (
                                     "MEMORY_TURN_RESULT:\n"
-                                    f"- turn_id: {target_turn.id}\n"
-                                    f"- kind: {target_turn.kind}\n"
-                                    f"- user_id: {target_turn.user_id}\n"
-                                    "- full_text:\n"
-                                    f"{full_text}"
+                                    + cls._memory_tool_jsonl(
+                                        [
+                                            {
+                                                "kind": "memory_turn_result",
+                                                "status": "ok",
+                                                "turn_id": int(target_turn.id or 0) or None,
+                                                "turn_kind": str(target_turn.kind or ""),
+                                                "user_id": int(target_turn.user_id or 0) or None,
+                                                "full_text": cls._memory_tool_text_value(
+                                                    full_text,
+                                                    max_chars=12000,
+                                                ),
+                                            }
+                                        ]
+                                    )
                                 )
                             _zork_log("MEMORY TURN BLOCK", tool_result_block)
                             _append_tool_prompt(tool_result_block)
@@ -16311,15 +16406,20 @@ class ZorkEmulator:
                                 limit=20,
                             )
                             if terms:
-                                lines = []
+                                records = []
                                 for row in terms:
-                                    lines.append(
-                                        f"- term='{row.get('term')}' category='{row.get('category')}' "
-                                        f"count={row.get('count')} last_at={row.get('last_at')}"
+                                    records.append(
+                                        {
+                                            "kind": "memory_term",
+                                            "term": row.get("term"),
+                                            "category": row.get("category"),
+                                            "count": int(row.get("count") or 0),
+                                            "last_at": row.get("last_at"),
+                                        }
                                     )
                                 tool_result_block = (
                                     f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}):\n"
-                                    + "\n".join(lines)
+                                    + cls._memory_tool_jsonl(records)
                                 )
                             else:
                                 tool_result_block = (
