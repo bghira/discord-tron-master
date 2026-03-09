@@ -9013,6 +9013,14 @@ class ZorkEmulator:
         return cleaned[:1200]
 
     @classmethod
+    def _format_reasoning_spoiler(cls, value: object) -> Optional[str]:
+        cleaned = cls._sanitize_reasoning(value)
+        if not cleaned:
+            return None
+        cleaned = cleaned.replace("||", "| |")
+        return f"Reasoning: ||{cleaned}||"
+
+    @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
         if not isinstance(payload, dict):
             return ""
@@ -14109,11 +14117,30 @@ class ZorkEmulator:
         return None
 
     @classmethod
+    def _repair_unquoted_json_string_fields(cls, text: str) -> str:
+        if not text:
+            return text
+        pattern = re.compile(
+            r'("(?P<key>[^"]+)"\s*:\s*)(?!["{\[\-0-9tfn])(?P<value>.*?)(?=(?:,\s*"[^"]+"\s*:)|(?:\s*[}\]]))',
+            re.DOTALL,
+        )
+
+        def _replace(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            raw_value = str(match.group("value") or "").strip()
+            if not raw_value:
+                return match.group(0)
+            return f"{prefix}{json.dumps(raw_value, ensure_ascii=False)}"
+
+        return pattern.sub(_replace, text)
+
+    @classmethod
     def _parse_json_lenient(cls, text: str) -> dict:
         """Parse a JSON object from *text*, tolerating common LLM quirks.
 
         Tries in order:
         1. Standard json.loads
+        1b. Repair common unquoted string-field omissions, then json.loads
         2. Python dict literal (single quotes) via ast.literal_eval
         3. JSONL-style (multiple JSON objects) via raw_decode + merge
         """
@@ -14123,10 +14150,22 @@ class ZorkEmulator:
                 return result
             return {}
         except json.JSONDecodeError as exc:
+            repaired = cls._repair_unquoted_json_string_fields(text)
+            if repaired != text:
+                try:
+                    result = json.loads(repaired)
+                    if isinstance(result, dict):
+                        return result
+                except json.JSONDecodeError:
+                    pass
             # Try coercing single-quoted Python dict before anything else.
             coerced = cls._coerce_python_dict(text)
             if coerced is not None:
                 return coerced
+            if repaired != text:
+                coerced = cls._coerce_python_dict(repaired)
+                if coerced is not None:
+                    return coerced
 
             if "Extra data" not in str(exc):
                 raise
@@ -17701,6 +17740,13 @@ class ZorkEmulator:
                         display_narration = f"{display_narration}\n\n{inventory_line}"
                     else:
                         display_narration = inventory_line
+                    reasoning_line = cls._format_reasoning_spoiler(reasoning)
+                    if reasoning_line:
+                        display_narration = (
+                            f"{display_narration}\n{reasoning_line}"
+                            if display_narration
+                            else reasoning_line
+                        )
 
                     post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
                     calendar_event_notifications = cls._calendar_collect_fired_events(
