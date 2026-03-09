@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import discord
 import requests
+from sqlalchemy.exc import IntegrityError
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.openai.text import GPT
 from discord_tron_master.classes.openai.tokens import glm_token_count
@@ -2388,6 +2389,19 @@ class ZorkEmulator:
         name = re.sub(r"[^a-zA-Z0-9 _-]", "", name)
         normalized = name.lower()[:64]
         return normalized if normalized else "main"
+
+    @classmethod
+    def _allocate_unique_campaign_name(cls, guild_id: int, base_name: str) -> str:
+        base = cls._normalize_campaign_name(base_name)
+        if not ZorkCampaign.query.filter_by(guild_id=guild_id, name=base).first():
+            return base
+        suffix = 2
+        while True:
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: max(1, 64 - len(suffix_text))]}{suffix_text}"
+            if not ZorkCampaign.query.filter_by(guild_id=guild_id, name=candidate).first():
+                return candidate
+            suffix += 1
 
     @staticmethod
     def _player_slug_key(value: object) -> str:
@@ -10504,16 +10518,25 @@ class ZorkEmulator:
         cls, guild_id: int, name: str, created_by: int
     ) -> ZorkCampaign:
         normalized = cls._normalize_campaign_name(name)
-        campaign = ZorkCampaign(
-            guild_id=guild_id,
-            name=normalized,
-            created_by=created_by,
-            summary="",
-            state_json="{}",
+        for _ in range(5):
+            candidate_name = cls._allocate_unique_campaign_name(guild_id, normalized)
+            campaign = ZorkCampaign(
+                guild_id=guild_id,
+                name=candidate_name,
+                created_by=created_by,
+                summary="",
+                state_json="{}",
+            )
+            db.session.add(campaign)
+            try:
+                db.session.commit()
+                return campaign
+            except IntegrityError:
+                db.session.rollback()
+                continue
+        raise RuntimeError(
+            f"Could not allocate a unique campaign name for guild {guild_id}: {normalized!r}"
         )
-        db.session.add(campaign)
-        db.session.commit()
-        return campaign
 
     @classmethod
     def enable_channel(
