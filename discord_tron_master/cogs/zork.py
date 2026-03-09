@@ -400,17 +400,18 @@ class Zork(commands.Cog):
         channel,
         summary_instructions: str | None = None,
         default_label: str | None = None,
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None, dict]:
         attachment_infos = await ZorkEmulator._extract_attachment_texts_from_message(
             ctx.message
         )
         if not attachment_infos:
-            return None, None
+            return None, None, {}
 
         fallback_label = str(default_label or "source-material").strip() or "source-material"
 
         summary_parts: list[str] = []
         ingest_messages: list[str] = []
+        all_literary_profiles: dict = {}
         for attachment, attachment_text in attachment_infos:
             if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
                 await channel.send(attachment_text.replace("ERROR:", "", 1))
@@ -449,7 +450,7 @@ class Zork(commands.Cog):
                     summary_parts.append(f"{attachment_label}:\n{summary}")
                 continue
 
-            ingest_ok, ingest_message = await ZorkEmulator.ingest_source_material_text(
+            ingest_ok, ingest_message, literary_profiles = await ZorkEmulator.ingest_source_material_text(
                 campaign,
                 attachment_text,
                 label=attachment_label,
@@ -462,10 +463,12 @@ class Zork(commands.Cog):
                     ingest_messages.append(ingest_message)
             elif "No `.txt` attachment found." not in ingest_message:
                 ingest_messages.append(ingest_message)
+            if literary_profiles:
+                all_literary_profiles.update(literary_profiles)
 
         attachment_summary = "\n\n".join(summary_parts).strip() or None
         ingest_message = "; ".join(ingest_messages).strip() or None
-        return attachment_summary, ingest_message
+        return attachment_summary, ingest_message, all_literary_profiles
 
     async def _handle_source_material_command(self, ctx, *, label: str = None):
         if not self._ensure_guild(ctx):
@@ -545,7 +548,7 @@ class Zork(commands.Cog):
 
         reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
         try:
-            summary, message = await self._prepare_thread_source_material(
+            summary, message, literary_profiles = await self._prepare_thread_source_material(
                 ctx,
                 campaign,
                 channel=ctx.channel,
@@ -561,6 +564,18 @@ class Zork(commands.Cog):
                 message = summary
             elif ok and message and summary:
                 message = f"{summary}\n\n{message}"
+            if literary_profiles:
+                with app.app_context():
+                    campaign = ZorkCampaign.query.get(campaign.id)
+                    state = ZorkEmulator.get_campaign_state(campaign)
+                    styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+                    if not isinstance(styles, dict):
+                        styles = {}
+                    styles.update(literary_profiles)
+                    state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
+                    campaign.state_json = ZorkEmulator._dump_json(state)
+                    campaign.updated = db.func.now()
+                    db.session.commit()
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
@@ -1942,12 +1957,21 @@ class Zork(commands.Cog):
                 campaign_state = ZorkEmulator.get_campaign_state(campaign)
                 att_summary = None
                 if has_txt_attachment:
-                    att_summary, _ = await self._prepare_thread_source_material(
+                    att_summary, _, literary_profiles = await self._prepare_thread_source_material(
                         ctx,
                         campaign,
                         channel=ctx.channel,
                         summary_instructions=summary_instructions,
                     )
+                    if literary_profiles:
+                        styles = campaign_state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+                        if not isinstance(styles, dict):
+                            styles = {}
+                        styles.update(literary_profiles)
+                        campaign_state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
+                        campaign.state_json = ZorkEmulator._dump_json(campaign_state)
+                        campaign.updated = db.func.now()
+                        db.session.commit()
                     if not requested_name and (
                         campaign_state.get("setup_phase")
                         or campaign_state.get("default_persona")
@@ -2022,12 +2046,22 @@ class Zork(commands.Cog):
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
                 for att in ctx.message.attachments
             ):
-                att_summary, _ = await self._prepare_thread_source_material(
+                att_summary, _, literary_profiles = await self._prepare_thread_source_material(
                     ctx,
                     campaign,
                     channel=thread,
                     summary_instructions=summary_instructions,
                 )
+                if literary_profiles:
+                    campaign_state = ZorkEmulator.get_campaign_state(campaign)
+                    styles = campaign_state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
+                    if not isinstance(styles, dict):
+                        styles = {}
+                    styles.update(literary_profiles)
+                    campaign_state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
+                    campaign.state_json = ZorkEmulator._dump_json(campaign_state)
+                    campaign.updated = db.func.now()
+                    db.session.commit()
             setup_message = None
             if not create_empty:
                 setup_message = await ZorkEmulator.start_campaign_setup(

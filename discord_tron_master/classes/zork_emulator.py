@@ -5162,7 +5162,7 @@ class ZorkEmulator:
         )
         if not normalized_lines:
             return 0, ""
-        stored_ok, stored_msg = await cls.ingest_source_material_text(
+        stored_ok, stored_msg, _ = await cls.ingest_source_material_text(
             campaign,
             "\n".join(normalized_lines),
             label=cls.AUTO_RULEBOOK_DOCUMENT_LABEL,
@@ -7258,6 +7258,138 @@ class ZorkEmulator:
 
         return result
 
+    # -- Writing fragment extraction (literary analysis → searchable chunks) --
+
+    _WRITING_FRAGMENT_SAMPLE_SIZE = 3000  # chars per passage sample
+    _WRITING_FRAGMENT_MAX_SAMPLES = 12
+    _WRITING_FRAGMENT_MIN_SAMPLES = 4
+    _WRITING_FRAGMENT_MAX_CHARS = 800  # max chars per craft fragment
+
+    @classmethod
+    async def _extract_writing_fragments(
+        cls,
+        text: str,
+        label: str,
+        *,
+        campaign: Optional[ZorkCampaign] = None,
+        channel_id: Optional[int] = None,
+    ) -> List[str]:
+        """Extract prose-craft observation fragments from a literary text.
+
+        Samples multiple passages spread throughout the text, sends each
+        to the LLM for craft analysis, and returns a list of short
+        craft-observation strings suitable for embedding and similarity
+        search during gameplay.
+        """
+        full_text = str(text or "").strip()
+        if not full_text:
+            return []
+
+        # Build passage samples spread evenly through the text.
+        sample_size = cls._WRITING_FRAGMENT_SAMPLE_SIZE
+        text_len = len(full_text)
+        n_samples = max(
+            cls._WRITING_FRAGMENT_MIN_SAMPLES,
+            min(cls._WRITING_FRAGMENT_MAX_SAMPLES, text_len // sample_size),
+        )
+        if text_len <= sample_size * 2:
+            passages = [full_text]
+        else:
+            step = max(1, (text_len - sample_size) // (n_samples - 1))
+            passages = []
+            for i in range(n_samples):
+                start = min(i * step, text_len - sample_size)
+                end = start + sample_size
+                passage = full_text[start:end]
+                # Trim to nearest paragraph/sentence boundary.
+                first_newline = passage.find("\n", 40)
+                if first_newline > 0:
+                    passage = passage[first_newline + 1:]
+                last_period = passage.rfind(".", 0, -40)
+                if last_period > 0:
+                    passage = passage[: last_period + 1]
+                passage = passage.strip()
+                if passage:
+                    passages.append(passage)
+
+        if not passages:
+            return []
+
+        system_prompt = (
+            "You are a prose-craft analyst for a text-adventure game engine. "
+            "Given a passage from a literary work, extract CRAFT observations — NOT plot, NOT content.\n"
+            "For each distinct technique you observe, produce a short fragment describing it.\n"
+            "Focus on: sentence rhythm, clause stacking, vocabulary register, "
+            "punctuation choices, metaphor patterns, dialogue-tag texture, "
+            "pacing techniques, tense usage, emotional register, and what the prose avoids.\n"
+            "Tag each fragment with the REGISTER it applies to (e.g. DESCRIPTION, DIALOGUE, "
+            "ACTION, INTROSPECTION, TRANSITION, ATMOSPHERE).\n"
+            'Return ONLY JSON: {"fragments": [{"register": "...", "observation": "..."}]}\n'
+            f"Each observation must be <= {cls._WRITING_FRAGMENT_MAX_CHARS} characters. "
+            "Produce 3-6 fragments per passage."
+        )
+
+        gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
+
+        async def _analyze_passage(passage: str) -> List[str]:
+            user_prompt = (
+                f'Analyse the prose craft in this passage from "{label}".\n'
+                f"Passage:\n{passage}\n"
+                "Return only the JSON object."
+            )
+            try:
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    user_prompt,
+                    temperature=0.3,
+                    max_tokens=1500,
+                )
+                cleaned = cls._clean_response(response or "")
+                json_text = cls._extract_json(cleaned)
+                if not json_text:
+                    return []
+                parsed = cls._parse_json_lenient(json_text)
+                if not isinstance(parsed, dict):
+                    return []
+                raw_fragments = parsed.get("fragments")
+                if not isinstance(raw_fragments, list):
+                    return []
+                out: List[str] = []
+                for entry in raw_fragments:
+                    if not isinstance(entry, dict):
+                        continue
+                    register = " ".join(str(entry.get("register") or "GENERAL").split()).upper()[:30]
+                    register = "".join(c for c in register if c.isalnum() or c in ("-", "_", " "))
+                    if not register:
+                        register = "GENERAL"
+                    obs = " ".join(str(entry.get("observation") or "").split())
+                    if obs:
+                        obs = obs[: cls._WRITING_FRAGMENT_MAX_CHARS]
+                        out.append(f"[{register}] {obs}")
+                return out
+            except Exception as exc:
+                logger.warning("Writing fragment extraction failed for a passage: %s", exc)
+                return []
+
+        # Run in parallel batches of 4.
+        all_fragments: List[str] = []
+        batch_size = 4
+        for batch_start in range(0, len(passages), batch_size):
+            batch = passages[batch_start: batch_start + batch_size]
+            results = await asyncio.gather(*[_analyze_passage(p) for p in batch])
+            for result in results:
+                all_fragments.extend(result)
+
+        # Deduplicate very similar fragments (exact match after lowering).
+        seen: set = set()
+        deduped: List[str] = []
+        for frag in all_fragments:
+            key = frag.lower().strip()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(frag)
+        return deduped
+
     @classmethod
     async def ingest_source_material_attachment(
         cls,
@@ -7266,12 +7398,12 @@ class ZorkEmulator:
         *,
         label: Optional[str] = None,
         channel=None,
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, Dict[str, dict]]:
         raw_text = await cls._extract_attachment_text(message)
         if isinstance(raw_text, str) and raw_text.startswith("ERROR:"):
-            return False, raw_text.replace("ERROR:", "", 1)
+            return False, raw_text.replace("ERROR:", "", 1), {}
         if not raw_text:
-            return False, "No `.txt` attachment found."
+            return False, "No `.txt` attachment found.", {}
 
         return await cls.ingest_source_material_text(
             campaign,
@@ -7291,13 +7423,24 @@ class ZorkEmulator:
         channel=None,
         source_format: Optional[str] = None,
         message=None,
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, Dict[str, dict]]:
+        """Ingest source material text into the campaign.
+
+        For **story** format: skips raw paragraph chunk storage.  Instead
+        generates a narrative digest, extracts prose-craft writing
+        fragments via LLM analysis, stores those as searchable chunks,
+        and extracts literary style profiles.
+
+        Returns ``(success, result_message, literary_profiles)`` where
+        ``literary_profiles`` is a dict suitable for merging into
+        ``campaign_state["literary_styles"]`` (empty for non-story formats).
+        """
         if not raw_text:
-            return False, "No `.txt` attachment found."
+            return False, "No `.txt` attachment found.", {}
 
         chunks, total_tokens, _, _, _ = cls._chunk_text_by_tokens(raw_text)
         if not chunks:
-            return False, "Attachment has no usable text."
+            return False, "Attachment has no usable text.", {}
 
         classification_chunk = chunks[0] if chunks else raw_text[:4000]
         if source_format is None:
@@ -7355,7 +7498,7 @@ class ZorkEmulator:
                     await status_msg.delete()
                 except Exception:
                     pass
-            return True, result_msg
+            return True, result_msg, {}
 
         duplicate_doc = await asyncio.to_thread(
             ZorkMemory.find_duplicate_source_material_document,
@@ -7379,8 +7522,26 @@ class ZorkEmulator:
                     await status_msg.delete()
                 except Exception:
                     pass
-            return True, result_msg
+            return True, result_msg, {}
 
+        # ------------------------------------------------------------------
+        # Story format: literary analysis pipeline (no raw chunk storage)
+        # ------------------------------------------------------------------
+        if source_format == cls.SOURCE_MATERIAL_FORMAT_STORY:
+            return await cls._ingest_story_literary(
+                campaign,
+                raw_text,
+                resolved_label=resolved_label,
+                total_tokens=total_tokens,
+                progress_channel=progress_channel,
+                status_msg=status_msg,
+                message=message,
+                channel=channel,
+            )
+
+        # ------------------------------------------------------------------
+        # Rulebook / other: existing flow (raw chunks + digest)
+        # ------------------------------------------------------------------
         stored_count, document_key = await asyncio.to_thread(
             ZorkMemory.store_source_material_chunks,
             campaign.id,
@@ -7407,7 +7568,7 @@ class ZorkEmulator:
                     await status_msg.edit(content="Source material ingestion failed.")
                 except Exception:
                     pass
-            return False, "Source material ingestion failed."
+            return False, "Source material ingestion failed.", {}
 
         result_msg = (
             f"Source material stored: `{resolved_label}` as key `{document_key}` "
@@ -7415,11 +7576,8 @@ class ZorkEmulator:
             f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
 
-        # Generate recursive summary digest for story/rulebook material
-        if source_format in (
-            cls.SOURCE_MATERIAL_FORMAT_STORY,
-            cls.SOURCE_MATERIAL_FORMAT_RULEBOOK,
-        ):
+        # Generate recursive summary digest for rulebook material.
+        if source_format == cls.SOURCE_MATERIAL_FORMAT_RULEBOOK:
             try:
                 digest_progress_msg = None
                 if progress_channel is not None:
@@ -7473,7 +7631,163 @@ class ZorkEmulator:
                 await status_msg.delete()
             except Exception:
                 pass
-        return True, result_msg
+        return True, result_msg, {}
+
+    @classmethod
+    async def _ingest_story_literary(
+        cls,
+        campaign: ZorkCampaign,
+        raw_text: str,
+        *,
+        resolved_label: str,
+        total_tokens: int,
+        progress_channel=None,
+        status_msg=None,
+        message=None,
+        channel=None,
+    ) -> Tuple[bool, str, Dict[str, dict]]:
+        """Story-format ingestion: digest + writing fragments + literary profiles.
+
+        Instead of storing raw story paragraphs, this method:
+        1. Generates a narrative digest (content/plot retrieval).
+        2. Extracts prose-craft writing fragments via LLM and stores
+           them as the searchable chunks (style retrieval).
+        3. Extracts overall literary style profiles for prompt injection.
+        """
+        document_key = ZorkMemory._normalize_source_document_key(resolved_label)
+        result_msg = ""
+
+        # Step 1: Generate narrative digest.
+        try:
+            digest_progress_msg = None
+            if progress_channel is not None:
+                try:
+                    digest_progress_msg = await progress_channel.send(
+                        f"Generating narrative digest for `{resolved_label}`..."
+                    )
+                except Exception:
+                    digest_progress_msg = None
+
+            digest = await cls._summarise_long_text(
+                raw_text,
+                ctx_message=message,
+                channel=progress_channel,
+                campaign=campaign,
+                summary_instructions=(
+                    "This is source material for a text-adventure campaign. "
+                    "Produce a comprehensive narrative digest preserving all characters, "
+                    "locations, plot arcs, factions, key events, world rules, and "
+                    "relationships. Maintain chronological order where applicable. "
+                    "Be detailed and concrete — this digest will be used to ground "
+                    "the campaign world."
+                ),
+                show_progress=bool(progress_channel is not None),
+                allow_single_chunk_passthrough=False,
+                progress_label="Generating source material digest",
+            )
+            if digest and digest.strip():
+                await asyncio.to_thread(
+                    ZorkMemory.store_source_material_digest,
+                    campaign.id,
+                    document_key,
+                    digest.strip(),
+                )
+                result_msg += " Narrative digest generated."
+
+            if digest_progress_msg is not None:
+                try:
+                    await digest_progress_msg.delete()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(
+                f"Story digest generation failed for campaign {campaign.id}: {e}"
+            )
+
+        # Step 2: Clear stale chunks up front, then extract writing
+        # fragments and store as new chunks.
+        def _clear_stale_chunks():
+            conn = ZorkMemory._get_conn()
+            conn.execute(
+                "DELETE FROM source_material_chunks WHERE campaign_id = ? AND document_key = ?",
+                (campaign.id, document_key),
+            )
+            conn.commit()
+
+        try:
+            await asyncio.to_thread(_clear_stale_chunks)
+        except Exception as e:
+            logger.warning(
+                f"Failed to clear stale chunks for campaign {campaign.id} key {document_key}: {e}"
+            )
+
+        fragment_count = 0
+        try:
+            fragment_progress_msg = None
+            if progress_channel is not None:
+                try:
+                    fragment_progress_msg = await progress_channel.send(
+                        f"Extracting writing style fragments for `{resolved_label}`..."
+                    )
+                except Exception:
+                    fragment_progress_msg = None
+
+            fragments = await cls._extract_writing_fragments(
+                raw_text,
+                resolved_label,
+                campaign=campaign,
+                channel_id=getattr(channel, "id", None),
+            )
+            if fragments:
+                fragment_count, document_key = await asyncio.to_thread(
+                    ZorkMemory.store_source_material_chunks,
+                    campaign.id,
+                    document_label=resolved_label,
+                    chunks=fragments,
+                    source_mode="generic",
+                    replace_document=False,  # Already cleared above.
+                )
+                result_msg += f" {fragment_count} writing fragment(s) stored."
+
+            if fragment_progress_msg is not None:
+                try:
+                    await fragment_progress_msg.delete()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(
+                f"Writing fragment extraction failed for campaign {campaign.id}: {e}"
+            )
+
+        # Step 3: Extract literary style profiles.
+        literary_profiles: Dict[str, dict] = {}
+        try:
+            literary_profiles = await cls._analyze_literary_style(
+                raw_text,
+                document_key,
+                campaign=campaign,
+                channel_id=getattr(channel, "id", None),
+            )
+            if literary_profiles:
+                profile_keys = ", ".join(f"`{k}`" for k in sorted(literary_profiles.keys()))
+                result_msg += f" Literary style profile(s) extracted: {profile_keys}."
+        except Exception as e:
+            logger.warning(
+                f"Literary style extraction failed for campaign {campaign.id}: {e}"
+            )
+
+        final_msg = (
+            f"Source material processed: `{resolved_label}` as key `{document_key}` "
+            f"(story format, ~{total_tokens} tokens).{result_msg}"
+        )
+        if status_msg is not None:
+            try:
+                await status_msg.edit(content=final_msg)
+                await asyncio.sleep(4)
+                await status_msg.delete()
+            except Exception:
+                pass
+        return True, final_msg, literary_profiles
 
     @classmethod
     def _source_material_prompt_payload(cls, campaign_id: int) -> Dict[str, object]:
