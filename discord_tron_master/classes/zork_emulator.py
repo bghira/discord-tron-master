@@ -9356,13 +9356,20 @@ class ZorkEmulator:
         day = cls._coerce_non_negative_int(game_time.get("day", 1), default=1) or 1
         hour = cls._coerce_non_negative_int(game_time.get("hour", 8), default=8)
         minute = cls._coerce_non_negative_int(game_time.get("minute", 0), default=0)
+        period = str(game_time.get("period") or "").strip()
+        date_label = str(game_time.get("date_label") or "").strip()
+        time_prefix = f"Day {day} {hour:02d}:{minute:02d}"
+        if period:
+            time_prefix = f"{time_prefix} ({period})"
+        if date_label:
+            time_prefix = f"{time_prefix} [{date_label}]"
         calendar_entries = cls._calendar_for_prompt(
             campaign_state,
             campaign_id=campaign_id,
             viewer_user_id=viewer_user_id,
         )
         if not calendar_entries:
-            return f"Cal: Day {day} {hour:02d}:{minute:02d}. No upcoming events."
+            return f"Cal: {time_prefix}. No upcoming events."
         items: List[str] = []
         for entry in calendar_entries[:3]:
             name = str(entry.get("name") or "Event").strip()
@@ -9382,7 +9389,7 @@ class ZorkEmulator:
         suffix = ""
         if len(calendar_entries) > 3:
             suffix = f" +{len(calendar_entries) - 3} more"
-        return f"Cal: Day {day} {hour:02d}:{minute:02d}. " + " | ".join(items) + suffix
+        return f"Cal: {time_prefix}. " + " | ".join(items) + suffix
 
     @classmethod
     def _format_turn_player_info(cls, player: Optional[ZorkPlayer]) -> List[str]:
