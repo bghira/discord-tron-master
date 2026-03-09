@@ -9203,6 +9203,47 @@ class ZorkEmulator:
         return out[: max(1, int(limit))]
 
     @classmethod
+    def _fallback_private_context_from_recent(
+        cls,
+        turns: List["ZorkTurn"],
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+        viewer_location_key: str,
+        limit: int = 6,
+    ) -> Optional[Dict[str, object]]:
+        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        if not viewer_location_key_norm:
+            return None
+        recent_contexts = cls._recent_private_contexts_for_prompt(
+            turns,
+            viewer_user_id=viewer_user_id,
+            viewer_slug=viewer_slug,
+            active_context_key="",
+            limit=limit,
+        )
+        for row in recent_contexts:
+            if not isinstance(row, dict):
+                continue
+            row_location_key = str(row.get("location_key") or "").strip().lower()
+            if row_location_key != viewer_location_key_norm:
+                continue
+            scope = str(row.get("scope") or "").strip().lower()
+            context_key = str(row.get("context_key") or "").strip()
+            if scope not in {"private", "limited"} or not context_key:
+                continue
+            return {
+                "scope": scope,
+                "context_key": context_key,
+                "location_key": str(row.get("location_key") or "").strip() or None,
+                "target_name": None,
+                "target_slug": None,
+                "target_user_id": None,
+                "engagement": "resume",
+            }
+        return None
+
+    @classmethod
     def _fallback_narration_from_payload(cls, payload: Dict[str, object]) -> str:
         if not isinstance(payload, dict):
             return ""
@@ -14022,7 +14063,12 @@ class ZorkEmulator:
                 player,
                 player_state,
                 action,
-            ) or _stored_private_context
+            ) or _stored_private_context or cls._fallback_private_context_from_recent(
+                turns,
+                viewer_user_id=player.user_id,
+                viewer_slug=_viewer_slug,
+                viewer_location_key=_viewer_location_key,
+            )
         _viewer_private_context_key = str(
             (_viewer_private_context or {}).get("context_key") or ""
         ).strip()
@@ -14976,7 +15022,12 @@ class ZorkEmulator:
                             player,
                             player_state,
                             action,
-                        ) or stored_private_context
+                        ) or stored_private_context or cls._fallback_private_context_from_recent(
+                            turns,
+                            viewer_user_id=player.user_id,
+                            viewer_slug=viewer_slug,
+                            viewer_location_key=viewer_location_key,
+                        )
                     viewer_private_context_key = str(
                         (viewer_private_context or {}).get("context_key") or ""
                     ).strip()
