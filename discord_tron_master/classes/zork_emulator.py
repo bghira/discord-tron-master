@@ -9544,15 +9544,9 @@ class ZorkEmulator:
         actor_summary = cls._normalize_match_text(actor_state.get("room_summary"))
         other_summary = cls._normalize_match_text(other_state.get("room_summary"))
 
-        # Prefer location as primary key, but require at least one confirming room field
-        # when those fields are present to avoid false positives.
+        # Location is the primary key — if both players share the same
+        # location string they are in the same scene.
         if actor_location and other_location and actor_location == other_location:
-            title_known = bool(actor_title and other_title)
-            summary_known = bool(actor_summary and other_summary)
-            title_match = title_known and actor_title == other_title
-            summary_match = summary_known and actor_summary == other_summary
-            if title_known or summary_known:
-                return title_match or summary_match
             return True
 
         # Fallback path only when location is unavailable on both sides.
