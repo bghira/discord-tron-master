@@ -3572,7 +3572,7 @@ class ZorkEmulator:
                     "visibility": beat_visibility,
                     "aware_discord_ids": aware_discord_ids,
                     "aware_npc_slugs": aware_npc_slugs,
-                    "text": cls._trim_text(text, 600),
+                    "text": cls._trim_text(text, cls.MAX_NARRATION_CHARS),
                     "location_key": beat_location_key or None,
                     "context_key": beat_context_key or None,
                 }
@@ -3594,7 +3594,7 @@ class ZorkEmulator:
                     if base_visibility in {"private", "limited"}
                     else ([] if actor_user_id is None or base_visibility != "private" else [int(actor_user_id)]),
                     "aware_npc_slugs": base_aware_npc_slugs if base_visibility in {"private", "limited"} else [],
-                    "text": cls._trim_text(fallback_text, 600),
+                    "text": cls._trim_text(fallback_text, cls.MAX_NARRATION_CHARS),
                     "location_key": str(turn_visibility.get("location_key") or fallback_location_key or "").strip() or None,
                     "context_key": str(turn_visibility.get("context_key") or "").strip() or None,
                 }
