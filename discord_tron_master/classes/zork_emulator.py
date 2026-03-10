@@ -8438,7 +8438,15 @@ class ZorkEmulator:
                     "keys": document_keys,
                 }
             )
-        digests = ZorkMemory.get_all_source_material_digests(campaign_id)
+        communication_key = cls.communication_rulebook_document_key()
+        digests = {
+            str(doc_key): digest_text
+            for doc_key, digest_text in (
+                ZorkMemory.get_all_source_material_digests(campaign_id) or {}
+            ).items()
+            if ZorkMemory._normalize_source_document_key(str(doc_key or ""))
+            != communication_key
+        }
         return {
             "available": bool(compact_docs),
             "document_count": len(compact_docs),
@@ -21131,8 +21139,11 @@ class ZorkEmulator:
                     conc.inflight_count += 1
 
             # === Phase 2: LLM EXECUTION (NO lock held — 5-30s) ===
+            # App context is needed for DB reads (stale reads OK), but the
+            # commit_lock is NOT held so other turns can proceed concurrently.
             try:
-                delta = await cls._play_action_llm(preflight, campaign, campaign_state_snapshot)
+                with app.app_context():
+                    delta = await cls._play_action_llm(preflight, campaign, campaign_state_snapshot)
             finally:
                 conc.inflight_count -= 1
 
