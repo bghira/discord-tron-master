@@ -32,14 +32,126 @@ from discord_tron_master.models.zork import (
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
 
-_ZORK_LOG_PATH = os.path.join(os.getcwd(), "zork.log")
+_ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
+_ZORK_LOG_STATE = threading.local()
+_ZORK_LOG_RETENTION = 100
+
+
+def _zork_log_component(value: object, default: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    text = re.sub(r"[\\/]+", "-", text)
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")
+    return text or default
+
+
+def _zork_log_context_dir(
+    *,
+    guild_id: object = None,
+    channel_id: object = None,
+    user_id: object = None,
+) -> str:
+    if guild_id is not None and channel_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(guild_id, "guild"),
+            _zork_log_component(channel_id, "thread"),
+        )
+    if user_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(user_id, "user"),
+        )
+    if guild_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(guild_id, "guild"),
+            "campaign",
+        )
+    return os.path.join(_ZORK_LOG_ROOT, "global")
+
+
+def _zork_log_numeric_entries(dir_path: str) -> list[tuple[int, str]]:
+    entries: list[tuple[int, str]] = []
+    try:
+        names = os.listdir(dir_path)
+    except OSError:
+        return entries
+    for name in names:
+        match = re.fullmatch(r"(\d+)\.log", name)
+        if not match:
+            continue
+        entries.append((int(match.group(1)), os.path.join(dir_path, name)))
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+def _zork_log_prune_dir(dir_path: str, keep: int = _ZORK_LOG_RETENTION) -> None:
+    entries = _zork_log_numeric_entries(dir_path)
+    while len(entries) > keep:
+        _, path = entries.pop(0)
+        try:
+            os.remove(path)
+        except OSError:
+            break
+
+
+def _zork_log_next_turn_path(dir_path: str) -> str:
+    os.makedirs(dir_path, exist_ok=True)
+    entries = _zork_log_numeric_entries(dir_path)
+    next_idx = (entries[-1][0] if entries else 0) + 1
+    _zork_log_prune_dir(dir_path, keep=max(0, _ZORK_LOG_RETENTION - 1))
+    return os.path.join(dir_path, f"{next_idx}.log")
+
+
+def _zork_log_push_path(path: str) -> Optional[str]:
+    prev_path = getattr(_ZORK_LOG_STATE, "path", None)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _ZORK_LOG_STATE.path = path
+    return prev_path
+
+
+def _zork_log_pop_path(prev_path: Optional[str]) -> None:
+    if prev_path:
+        _ZORK_LOG_STATE.path = prev_path
+    elif hasattr(_ZORK_LOG_STATE, "path"):
+        delattr(_ZORK_LOG_STATE, "path")
+
+
+def _zork_log_default_path(section: str) -> str:
+    campaign_match = re.search(r"campaign=(\d+)", str(section or ""))
+    if campaign_match:
+        try:
+            campaign_id = int(campaign_match.group(1))
+            campaign = ZorkCampaign.query.get(campaign_id)
+            if campaign is not None:
+                channel_row = (
+                    ZorkChannel.query.filter_by(active_campaign_id=campaign_id)
+                    .order_by(ZorkChannel.updated.desc(), ZorkChannel.id.desc())
+                    .first()
+                )
+                dir_path = _zork_log_context_dir(
+                    guild_id=campaign.guild_id if channel_row is not None else None,
+                    channel_id=channel_row.channel_id if channel_row is not None else None,
+                    user_id=campaign.created_by if channel_row is None else None,
+                )
+                return os.path.join(dir_path, "event.log")
+        except Exception:
+            pass
+    return os.path.join(_ZORK_LOG_ROOT, "global", "event.log")
 
 
 def _zork_log(section: str, body: str = "") -> None:
-    """Append a timestamped section to zork.log in the process working dir."""
+    """Append a timestamped section to the active per-context Zork log file."""
     try:
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(_ZORK_LOG_PATH, "a") as fh:
+        log_path = getattr(_ZORK_LOG_STATE, "path", None) or _zork_log_default_path(
+            section
+        )
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a") as fh:
             fh.write(f"\n{'='*72}\n[{ts}] {section}\n{'='*72}\n")
             if body:
                 fh.write(body)
@@ -16553,6 +16665,26 @@ class ZorkEmulator:
         return resolved_count
 
     @classmethod
+    def _push_contextual_turn_log_scope(
+        cls,
+        campaign: ZorkCampaign,
+        *,
+        channel_id: Optional[int] = None,
+        user_id: Optional[int] = None,
+        is_dm: bool = False,
+    ) -> Optional[str]:
+        dir_path = _zork_log_context_dir(
+            guild_id=None if is_dm else getattr(campaign, "guild_id", None),
+            channel_id=None if is_dm else channel_id,
+            user_id=user_id if is_dm else None,
+        )
+        return _zork_log_push_path(_zork_log_next_turn_path(dir_path))
+
+    @classmethod
+    def _pop_contextual_turn_log_scope(cls, token: Optional[str]) -> None:
+        _zork_log_pop_path(token)
+
+    @classmethod
     async def play_action(
         cls,
         ctx,
@@ -16565,6 +16697,7 @@ class ZorkEmulator:
         if app is None:
             raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")
         should_clear_claim = manage_claim
+        log_scope_token: Optional[str] = None
         if campaign_id is None:
             campaign_id, error_text = await cls.begin_turn(
                 ctx, command_prefix=command_prefix
@@ -16582,6 +16715,16 @@ class ZorkEmulator:
                     campaign = ZorkCampaign.query.get(campaign_id)
                     player = cls.get_or_create_player(
                         campaign_id, ctx.author.id, campaign=campaign
+                    )
+                    log_scope_token = cls._push_contextual_turn_log_scope(
+                        campaign,
+                        channel_id=(
+                            None
+                            if getattr(ctx, "guild", None) is None
+                            else int(getattr(ctx.channel, "id", 0) or 0)
+                        ),
+                        user_id=ctx.author.id,
+                        is_dm=getattr(ctx, "guild", None) is None,
                     )
                     cls._set_turn_ephemeral_notices(campaign_id, ctx.author.id, [])
                     cls.record_player_message(player, channel=ctx.channel)
@@ -20395,6 +20538,7 @@ class ZorkEmulator:
 
                     return display_narration
         finally:
+            cls._pop_contextual_turn_log_scope(log_scope_token)
             if should_clear_claim:
                 cls._clear_inflight_turn(campaign_id, ctx.author.id)
 
@@ -20485,80 +20629,88 @@ class ZorkEmulator:
         timed_narrator_turn_id = None
         calendar_event_notifications: List[Dict[str, object]] = []
         campaign_name_for_notifications = f"campaign-{campaign_id}"
+        log_scope_token: Optional[str] = None
         lock = cls._get_lock(campaign_id)
-        async with lock:
-            with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign_id)
-                if campaign is None:
-                    return
-                campaign_name_for_notifications = str(campaign.name or campaign_name_for_notifications)
-                if not cls.is_timed_events_enabled(campaign):
-                    return
+        try:
+            async with lock:
+                with app.app_context():
+                    campaign = ZorkCampaign.query.get(campaign_id)
+                    if campaign is None:
+                        return
+                    campaign_name_for_notifications = str(campaign.name or campaign_name_for_notifications)
+                    if not cls.is_timed_events_enabled(campaign):
+                        return
 
-                # Safety: skip if a player acted very recently (race guard).
-                latest_turn = (
-                    ZorkTurn.query.filter_by(campaign_id=campaign_id)
-                    .order_by(ZorkTurn.id.desc())
-                    .first()
-                )
-                if latest_turn and latest_turn.kind == "player":
-                    if latest_turn.created:
-                        age = (
-                            cls._now() - latest_turn.created
-                        ).total_seconds()
-                        if age < 5:
-                            return
-
-                # Prefer the originating player context for local/story-specific timers.
-                active_player = None
-                if preferred_user_id is not None:
-                    active_player = ZorkPlayer.query.filter_by(
-                        campaign_id=campaign_id,
-                        user_id=preferred_user_id,
-                    ).first()
-                if active_player is None:
-                    active_player = (
-                        ZorkPlayer.query.filter_by(campaign_id=campaign_id)
-                        .order_by(ZorkPlayer.last_active.desc())
+                    # Safety: skip if a player acted very recently (race guard).
+                    latest_turn = (
+                        ZorkTurn.query.filter_by(campaign_id=campaign_id)
+                        .order_by(ZorkTurn.id.desc())
                         .first()
                     )
-                if active_player is None:
-                    return
-                _zork_log(
-                    f"TIMER TARGET campaign={campaign_id}",
-                    (
-                        f"preferred_user_id={preferred_user_id} "
-                        f"resolved_user_id={active_player.user_id}"
-                    ),
-                )
+                    if latest_turn and latest_turn.kind == "player":
+                        if latest_turn.created:
+                            age = (
+                                cls._now() - latest_turn.created
+                            ).total_seconds()
+                            if age < 5:
+                                return
 
-                cls.increment_player_stat(
-                    active_player, cls.PLAYER_STATS_TIMERS_MISSED_KEY
-                )
-                active_player.updated = db.func.now()
-                db.session.commit()
-                action = f"[SYSTEM EVENT - TIMED]: {event_description}"
-                turns = cls.get_recent_turns(campaign_id)
-                timer_is_private_context = (
-                    ZorkChannel.query.filter_by(channel_id=channel_id).first() is None
-                )
-                system_prompt, user_prompt = cls.build_prompt(
-                    campaign,
-                    active_player,
-                    action,
-                    turns,
-                    is_new_player=False,
-                    turn_visibility_default="public",
-                    channel_id=channel_id,
-                )
+                    # Prefer the originating player context for local/story-specific timers.
+                    active_player = None
+                    if preferred_user_id is not None:
+                        active_player = ZorkPlayer.query.filter_by(
+                            campaign_id=campaign_id,
+                            user_id=preferred_user_id,
+                        ).first()
+                    if active_player is None:
+                        active_player = (
+                            ZorkPlayer.query.filter_by(campaign_id=campaign_id)
+                            .order_by(ZorkPlayer.last_active.desc())
+                            .first()
+                        )
+                    if active_player is None:
+                        return
+                    timer_is_private_context = (
+                        ZorkChannel.query.filter_by(channel_id=channel_id).first() is None
+                    )
+                    log_scope_token = cls._push_contextual_turn_log_scope(
+                        campaign,
+                        channel_id=None if timer_is_private_context else channel_id,
+                        user_id=active_player.user_id,
+                        is_dm=timer_is_private_context,
+                    )
+                    _zork_log(
+                        f"TIMER TARGET campaign={campaign_id}",
+                        (
+                            f"preferred_user_id={preferred_user_id} "
+                            f"resolved_user_id={active_player.user_id}"
+                        ),
+                    )
 
-                gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
-                response = await gpt.turbo_completion(
-                    system_prompt, user_prompt, temperature=0.8, max_tokens=2048
-                )
-                if not response:
-                    return
-                response = cls._clean_response(response)
+                    cls.increment_player_stat(
+                        active_player, cls.PLAYER_STATS_TIMERS_MISSED_KEY
+                    )
+                    active_player.updated = db.func.now()
+                    db.session.commit()
+                    action = f"[SYSTEM EVENT - TIMED]: {event_description}"
+                    turns = cls.get_recent_turns(campaign_id)
+                    system_prompt, user_prompt = cls.build_prompt(
+                        campaign,
+                        active_player,
+                        action,
+                        turns,
+                        is_new_player=False,
+                        turn_visibility_default="public",
+                        channel_id=channel_id,
+                    )
+
+                    gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
+                    response = await gpt.turbo_completion(
+                        system_prompt, user_prompt, temperature=0.8, max_tokens=2048
+                    )
+                    if not response:
+                        return
+                    response = cls._clean_response(response)
 
                 narration = response.strip()
                 reasoning = None
@@ -21038,8 +21190,10 @@ class ZorkEmulator:
                         exc_info=True,
                     )
 
-                target_user_id = active_player.user_id
-                timed_narrator_turn_id = narrator_turn.id
+                    target_user_id = active_player.user_id
+                    timed_narrator_turn_id = narrator_turn.id
+        finally:
+            cls._pop_contextual_turn_log_scope(log_scope_token)
 
         # Post to Discord outside the lock / app context.
         bot_instance = DiscordBot.get_instance()
