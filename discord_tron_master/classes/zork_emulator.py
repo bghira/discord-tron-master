@@ -475,7 +475,10 @@ class ZorkEmulator:
         'aware_discord_ids and aware_npc_slugs are REQUIRED on every beat, even if empty arrays. '
         'narration should be the plain-text render of the same scene_output when both are present.)\n'
         "- state_update: object (REQUIRED in every final non-tool JSON response. It must ALWAYS include at least "
-        '"game_time", "current_chapter", and "current_scene", even when they are unchanged this turn. '
+        '"game_time", "current_chapter", and "current_scene". '
+        "READ current_chapter and current_scene from STORY_CONTEXT in the prompt — those are the authoritative values. "
+        "Echo them back EXACTLY unless you are intentionally advancing to the next scene or chapter. "
+        "NEVER substitute earlier/different chapter or scene names from memory. "
         "Use it for world state patches; set a key to null to remove it when no longer relevant. "
         "IMPORTANT: WORLD_STATE has a size budget. Actively prune stale WORLD_STATE keys every turn by setting them to null. "
         "This cleanup rule applies to transient world-state only (events, countdowns, one-off flags, scene-local state) — "
@@ -543,7 +546,9 @@ class ZorkEmulator:
         "- Return ONLY the JSON object. No markdown, no code fences, no text before or after the JSON.\n"
         "- In final non-tool responses, include reasoning and put it as the first key.\n"
         '- In final non-tool responses, state_update is REQUIRED and must ALWAYS include "game_time", '
-        '"current_chapter", and "current_scene" explicitly.\n'
+        '"current_chapter", and "current_scene" explicitly. '
+        "Copy current_chapter and current_scene from STORY_CONTEXT — do NOT hallucinate earlier or different chapter/scene names. "
+        "Only change them when a scene or chapter transition actually happens in this turn.\n"
         "- Prefer scene_output over flat narration when multiple speakers, mixed visibility, or carryover/private beats matter.\n"
         "- scene_output.beats are the canonical scene structure; narration is the compatibility render.\n"
         '- Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"listeners":["deshawn-williams"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
@@ -943,8 +948,9 @@ class ZorkEmulator:
         "- In EVERY final non-tool JSON response, include summary_update (one sentence of lasting change or current dramatic state).\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
-        "- If the scene does not advance yet, still restate the current chapter/scene indexes explicitly in state_update.\n"
-        "- Even when nothing major changes, restate game_time/current_chapter/current_scene in state_update.\n"
+        "- If the scene does not advance yet, still restate the current chapter/scene indexes from STORY_CONTEXT in state_update.\n"
+        "- Even when nothing major changes, restate game_time/current_chapter/current_scene in state_update. "
+        "Read current values from STORY_CONTEXT — NEVER substitute earlier or different chapter/scene values from memory.\n"
         "- If player tries to derail, steer back via NPC actions or environmental events.\n"
         "- If player goes off-route or stalls, use grounded calendar pressure and timed events "
         "(set_timer_*) to re-align toward the next outlined beat without abrupt teleportation.\n"
@@ -2200,7 +2206,28 @@ class ZorkEmulator:
 
         chapter_slug = cls._chapter_slug_key(out.get("current_chapter"))
         scene_slug = cls._chapter_slug_key(out.get("current_scene"))
-        out["current_chapter"] = chapter_slug or default_chapter or ""
+
+        # Guard: reject chapter/scene slugs that don't match the chapter plan.
+        # This prevents the model from hallucinating old or nonexistent values.
+        all_chapters = cls._chapter_plan_from_state(campaign_state)
+        if chapter_slug and all_chapters and chapter_slug not in all_chapters:
+            _zork_log(
+                "CHAPTER REGRESSION BLOCKED",
+                f"Model sent current_chapter={chapter_slug!r} which is not in "
+                f"chapter plan {sorted(all_chapters.keys())!r}; falling back to {default_chapter!r}",
+            )
+            chapter_slug = ""
+        resolved_chapter = chapter_slug or default_chapter or ""
+        if scene_slug and resolved_chapter and resolved_chapter in all_chapters:
+            valid_scenes = all_chapters[resolved_chapter].get("scenes") or []
+            if valid_scenes and scene_slug not in valid_scenes:
+                _zork_log(
+                    "SCENE REGRESSION BLOCKED",
+                    f"Model sent current_scene={scene_slug!r} which is not in "
+                    f"chapter {resolved_chapter!r} scenes {valid_scenes!r}; falling back to {default_scene!r}",
+                )
+                scene_slug = ""
+        out["current_chapter"] = resolved_chapter
         out["current_scene"] = scene_slug or default_scene or ""
         return out
 
