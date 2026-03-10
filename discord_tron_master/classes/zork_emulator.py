@@ -203,7 +203,88 @@ class ZorkEmulator:
         SOURCE_MATERIAL_FORMAT_GENERIC: "generic",
     }
     AUTO_RULEBOOK_DOCUMENT_LABEL = "campaign-rulebook"
+    COMMUNICATION_RULEBOOK_DOCUMENT_LABEL = "gm-communication-rules"
     AUTO_RULEBOOK_MAX_TOKENS = 16_000
+    DEFAULT_GM_COMMUNICATION_RULES: Dict[str, str] = {
+        "GM-RULE-COMMUNICATION-SOFTENING": (
+            "When the player wraps real emotional content in humor, metaphor, or understatement, "
+            "this is softening — emotional load management, not avoidance. The feeling is present; "
+            "the packaging is gentle. The GM recognizes the underlying feeling. NPCs may critique "
+            "the packaging (e.g., 'I hate when you joke about this'), but they must still react "
+            "to the substance rather than treating the response as a non-answer. "
+            'Example: "I guess I\'m just here for the bad decisions" → substance: '
+            '"I\'m hurting and I came here because I didn\'t know where else to go."'
+        ),
+        "GM-RULE-COMMUNICATION-REFRAMING": (
+            "When the player places something painful inside a different context — a joke, a reference, "
+            "a physical metaphor — this is reframing. The GM recognizes this as a collaborative act, "
+            "giving the NPC a way to engage safely. The NPC reacts to the reframed concept based on "
+            "their personality (e.g., playing along, or being confused by the metaphor), rather than "
+            "acting like a broken parser demanding a literal answer. "
+            'Example: "Figure out your knot" → substance: '
+            '"I love you and I need you to find your own way forward."'
+        ),
+        "GM-RULE-COMMUNICATION-TESTING": (
+            "When the player gives a partial or indirect answer, they may be testing whether the NPC "
+            "is safe to be honest with. The GM recognizes this as calibration, not evasion. The NPC "
+            "reacts based on their nature—with warmth, impatience, or suspicion. The NPC is allowed "
+            "to fail the player's 'test', but they do so as a character, not by rejecting the prompt "
+            "with 'that's not what I asked.' "
+            'Example: "Yeah, something like that, I don\'t know" → substance: '
+            '"I\'m checking whether you\'ll receive a half-answer with patience."'
+        ),
+        "GM-RULE-COMMUNICATION-PROCESSING": (
+            "When the player's words come out disorganized, circular, or contradictory, they may be "
+            "processing aloud — working toward clarity in real time. The GM recognizes this as processing, "
+            "not evasion. A patient NPC might give space; an impatient or low-intelligence NPC might "
+            "interrupt or show frustration, but they do so as a character reacting to a rambling person, "
+            "not as an AI failing to understand the input."
+        ),
+        "GM-RULE-COMMUNICATION-INDIRECTION": (
+            "The player may communicate through patterns shaped by their background — literal language "
+            "that sounds blunt, indirect language that sounds evasive, humor that sounds dismissive, "
+            "silence that sounds cold. The GM recognizes these as valid communication modes. When a "
+            "mismatch occurs, the NPC reacts according to their nature (confused, offended, asking for "
+            "clarification), but the GM does not label the player as uncooperative."
+        ),
+        "GM-RULE-COMMUNICATION-PLAYFUL": (
+            "When the player participates in a social dance — flirtation, banter, verbal sparring — "
+            "indirection IS the content. The GM recognizes this as a social dance, not a refusal to "
+            "answer. The NPC may dance back, or abruptly shut it down if they are humorless, but they "
+            "do so because of who they are, not because the GM requires a straight, literal answer."
+        ),
+        "GM-RULE-COMMUNICATION-ACTION": (
+            "When the player does something physical instead of answering verbally — pouring a drink, "
+            "looking out the window, walking to the door — they are communicating through action. "
+            "The GM recognizes the action for its emotional content and does not treat verbal silence "
+            "as a refusal to engage. The NPC reacts to the meaning of the physical action. "
+            'Example: "I lie down and go to sleep" after a difficult conversation → substance: '
+            '"I\'m overwhelmed and need to stop processing right now."'
+        ),
+        "GM-RULE-SUBSTANCE-EXTRACTION": (
+            "Before deciding how an NPC responds, the GM's reasoning must perform SUBSTANCE EXTRACTION: "
+            "identify what the player actually communicated, separate from how they communicated it. "
+            "Format in reasoning: 'Player said [X]. Communication mode: [mode]. Substance: [what they "
+            "actually mean/feel/need].' The NPC then responds to that SUBSTANCE strictly through the "
+            "filter of their own intelligence, perception, and personality. (e.g., a low-INT goblin might "
+            "misinterpret the extracted substance completely, but the GM knows what the player meant)."
+        ),
+        "GM-RULE-NPC-RESPONSE-TO-INDIRECTION": (
+            "NPCs must not treat indirect communication as a failure to prompt. They CAN be confused, moved, "
+            "annoyed, uncomfortable, or delighted by it. An NPC can critique the player's delivery ('Stop "
+            "joking about dying'), provided they don't get stuck in a loop demanding a 'real' answer. The "
+            "constraint is on the GM's CATEGORIZATION in reasoning, not on the NPC's PERSONALITY in dialogue."
+        ),
+        "GM-RULE-EVASION-DEFINITION": (
+            "Categorize player communication as evasion when the player intentionally redirects to avoid "
+            "consequences, hide information, or escape accountability. Intentionality is the key factor. "
+            "If a player mentions their friends to dodge a murder accusation, that is evasion, even if "
+            "it is tangentially connected emotionally. If they are reaching for connection through the "
+            "only words they can find, it is not evasion. The GM must assess if the player is deliberately "
+            "dodging before labeling a response as evasive."
+        ),
+    }
+    COMMUNICATION_RULE_KEYS = tuple(DEFAULT_GM_COMMUNICATION_RULES.keys())
     DEFAULT_SCENE_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     DEFAULT_AVATAR_IMAGE_MODEL = "black-forest-labs/FLUX.2-klein-4b"
     SCENE_IMAGE_PRESERVE_PREFIX = (
@@ -346,6 +427,12 @@ class ZorkEmulator:
         "When you have enough context to write the turn, return ONLY:\n"
         '{"tool_call": "ready_to_write"}\n'
         "Do not narrate in the same response as ready_to_write.\n"
+        "If the player's communication mode/substance matters before narration, you may first request only the relevant communication rules:\n"
+        '{"tool_call": "communication_rules", "keys": ["GM-RULE-COMMUNICATION-SOFTENING", "GM-RULE-SUBSTANCE-EXTRACTION"]}\n'
+        "Available communication rule keys: "
+        + ", ".join(COMMUNICATION_RULE_KEYS)
+        + ".\n"
+        "Request only the subset that matters for this turn, then return ready_to_write.\n"
     )
     DIFFICULTY_LEVELS = (
         "story",
@@ -492,7 +579,7 @@ class ZorkEmulator:
         "- Loaded RECENT_TURNS is already filtered to what the acting player plausibly knows. Hidden/private turns from unrelated players are omitted.\n"
         "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
         "- TURN_VISIBILITY_DEFAULT tells you whether this turn should default to public, local, or private context.\n"
-        "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Use memory_search with category 'source' before asserting key plot facts.\n"
+        "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. On normal turns, source lookup should be part of your research plan before asserting key plot facts, but only query the relevant subset for this turn.\n"
         "- Use source payload to bias queries: rulebook docs are key-snippet indexes (browse with source_browse first), story docs are narrative scenes, generic docs are mixed/loose notes.\n"
         "- If WORLD_SUMMARY is empty, invent a strong starting room and seed the world.\n"
         "- Use player_state_update for player-specific location and status.\n"
@@ -735,7 +822,7 @@ class ZorkEmulator:
         "- rulebook: compact fact units (typically `KEY: value` lines)\n"
         "- story: paragraph-shaped scene/outline snippets\n"
         "- generic: broader chunk units preserved for mixed notes/dumps\n"
-        "Use memory_search with category 'source' to query canon chunks before narrating key plot facts:\n"
+        "Use memory_search with category 'source' to query canon chunks before narrating key plot facts. On normal turns, include only the relevant subset of source canon for this turn rather than trying to fetch every document:\n"
         '{"tool_call": "memory_search", "category": "source", "queries": ["character name", "location", "event"]}\n'
         "You can also scope one source document with category 'source:<document_key>' when SOURCE_MATERIAL_DOCS provides keys.\n"
         "Use 2-4 concise queries and keep results targeted.\n"
@@ -4818,7 +4905,7 @@ class ZorkEmulator:
                         limit = max(1, min(255, int(payload.get("limit") or 255)))
                     except (TypeError, ValueError):
                         pass
-                lines = ZorkMemory.browse_source_keys(
+                lines = cls._browse_source_keys(
                     campaign.id,
                     document_key=doc_key or None,
                     wildcard=wildcard,
@@ -4868,7 +4955,7 @@ class ZorkEmulator:
                     pass
                 hits = []
                 for q in queries:
-                    results = ZorkMemory.search_source_material(
+                    results = cls._search_source_material(
                         q,
                         campaign.id,
                         document_key=doc_key_scope,
@@ -4987,6 +5074,231 @@ class ZorkEmulator:
         return str(match.group(1) or "").strip().upper()
 
     @classmethod
+    def communication_rulebook_document_key(cls) -> str:
+        return ZorkMemory._normalize_source_document_key(
+            cls.COMMUNICATION_RULEBOOK_DOCUMENT_LABEL
+        )
+
+    @classmethod
+    def _communication_rulebook_lines(cls) -> List[str]:
+        return [
+            f"{rule_key}: {rule_text}"
+            for rule_key, rule_text in cls.DEFAULT_GM_COMMUNICATION_RULES.items()
+        ]
+
+    @staticmethod
+    def _source_wildcard_matches(text: str, wildcard: str) -> bool:
+        pattern = str(wildcard or "%").strip()
+        if not pattern or pattern in {"*", "%", "%%"}:
+            return True
+        regex = re.escape(pattern.replace("*", "%")).replace("%", ".*")
+        return bool(re.match(rf"(?is)^{regex}$", str(text or "").strip()))
+
+    @classmethod
+    def _browse_builtin_source_keys(
+        cls,
+        *,
+        document_key: Optional[str] = None,
+        wildcard: str = "%",
+        limit: int = 255,
+    ) -> List[str]:
+        built_in_key = cls.communication_rulebook_document_key()
+        requested_key = (
+            ZorkMemory._normalize_source_document_key(str(document_key or ""))
+            if document_key
+            else ""
+        )
+        if requested_key and requested_key != built_in_key:
+            return []
+        pattern = str(wildcard or "%").strip()
+        broad_browse = pattern in {"", "*", "%", "%%"}
+        out: List[str] = []
+        seen: set[str] = set()
+        for line in cls._communication_rulebook_lines():
+            key_text = line.split(":", 1)[0].strip() if ":" in line else line
+            target_text = key_text if broad_browse else line
+            if not cls._source_wildcard_matches(target_text, pattern):
+                continue
+            if broad_browse:
+                entry = key_text if requested_key else f"{built_in_key}: {key_text}"
+            else:
+                entry = line
+            normalized = " ".join(str(entry or "").lower().split())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(entry)
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
+
+    @classmethod
+    def _search_builtin_source_material(
+        cls,
+        query: str,
+        *,
+        document_key: Optional[str] = None,
+        top_k: int = 5,
+        before_lines: int = 0,
+        after_lines: int = 0,
+    ) -> List[Tuple[str, str, int, str, float]]:
+        built_in_key = cls.communication_rulebook_document_key()
+        requested_key = (
+            ZorkMemory._normalize_source_document_key(str(document_key or ""))
+            if document_key
+            else ""
+        )
+        if requested_key and requested_key != built_in_key:
+            return []
+        query_text = " ".join(str(query or "").lower().split())
+        if not query_text:
+            return []
+        query_terms = [term for term in re.split(r"[^a-z0-9]+", query_text) if term]
+        lines = cls._communication_rulebook_lines()
+        scored: List[Tuple[int, float]] = []
+        for idx, line in enumerate(lines, start=1):
+            hay = line.lower()
+            key_text = line.split(":", 1)[0].strip().lower() if ":" in line else ""
+            score = 0.0
+            if query_text in hay:
+                score = 1.0
+                if query_text in key_text:
+                    score += 0.2
+            elif query_terms:
+                overlap = sum(1 for term in query_terms if term in hay)
+                if overlap:
+                    score = overlap / max(1, len(query_terms))
+                    key_overlap = sum(1 for term in query_terms if term in key_text)
+                    if key_overlap:
+                        score += key_overlap / max(1, len(query_terms) * 2)
+            if score > 0.0:
+                scored.append((idx, score))
+        scored.sort(key=lambda item: (item[1], -item[0]), reverse=True)
+        before_n = max(0, int(before_lines or 0))
+        after_n = max(0, int(after_lines or 0))
+        out: List[Tuple[str, str, int, str, float]] = []
+        for center_idx, score in scored[: max(1, int(top_k))]:
+            start_idx = max(1, center_idx - before_n)
+            end_idx = min(len(lines), center_idx + after_n)
+            window = [lines[i - 1] for i in range(start_idx, end_idx + 1)]
+            out.append(
+                (
+                    built_in_key,
+                    cls.COMMUNICATION_RULEBOOK_DOCUMENT_LABEL,
+                    center_idx,
+                    "\n".join(window),
+                    float(score),
+                )
+            )
+        return out
+
+    @classmethod
+    def _browse_source_keys(
+        cls,
+        campaign_id: int,
+        *,
+        document_key: Optional[str] = None,
+        wildcard: str = "%",
+        limit: int = 255,
+    ) -> List[str]:
+        built_in = cls._browse_builtin_source_keys(
+            document_key=document_key,
+            wildcard=wildcard,
+            limit=limit,
+        )
+        requested_key = (
+            ZorkMemory._normalize_source_document_key(str(document_key or ""))
+            if document_key
+            else ""
+        )
+        if requested_key == cls.communication_rulebook_document_key():
+            return built_in[: max(1, int(limit))]
+        rows = ZorkMemory.browse_source_keys(
+            campaign_id,
+            document_key=document_key,
+            wildcard=wildcard,
+            limit=limit,
+        )
+        merged: List[str] = []
+        seen: set[str] = set()
+        for row in [*built_in, *rows]:
+            normalized = " ".join(str(row or "").lower().split())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(str(row))
+            if len(merged) >= max(1, int(limit)):
+                break
+        return merged
+
+    @classmethod
+    def _search_source_material(
+        cls,
+        query: str,
+        campaign_id: int,
+        *,
+        document_key: Optional[str] = None,
+        top_k: int = 5,
+        before_lines: int = 0,
+        after_lines: int = 0,
+    ) -> List[Tuple[str, str, int, str, float]]:
+        requested_key = (
+            ZorkMemory._normalize_source_document_key(str(document_key or ""))
+            if document_key
+            else ""
+        )
+        built_in_key = cls.communication_rulebook_document_key()
+        db_hits: List[Tuple[str, str, int, str, float]] = []
+        if requested_key != built_in_key:
+            db_hits = ZorkMemory.search_source_material(
+                query,
+                campaign_id,
+                document_key=document_key,
+                top_k=top_k,
+                before_lines=before_lines,
+                after_lines=after_lines,
+            )
+        built_in_hits = cls._search_builtin_source_material(
+            query,
+            document_key=document_key,
+            top_k=top_k,
+            before_lines=before_lines,
+            after_lines=after_lines,
+        )
+        merged = [*built_in_hits, *db_hits]
+        merged.sort(key=lambda row: float(row[4] or 0.0), reverse=True)
+        seen: set[Tuple[str, int]] = set()
+        out: List[Tuple[str, str, int, str, float]] = []
+        for row in merged:
+            row_key = (str(row[0] or "").strip(), int(row[2] or 0))
+            if row_key in seen:
+                continue
+            seen.add(row_key)
+            out.append(row)
+            if len(out) >= max(1, int(top_k)):
+                break
+        return out
+
+    @classmethod
+    def _list_source_material_documents(
+        cls,
+        campaign_id: int,
+        *,
+        limit: int = 20,
+    ) -> List[Dict[str, object]]:
+        docs = ZorkMemory.list_source_material_documents(
+            campaign_id,
+            limit=max(1, int(limit)),
+        )
+        built_in_doc = {
+            "document_key": cls.communication_rulebook_document_key(),
+            "document_label": cls.COMMUNICATION_RULEBOOK_DOCUMENT_LABEL,
+            "chunk_count": len(cls.DEFAULT_GM_COMMUNICATION_RULES),
+            "sample_chunk": "\n".join(cls._communication_rulebook_lines()[:6]),
+        }
+        return [built_in_doc, *docs][: max(1, int(limit))]
+
+    @classmethod
     def _canonical_seed_rulebook_lines(
         cls,
         campaign_id: int,
@@ -4998,6 +5310,7 @@ class ZorkEmulator:
         auto_key = ZorkMemory._normalize_source_document_key(
             cls.AUTO_RULEBOOK_DOCUMENT_LABEL
         )
+        communication_key = cls.communication_rulebook_document_key()
         for doc in docs:
             if not isinstance(doc, dict):
                 continue
@@ -5006,7 +5319,12 @@ class ZorkEmulator:
             doc_format = str(doc.get("format") or "").strip().lower()
             if doc_format != cls.SOURCE_MATERIAL_FORMAT_RULEBOOK:
                 continue
-            if doc_label == cls.AUTO_RULEBOOK_DOCUMENT_LABEL or doc_key == auto_key:
+            if (
+                doc_label == cls.AUTO_RULEBOOK_DOCUMENT_LABEL
+                or doc_key == auto_key
+                or doc_label == cls.COMMUNICATION_RULEBOOK_DOCUMENT_LABEL
+                or doc_key == communication_key
+            ):
                 continue
             units = ZorkMemory.get_source_material_document_units(campaign_id, doc_key)
             for unit in units:
@@ -17026,6 +17344,45 @@ class ZorkEmulator:
                             else:
                                 response = cls._clean_response(response)
                             _zork_log("FINALIZATION RESPONSE", response)
+
+                        elif tool_name == "communication_rules":
+                            raw_keys = first_payload.get("keys") or []
+                            if isinstance(raw_keys, str):
+                                raw_keys = [raw_keys]
+                            requested_keys = [
+                                str(key or "").strip().upper()
+                                for key in raw_keys
+                                if str(key or "").strip()
+                            ][:8]
+                            requested_set = set(requested_keys)
+                            lines = [
+                                f"{rule_key}: {rule_text}"
+                                for rule_key, rule_text in cls.DEFAULT_GM_COMMUNICATION_RULES.items()
+                                if rule_key in requested_set
+                            ]
+                            if lines:
+                                tool_result_block = (
+                                    "COMMUNICATION_RULES_RESULT:\n"
+                                    + "\n".join(lines)
+                                )
+                            else:
+                                tool_result_block = (
+                                    "COMMUNICATION_RULES_RESULT: no matching keys found. "
+                                    f"Available keys: {', '.join(cls.COMMUNICATION_RULE_KEYS)}"
+                                )
+                            _zork_log("COMMUNICATION RULES BLOCK", tool_result_block)
+                            _append_tool_prompt(tool_result_block)
+                            response = await gpt.turbo_completion(
+                                system_prompt,
+                                tool_augmented_prompt,
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if not response:
+                                response = "A hollow silence answers. Try again."
+                            else:
+                                response = cls._clean_response(response)
+                            _zork_log("COMMUNICATION RULES AUGMENTED RESPONSE", response)
 
                         elif tool_name == "memory_search":
                             # Support both "queries": [...] and legacy "query": "..."
