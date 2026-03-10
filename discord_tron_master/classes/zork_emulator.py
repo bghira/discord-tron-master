@@ -16330,7 +16330,6 @@ class ZorkEmulator:
             f"IS_NEW_PLAYER: {str(is_new_player).lower()}\n"
             f"TURN_VISIBILITY_DEFAULT: {effective_turn_visibility_default}\n"
             f"GUARDRAILS_ENABLED: {str(guardrails_enabled).lower()}\n"
-            f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
         )
         if _source_payload.get("available"):
             user_prompt += (
@@ -16393,6 +16392,7 @@ class ZorkEmulator:
                 user_prompt += (
                     f"ACTIVE_LOCATION_MODIFICATIONS: {cls._dump_json(_active_location_mods)}\n"
                 )
+        user_prompt += f"RAILS_CONTEXT: {cls._dump_json(rails_context)}\n"
         turn_prompt_tail = cls._build_turn_prompt_tail(
             player,
             player_state,

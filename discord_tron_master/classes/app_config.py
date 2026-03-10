@@ -96,7 +96,7 @@ DEFAULT_USER_CONFIG = {
 class AppConfig:
     flask = None
     ZORK_BACKEND_OPTIONS = ("zai", "codex", "claude", "gemini", "opencode")
-    DEFAULT_ZORK_STYLE = "classic Zork"
+    DEFAULT_ZORK_STYLE = "Mulberry Award-winning literature"
 
     def __init__(self):
         parent = os.path.dirname(Path(__file__).resolve().parent)
