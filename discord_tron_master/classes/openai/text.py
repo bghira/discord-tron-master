@@ -17,19 +17,20 @@ logger.setLevel("INFO")
 
 openai.api_key = config.get_openai_api_key()
 
-_OPENAI_SEMAPHORES = {}
-_OPENAI_SEMAPHORE_LOCK = threading.Lock()
+_BACKEND_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+_BACKEND_SEMAPHORE_LOCK = threading.Lock()
+_BACKEND_CONCURRENCY_LIMIT = 4  # per backend
 _PROMPT_SECTION_RE = re.compile(r"^([A-Z][A-Z0-9_]+):(?:\s*(.*))?$")
 
 
-def _get_openai_semaphore(limit: int) -> asyncio.Semaphore:
-    loop = asyncio.get_running_loop()
-    with _OPENAI_SEMAPHORE_LOCK:
-        entry = _OPENAI_SEMAPHORES.get(loop)
-        if entry is None or entry[0] != limit:
-            entry = (limit, asyncio.Semaphore(limit))
-            _OPENAI_SEMAPHORES[loop] = entry
-        return entry[1]
+def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
+    key = (backend or "zai").strip().lower()
+    with _BACKEND_SEMAPHORE_LOCK:
+        sem = _BACKEND_SEMAPHORES.get(key)
+        if sem is None:
+            sem = asyncio.Semaphore(_BACKEND_CONCURRENCY_LIMIT)
+            _BACKEND_SEMAPHORES[key] = sem
+        return sem
 
 
 class GPT:
@@ -48,7 +49,6 @@ class GPT:
         self.temperature = 0.9
         self.max_tokens = 4096
         self.discord_bot_role = "You are a Discord bot."
-        self.concurrent_requests = config.get_concurrent_openai_requests()
         self.config = AppConfig()
         self.backend = "zai"
 
@@ -603,7 +603,7 @@ class GPT:
         if backend != "zai" and not effective_prompt.strip() and effective_role.strip():
             effective_prompt = effective_role.strip()
             effective_role = ""
-        semaphore = _get_openai_semaphore(self.concurrent_requests)
+        semaphore = _get_backend_semaphore(backend)
         async with semaphore:
             if backend == "zai":
                 message_log = [

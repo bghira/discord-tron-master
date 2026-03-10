@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import dataclasses
 import datetime
 import difflib
 import fnmatch
@@ -10,7 +11,7 @@ import re
 import threading
 import time
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 import requests
@@ -159,6 +160,126 @@ def _zork_log(section: str, body: str = "") -> None:
                     fh.write("\n")
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Concurrency dataclasses for phase-split turn processing
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class CampaignConcurrencyState:
+    """Per-campaign concurrency bookkeeping replacing the old asyncio.Lock."""
+
+    commit_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    inflight_count: int = 0
+    max_inflight: int = 4  # cap concurrent Phase 2s per campaign
+
+
+@dataclasses.dataclass
+class PreflightContext:
+    """Everything Phase 1 produces for Phase 2 to consume."""
+
+    campaign_id: int = 0
+    player_id: int = 0
+    user_id: int = 0
+    campaign_state: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    player_state: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    state_version: int = 0
+    pre_turn_game_time: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    system_prompt: str = ""
+    user_prompt: str = ""
+    gpt: Any = None  # GPT instance
+    action: str = ""
+    turns: List[Any] = dataclasses.field(default_factory=list)
+    party_snapshot: Dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    # Context/prompt-building state
+    base_user_prompt: str = ""
+    turn_prompt_tail: str = ""
+    turn_tail_extra_lines: List[str] = dataclasses.field(default_factory=list)
+    prompt_difficulty: str = "normal"
+    current_prompt_stage: str = ""
+    first_payload: Optional[Dict[str, Any]] = None
+    memory_lookup_enabled: bool = False
+    is_new_player: bool = False
+    turn_attachment_context: str = ""
+    viewer_slug: str = ""
+    viewer_location_key: str = ""
+    viewer_private_context_key: str = ""
+    viewer_private_context: Optional[Dict[str, Any]] = None
+    recent_private_contexts: List[Any] = dataclasses.field(default_factory=list)
+    private_context_candidate: Optional[Dict[str, Any]] = None
+    time_skip_request: Optional[Dict[str, Any]] = None
+    timer_interrupt_context: Optional[str] = None
+
+    # SMS
+    sms_activity_detected: bool = False
+    sms_inline_draft: Optional[Tuple[str, str]] = None
+
+    # Channel / visibility flags
+    is_thread_channel: bool = False
+    is_dm: bool = False
+    channel_id: int = 0
+    command_prefix: str = "!"
+
+    # Campaign / player ORM references (read-only during Phase 2)
+    campaign_name: str = ""
+    campaign_summary: Optional[str] = None
+    on_rails: bool = False
+    is_timed_events_enabled: bool = False
+
+    # Receiver hints for heuristic preload
+    receiver_hints: Dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    # Forced memory search flag
+    auto_forced_memory_search: bool = False
+
+
+@dataclasses.dataclass
+class TurnDelta:
+    """Everything Phase 2 produces for Phase 3 to consume."""
+
+    state_version_at_read: int = 0
+
+    narration: str = ""
+    raw_narration: str = ""
+    scene_output: Optional[Any] = None
+    scene_output_raw: Optional[Any] = None
+    reasoning: Optional[str] = None
+
+    state_update: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    player_state_update: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    character_updates: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    summary_update: Optional[str] = None
+    calendar_update: Optional[Dict[str, Any]] = None
+    give_item: Optional[Dict[str, Any]] = None
+    xp_awarded: int = 0
+
+    turn_visibility: Optional[Dict[str, Any]] = None
+    story_progression: Optional[Any] = None
+    scene_image_prompt: Optional[str] = None
+
+    deferred_tool_writes: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    # Timer fields
+    timer_scheduled_delay: Optional[int] = None
+    timer_scheduled_event: Optional[str] = None
+    timer_scheduled_interruptible: bool = True
+    timer_scheduled_interrupt_scope: str = "global"
+    timer_scheduled_interrupt_action: Optional[str] = None
+    timer_scheduled_interrupt_user_id: Optional[int] = None
+
+    # Post-processing metadata
+    ephemeral_notices: List[str] = dataclasses.field(default_factory=list)
+    used_tool_names: set = dataclasses.field(default_factory=set)
+    forced_planning_payload: Optional[Dict[str, Any]] = None
+    auto_forced_memory_search: bool = False
+    empty_response_repair_count: int = 0
+    anti_echo_retry_count: int = 0
+    sms_activity_detected: bool = False
+    private_phone_redacted: bool = False
+    stored_player_action: str = ""
+    suppress_recent_context: bool = False
 
 
 class ZorkEmulator:
@@ -474,7 +595,8 @@ class ZorkEmulator:
     PRIVATE_CONTEXT_STATE_KEY = "_active_private_context"
     UNREAD_SMS_LINE_PREFIXES = ("📨 unread sms:", "unread sms:")
 
-    _locks: Dict[int, asyncio.Lock] = {}
+    _locks: Dict[int, asyncio.Lock] = {}  # legacy compat — prefer _concurrency_states
+    _concurrency_states: Dict[int, CampaignConcurrencyState] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
     _pending_timers: Dict[int, dict] = {}  # campaign_id -> timer context dict
@@ -1276,6 +1398,14 @@ class ZorkEmulator:
             lock = asyncio.Lock()
             cls._locks[campaign_id] = lock
         return lock
+
+    @classmethod
+    def _get_concurrency(cls, campaign_id: int) -> CampaignConcurrencyState:
+        conc = cls._concurrency_states.get(campaign_id)
+        if conc is None:
+            conc = CampaignConcurrencyState()
+            cls._concurrency_states[campaign_id] = conc
+        return conc
 
     @classmethod
     def _try_set_inflight_turn(cls, campaign_id: int, user_id: int) -> bool:
@@ -16627,6 +16757,102 @@ class ZorkEmulator:
         return state
 
     @classmethod
+    def _merge_state_update_with_conflict_resolution(
+        cls,
+        authoritative_state: Dict[str, object],
+        delta_update: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Deep-merge *delta_update* into *authoritative_state* with per-key
+        conflict resolution suitable for concurrent Phase 3 commits.
+
+        Rules:
+        * ``game_time`` — monotonic max (keeps the later time).
+        * ``current_chapter`` / ``current_scene`` — left for the normal
+          advancement guards that run after this merge.
+        * Nested dicts — shallow merge (``{**current[key], **delta[key]}``).
+        * Scalar keys — last-writer-wins (delta overwrites).
+        * ``None`` values — delete the key (existing ``_apply_state_update``
+          behaviour).
+        """
+        if not isinstance(delta_update, dict):
+            return authoritative_state
+
+        # Handle game_time monotonic-max separately.
+        delta_time = delta_update.get("game_time")
+        if isinstance(delta_time, dict) and delta_time:
+            current_time = authoritative_state.get("game_time", {})
+            if isinstance(current_time, dict):
+                delta_minutes = cls._game_time_to_total_minutes(delta_time)
+                current_minutes = cls._game_time_to_total_minutes(current_time)
+                if delta_minutes > current_minutes:
+                    authoritative_state["game_time"] = delta_time
+                # else: keep current — it's already further ahead.
+            else:
+                authoritative_state["game_time"] = delta_time
+            delta_update = {k: v for k, v in delta_update.items() if k != "game_time"}
+
+        # Merge remaining keys.
+        pruned_keys: List[str] = []
+        for key, value in delta_update.items():
+            if value is None:
+                authoritative_state.pop(key, None)
+                pruned_keys.append(key)
+            elif (
+                isinstance(value, str)
+                and value.strip().lower() in cls._COMPLETED_VALUES
+            ):
+                authoritative_state.pop(key, None)
+                pruned_keys.append(key)
+            elif isinstance(value, dict):
+                existing = authoritative_state.get(key)
+                if isinstance(existing, dict):
+                    # Shallow merge: delta keys overwrite, existing keys retained.
+                    merged = {**existing, **value}
+                    # Honour None deletes within nested dict.
+                    merged = {k: v for k, v in merged.items() if v is not None}
+                    authoritative_state[key] = merged
+                else:
+                    authoritative_state[key] = value
+            else:
+                authoritative_state[key] = value
+
+        if pruned_keys:
+            cls._auto_resolve_stale_plot_threads(authoritative_state, pruned_keys)
+        return authoritative_state
+
+    @classmethod
+    def _merge_character_updates(
+        cls,
+        existing_chars: Dict[str, object],
+        delta_updates: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Per-slug merge for character_updates with conflict resolution.
+
+        * Same NPC updated by two turns: merge mutable fields (last-writer-wins
+          per field).
+        * Deletion from either turn: deletion wins.
+        * New NPC from either turn: add.
+        """
+        if not isinstance(delta_updates, dict):
+            return existing_chars
+        for slug, delta_char in delta_updates.items():
+            if delta_char is None:
+                # Deletion wins.
+                existing_chars.pop(slug, None)
+                continue
+            existing = existing_chars.get(slug)
+            if existing is None or not isinstance(existing, dict):
+                existing_chars[slug] = delta_char
+            elif isinstance(delta_char, dict):
+                # Per-field merge.
+                for field_key, field_val in delta_char.items():
+                    if field_val is None:
+                        existing.pop(field_key, None)
+                    else:
+                        existing[field_key] = field_val
+        return existing_chars
+
+    @classmethod
     def _auto_resolve_stale_plot_threads(
         cls,
         campaign_state: Dict[str, object],
@@ -16685,6 +16911,4165 @@ class ZorkEmulator:
         _zork_log_pop_path(token)
 
     @classmethod
+    async def _play_action_preflight(
+        cls,
+        ctx,
+        action: str,
+        campaign,
+        player,
+        player_state: Dict[str, Any],
+        command_prefix: str = "!",
+    ) -> "PreflightContext | str":
+        """Phase 1 (preflight) logic extracted from play_action.
+
+        Returns either a PreflightContext dataclass instance (for proceeding
+        to Phase 2) or a str (an early-return message for intercepted commands,
+        errors, etc.).
+
+        The caller is responsible for holding the campaign lock and app context.
+        """
+        # Defensive guard: if still in setup mode, skip gameplay.
+        if cls.is_in_setup_mode(campaign):
+            return "Campaign setup is still in progress. Please complete setup first."
+
+        action_clean = action.strip().lower()
+        time_skip_request = cls._extract_time_skip_request(action)
+        is_dm = getattr(ctx, "guild", None) is None
+
+        if is_dm and time_skip_request is not None:
+            return (
+                "Time skips are disabled in private DMs. "
+                "Use the main campaign thread or channel for shared time jumps."
+            )
+
+        # Intercepted commands that don't count as player actions
+        # should not interrupt timers.
+        _INTERCEPTED_COMMANDS = {
+            "look", "l", "inventory", "inv", "i",
+            "calendar", "cal", "events",
+            "roster", "characters", "npcs",
+        }
+        _is_intercepted = action_clean in _INTERCEPTED_COMMANDS
+
+        timer_interrupt_context = None
+        if not _is_intercepted:
+            pending = cls._pending_timers.get(campaign.id)
+            can_interrupt = (
+                pending is not None
+                and pending.get("interruptible", True)
+                and cls._timer_can_be_interrupted_by(pending, ctx.author.id)
+            )
+            if can_interrupt:
+                cancelled_timer = cls.cancel_pending_timer(campaign.id)
+                if cancelled_timer:
+                    cls.increment_player_stat(
+                        player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
+                    )
+                    player.updated = db.func.now()
+                    db.session.commit()
+                    interrupt_action = cancelled_timer.get(
+                        "interrupt_action"
+                    )
+                    if interrupt_action:
+                        timer_interrupt_context = interrupt_action
+                    # Persist the interruption as a turn so it appears in RECENT_TURNS.
+                    event_desc = cancelled_timer.get(
+                        "event", "an impending event"
+                    )
+                    interrupt_note = (
+                        f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
+                        f'Averted event: "{event_desc}"'
+                    )
+                    if interrupt_action:
+                        interrupt_note += (
+                            f' Interruption context: "{interrupt_action}"'
+                        )
+                    interrupt_state = cls.get_campaign_state(campaign)
+                    interrupt_turn_time = cls._extract_game_time_snapshot(
+                        interrupt_state
+                    )
+                    timer_interrupt_turn = ZorkTurn(
+                        campaign_id=campaign.id,
+                        user_id=ctx.author.id,
+                        kind="narrator",
+                        content=interrupt_note,
+                        channel_id=ctx.channel.id,
+                        meta_json=cls._dump_json(
+                            {
+                                "game_time": interrupt_turn_time,
+                                "visibility": cls._default_turn_visibility_meta(
+                                    campaign,
+                                    player,
+                                    is_dm,
+                                ),
+                            }
+                        ),
+                    )
+                    db.session.add(timer_interrupt_turn)
+                    db.session.flush()
+                    cls._record_turn_game_time(
+                        interrupt_state,
+                        timer_interrupt_turn.id,
+                        interrupt_turn_time,
+                    )
+                    campaign.state_json = cls._dump_json(interrupt_state)
+                    db.session.commit()
+            # Non-interruptible timers or local timers from another player are left running.
+
+        is_thread_channel = isinstance(ctx.channel, discord.Thread) or is_dm
+
+        has_character_name = bool(
+            player_state.get("character_name", "").strip()
+        )
+        campaign_has_content = bool((campaign.summary or "").strip())
+        other_players_exist = (
+            ZorkPlayer.query.filter(
+                ZorkPlayer.campaign_id == campaign.id,
+                ZorkPlayer.user_id != ctx.author.id,
+            ).count()
+            > 0
+        )
+        needs_identity = campaign_has_content and not has_character_name
+        is_new_player = not has_character_name and not campaign_has_content
+
+        if needs_identity:
+            return (
+                "This campaign already has adventurers. "
+                f"Set your identity first with `{command_prefix}zork identity <name>`. "
+                "Then return to the adventure."
+            )
+
+        # Deterministic onboarding in non-thread channels: bypass LLM until explicit choice.
+        onboarding_state = player_state.get("onboarding_state")
+        party_status = player_state.get("party_status")
+        if not is_thread_channel:
+            if not party_status and not onboarding_state:
+                player_state["onboarding_state"] = "await_party_choice"
+                player.state_json = cls._dump_json(player_state)
+                player.updated = db.func.now()
+                db.session.commit()
+                return (
+                    "Mission rejected until path is selected. Reply with exactly one option:\n"
+                    f"- `{cls.MAIN_PARTY_TOKEN}`\n"
+                    f"- `{cls.NEW_PATH_TOKEN}`"
+                )
+
+            if onboarding_state == "await_party_choice":
+                if action_clean == cls.MAIN_PARTY_TOKEN:
+                    player_state["party_status"] = "main_party"
+                    player_state["onboarding_state"] = None
+                    player.state_json = cls._dump_json(player_state)
+                    player.updated = db.func.now()
+                    db.session.commit()
+                    return "Joined main party. Your next message will be treated as an in-world action."
+
+                if action_clean == cls.NEW_PATH_TOKEN:
+                    player_state["onboarding_state"] = "await_campaign_name"
+                    player.state_json = cls._dump_json(player_state)
+                    player.updated = db.func.now()
+                    db.session.commit()
+                    options = cls._build_campaign_suggestion_text(
+                        ctx.guild.id
+                    )
+                    return (
+                        "Reply next with your campaign name (letters/numbers/spaces).\n"
+                        f"{options}\n"
+                        f"Hint: `{command_prefix}zork thread <name>` also creates your own path thread."
+                    )
+
+                return (
+                    "Mission rejected. Reply with exactly one option:\n"
+                    f"- `{cls.MAIN_PARTY_TOKEN}`\n"
+                    f"- `{cls.NEW_PATH_TOKEN}`"
+                )
+
+            if onboarding_state == "await_campaign_name":
+                campaign_name = cls._sanitize_campaign_name_text(action)
+                if not campaign_name:
+                    return "Mission rejected. Reply with a campaign name using letters/numbers/spaces."
+                if len(campaign_name) < 2:
+                    return "Mission rejected. Campaign name must be at least 2 characters."
+                if not isinstance(ctx.channel, discord.TextChannel):
+                    return f"Could not create a new path thread here. Use `{command_prefix}zork thread {campaign_name}`."
+                thread_name = f"zork-{campaign_name}"[:90]
+                try:
+                    thread = await ctx.channel.create_thread(
+                        name=thread_name,
+                        type=discord.ChannelType.public_thread,
+                        auto_archive_duration=1440,
+                    )
+                except Exception as e:
+                    return f"Could not create path thread: {e}"
+
+                thread_channel, _ = cls.enable_channel(
+                    ctx.guild.id, thread.id, ctx.author.id
+                )
+                thread_campaign, _, _ = cls.set_active_campaign(
+                    thread_channel,
+                    ctx.guild.id,
+                    campaign_name,
+                    ctx.author.id,
+                    enforce_activity_window=False,
+                )
+                thread_player = cls.get_or_create_player(
+                    thread_campaign.id,
+                    ctx.author.id,
+                    campaign=thread_campaign,
+                )
+                thread_state = cls.get_player_state(thread_player)
+                thread_state = cls._copy_identity_fields(
+                    player_state, thread_state
+                )
+                thread_state["party_status"] = "new_path"
+                thread_state["onboarding_state"] = None
+                thread_player.state_json = cls._dump_json(thread_state)
+                thread_player.updated = db.func.now()
+
+                player_state["party_status"] = "new_path"
+                player_state["onboarding_state"] = None
+                player.state_json = cls._dump_json(player_state)
+                player.updated = db.func.now()
+                db.session.commit()
+                return (
+                    f"Created your path thread: {thread.mention}\n"
+                    f"Campaign: `{thread_campaign.name}`\n"
+                    "Continue your adventure there."
+                )
+
+        # --- Intercepted: look ---
+        if action_clean in ("look", "l") and (
+            player_state.get("room_description")
+            or player_state.get("room_summary")
+        ):
+            title = (
+                player_state.get("room_title")
+                or player_state.get("location")
+                or "Unknown"
+            )
+            desc = (
+                player_state.get("room_description")
+                or player_state.get("room_summary")
+                or ""
+            )
+            exits = player_state.get("exits")
+            if exits and isinstance(exits, list):
+                _el = [
+                    (e.get("direction") or e.get("name") or str(e))
+                    if isinstance(e, dict) else str(e)
+                    for e in exits
+                ]
+                exits_text = f"\nExits: {', '.join(_el)}"
+            else:
+                exits_text = ""
+            narration = f"{title}\n{desc}{exits_text}"
+            inventory_line = cls._format_inventory(player_state)
+            if inventory_line:
+                narration = f"{narration}\n\n{inventory_line}"
+            narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+            quick_state = cls.get_campaign_state(campaign)
+            quick_time = cls._extract_game_time_snapshot(quick_state)
+            quick_turn_meta = cls._dump_json(
+                {
+                    "game_time": quick_time,
+                    "visibility": cls._default_turn_visibility_meta(
+                        campaign,
+                        player,
+                        is_dm,
+                    ),
+                }
+            )
+            look_player_turn = ZorkTurn(
+                campaign_id=campaign.id,
+                user_id=ctx.author.id,
+                kind="player",
+                content=action,
+                channel_id=ctx.channel.id,
+                meta_json=quick_turn_meta,
+            )
+            look_narrator_turn = ZorkTurn(
+                campaign_id=campaign.id,
+                user_id=ctx.author.id,
+                kind="narrator",
+                content=narration,
+                channel_id=ctx.channel.id,
+                meta_json=quick_turn_meta,
+            )
+            db.session.add(look_player_turn)
+            db.session.add(look_narrator_turn)
+            db.session.flush()
+            cls._record_turn_game_time(quick_state, look_player_turn.id, quick_time)
+            cls._record_turn_game_time(quick_state, look_narrator_turn.id, quick_time)
+            campaign.state_json = cls._dump_json(quick_state)
+            campaign.last_narration = narration
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return narration
+
+        # --- Intercepted: inventory ---
+        if action_clean in ("inventory", "inv", "i"):
+            narration = (
+                cls._format_inventory(player_state) or "Inventory: empty"
+            )
+            narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+            quick_state = cls.get_campaign_state(campaign)
+            quick_time = cls._extract_game_time_snapshot(quick_state)
+            quick_turn_meta = cls._dump_json(
+                {
+                    "game_time": quick_time,
+                    "visibility": cls._default_turn_visibility_meta(
+                        campaign,
+                        player,
+                        is_dm,
+                    ),
+                }
+            )
+            inv_player_turn = ZorkTurn(
+                campaign_id=campaign.id,
+                user_id=ctx.author.id,
+                kind="player",
+                content=action,
+                channel_id=ctx.channel.id,
+                meta_json=quick_turn_meta,
+            )
+            inv_narrator_turn = ZorkTurn(
+                campaign_id=campaign.id,
+                user_id=ctx.author.id,
+                kind="narrator",
+                content=narration,
+                channel_id=ctx.channel.id,
+                meta_json=quick_turn_meta,
+            )
+            db.session.add(inv_player_turn)
+            db.session.add(inv_narrator_turn)
+            db.session.flush()
+            cls._record_turn_game_time(quick_state, inv_player_turn.id, quick_time)
+            cls._record_turn_game_time(quick_state, inv_narrator_turn.id, quick_time)
+            campaign.state_json = cls._dump_json(quick_state)
+            campaign.last_narration = narration
+            campaign.updated = db.func.now()
+            db.session.commit()
+            return narration
+
+        # --- Intercepted: calendar ---
+        if action_clean in ("calendar", "cal", "events"):
+            campaign_state = cls.get_campaign_state(campaign)
+            game_time = campaign_state.get("game_time", {})
+            calendar = cls._calendar_for_prompt(campaign_state)
+            date_label = game_time.get(
+                "date_label",
+                f"Day {game_time.get('day', '?')}, {game_time.get('period', '?').title()}",
+            )
+            lines = [f"**Game Time:** {date_label}"]
+            if calendar:
+                lines.append("**Upcoming Events:**")
+                for ev in calendar:
+                    days_remaining = int(ev.get("_days_until", ev.get("days_remaining", 0)))
+                    hours_remaining = int(
+                        ev.get("_hours_until", ev.get("hours_remaining", days_remaining * 24))
+                    )
+                    fire_day = int(ev.get("fire_day", 1))
+                    fire_hour = max(
+                        0, min(23, int(ev.get("fire_hour", 23)))
+                    )
+                    desc = ev.get("description", "")
+                    if hours_remaining < 0:
+                        eta = f"overdue by {abs(hours_remaining)} hour(s)"
+                    elif hours_remaining == 0:
+                        eta = "fires now"
+                    elif hours_remaining < 48:
+                        eta = f"fires in {hours_remaining} hour(s)"
+                    else:
+                        eta_days = (hours_remaining + 23) // 24
+                        eta = f"fires in {eta_days} day(s)"
+                    lines.append(
+                        (
+                            f"- **{ev.get('name', 'Unknown')}** — "
+                            f"Day {fire_day}, {fire_hour:02d}:00 ({eta})"
+                        )
+                        + (f" ({desc})" if desc else "")
+                    )
+            else:
+                lines.append("No upcoming events.")
+            narration = "\n".join(lines)
+            return narration
+
+        # --- Intercepted: roster ---
+        if action_clean in ("roster", "characters", "npcs"):
+            characters = cls.get_campaign_characters(campaign)
+            return cls.format_roster(characters)
+
+        # --- SMS intent detection ---
+        sms_activity_detected = False
+        sms_inline_draft: Optional[Tuple[str, str]] = None
+        is_ooc_action = bool(
+            re.match(r"\s*\[OOC\b", action or "", re.IGNORECASE)
+        )
+        if not is_ooc_action:
+            sms_intent = cls._extract_inline_sms_intent(action)
+            if sms_intent is not None:
+                sms_activity_detected = True
+                sms_inline_draft = sms_intent
+                sms_recipient, sms_message = sms_intent
+                sms_sender = str(
+                    player_state.get("character_name")
+                    or f"Player {ctx.author.id}"
+                ).strip()[:80]
+                thread_key = (
+                    cls._sms_normalize_thread_key(sms_recipient)
+                    or sms_recipient
+                )
+                _zork_log(
+                    "SMS AUTO DRAFT",
+                    f"thread={thread_key!r} sender={sms_sender!r} recipient={sms_recipient!r}",
+                )
+
+        # --- Context building ---
+        campaign_state = cls.get_campaign_state(campaign)
+        turns = cls.get_recent_turns(campaign.id)
+        turn_attachment_context = await cls._build_turn_attachment_context(
+            ctx
+        )
+        party_snapshot = cls._build_party_snapshot_for_prompt(
+            campaign, player, player_state
+        )
+        viewer_slug = cls._player_slug_key(
+            player_state.get("character_name")
+        )
+        viewer_location_key = cls._room_key_from_player_state(
+            player_state
+        ).lower()
+        stored_private_context = cls._active_private_context_from_state(
+            player_state
+        )
+        if cls._action_leaves_private_context(action, stored_private_context):
+            viewer_private_context = None
+        else:
+            viewer_private_context = cls._derive_private_context_candidate(
+                campaign,
+                player,
+                player_state,
+                action,
+            ) or stored_private_context or cls._fallback_private_context_from_recent(
+                turns,
+                viewer_user_id=player.user_id,
+                viewer_slug=viewer_slug,
+                viewer_location_key=viewer_location_key,
+            )
+        provisional_private_context_key = str(
+            (viewer_private_context or {}).get("context_key") or ""
+        ).strip()
+        recent_private_contexts = cls._recent_private_contexts_for_prompt(
+            turns,
+            viewer_user_id=player.user_id,
+            viewer_slug=viewer_slug,
+            active_context_key=provisional_private_context_key,
+            limit=3,
+        )
+        if not viewer_private_context:
+            viewer_private_context = cls._fallback_private_context_from_rows(
+                recent_private_contexts,
+                viewer_location_key=viewer_location_key,
+            )
+        viewer_private_context_key = str(
+            (viewer_private_context or {}).get("context_key") or ""
+        ).strip()
+
+        # --- Build turn tail extra lines ---
+        turn_tail_extra_lines: List[str] = []
+        if timer_interrupt_context:
+            turn_tail_extra_lines.append(
+                "TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
+                f'The interrupted event was: "{timer_interrupt_context}"\n'
+                f'The player\'s action that interrupted it: "{action}"\n'
+                "Incorporate the interruption naturally into your narration."
+            )
+        if time_skip_request is not None:
+            skip_desc = str(
+                time_skip_request.get("description") or ""
+            ).strip()
+            skip_minutes = cls._coerce_non_negative_int(
+                time_skip_request.get("minutes", 60), default=60
+            )
+            turn_tail_extra_lines.append(
+                "TIME_SKIP: The player requests a time skip. Fast-forward past "
+                "any idle, repetitive, or low-stakes moments and jump ahead to "
+                "the next meaningful story beat — a new encounter, discovery, "
+                "twist, or decision point. Summarise skipped time in one brief "
+                "sentence, then narrate the new moment in full.\n"
+                f"- requested_skip_minutes={skip_minutes}\n"
+                + (
+                    f"- requested_skip_description={skip_desc}\n"
+                    if skip_desc
+                    else ""
+                )
+            )
+        if sms_inline_draft is not None:
+            sms_recipient, sms_message = sms_inline_draft
+            sms_sender = str(
+                player_state.get("character_name")
+                or f"Player {ctx.author.id}"
+            ).strip()[:80]
+            sms_thread = (
+                cls._sms_normalize_thread_key(sms_recipient)
+                or sms_recipient
+            )
+            turn_tail_extra_lines.append(
+                "SMS_DRAFT: The player's action looks like an attempted outgoing text.\n"
+                f"- thread='{sms_thread}'\n"
+                f"- from='{sms_sender}' to='{sms_recipient}'\n"
+                f"- message='{sms_message}'\n"
+                "Do NOT assume it has been sent yet. If it really sends in this scene, call sms_write. "
+                "If the send fails, is interrupted, is reconsidered, or never actually happens, do not call sms_write."
+            )
+
+        # --- Prompt building ---
+        prompt_difficulty = cls.normalize_difficulty(
+            campaign_state.get("difficulty", "normal")
+        )
+        current_prompt_stage = cls.PROMPT_STAGE_RESEARCH
+        receiver_hints = cls._recent_turn_receiver_hints(
+            campaign,
+            viewer_user_id=player.user_id,
+            party_snapshot=party_snapshot,
+            player_state=player_state,
+        )
+        first_payload = {
+            "tool_call": "recent_turns",
+            "player_slugs": receiver_hints.get("player_slugs") or [],
+            "npc_slugs": receiver_hints.get("npc_slugs") or [],
+        }
+        system_prompt, user_prompt = cls.build_prompt(
+            campaign,
+            player,
+            action,
+            turns,
+            party_snapshot=party_snapshot,
+            is_new_player=is_new_player,
+            turn_attachment_context=turn_attachment_context,
+            turn_visibility_default="public",
+            tail_extra_lines=turn_tail_extra_lines,
+            prompt_stage=current_prompt_stage,
+            channel_id=getattr(ctx.channel, "id", None),
+        )
+        base_user_prompt = user_prompt
+        turn_prompt_tail = cls._build_turn_prompt_tail(
+            player,
+            player_state,
+            action,
+            turn_attachment_context,
+            cls._turn_stage_note(
+                prompt_difficulty,
+                current_prompt_stage,
+                campaign=campaign,
+                channel_id=getattr(ctx.channel, "id", None),
+            ),
+            extra_lines=turn_tail_extra_lines,
+        )
+        memory_lookup_enabled = (
+            "memory_lookup_enabled: true" in user_prompt.lower()
+        )
+        gpt = cls._new_gpt(
+            campaign=campaign,
+            channel_id=getattr(ctx.channel, "id", None),
+        )
+        _zork_log(
+            f"TURN START campaign={campaign.id}",
+            f"heuristic preload: recent_turns with receivers={receiver_hints}\n"
+            f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
+        )
+
+        # --- Snapshot state_version from campaign_state ---
+        state_version = campaign_state.get("_state_version", 0)
+
+        # --- Build and return PreflightContext ---
+        return PreflightContext(
+            campaign_id=campaign.id,
+            player_id=player.id,
+            user_id=ctx.author.id,
+            campaign_state=campaign_state,
+            player_state=player_state,
+            state_version=state_version,
+            pre_turn_game_time={},  # populated in Phase 2
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            gpt=gpt,
+            action=action,
+            turns=turns,
+            party_snapshot=party_snapshot,
+            base_user_prompt=base_user_prompt,
+            turn_prompt_tail=turn_prompt_tail,
+            turn_tail_extra_lines=turn_tail_extra_lines,
+            prompt_difficulty=prompt_difficulty,
+            current_prompt_stage=current_prompt_stage,
+            first_payload=first_payload,
+            memory_lookup_enabled=memory_lookup_enabled,
+            is_new_player=is_new_player,
+            turn_attachment_context=turn_attachment_context,
+            viewer_slug=viewer_slug,
+            viewer_location_key=viewer_location_key,
+            viewer_private_context_key=viewer_private_context_key,
+            viewer_private_context=viewer_private_context,
+            recent_private_contexts=recent_private_contexts,
+            private_context_candidate=viewer_private_context,
+            time_skip_request=time_skip_request,
+            timer_interrupt_context=timer_interrupt_context,
+            sms_activity_detected=sms_activity_detected,
+            sms_inline_draft=sms_inline_draft,
+            is_thread_channel=is_thread_channel,
+            is_dm=is_dm,
+            channel_id=getattr(ctx.channel, "id", 0),
+            command_prefix=command_prefix,
+            campaign_name=campaign.name or "",
+            campaign_summary=campaign.summary,
+            on_rails=bool(campaign_state.get("on_rails")),
+            is_timed_events_enabled=bool(campaign_state.get("timed_events_enabled")),
+            receiver_hints=receiver_hints,
+            auto_forced_memory_search=False,
+        )
+
+    @classmethod
+    async def _play_action_commit(
+        cls,
+        ctx,
+        preflight: "PreflightContext",
+        delta: "TurnDelta",
+        campaign,
+    ) -> str:
+        """
+        Phase 3 — Commit phase.
+
+        The caller holds the commit_lock and app_context. This method performs
+        all state writes atomically:
+        1. Re-reads authoritative state from DB
+        2. Checks state version for concurrent modifications
+        3. Merges state_update using conflict resolution
+        4. Applies deferred tool writes
+        5. Applies remaining state processing
+        6. Persists turns and increments state version
+        7. Triggers post-commit side effects (memory embedding, images, timers, notifications)
+
+        Returns the display narration string.
+        """
+        # --- 1. Re-read authoritative state from DB ---
+        campaign_state = cls.get_campaign_state(campaign)
+        player = cls.get_or_create_player(campaign.id, preflight.user_id, campaign=campaign)
+        player_state = cls.get_player_state(player)
+
+        # --- 2. Check state version for concurrent modifications ---
+        current_version = campaign_state.get("_state_version", 0)
+        if current_version != delta.state_version_at_read:
+            _zork_log(
+                f"CONCURRENT MODIFICATION campaign={campaign.id}",
+                f"expected_version={delta.state_version_at_read} current_version={current_version}",
+            )
+
+        # --- 3. Merge state_update using conflict resolution ---
+        # game_time uses monotonic max; nested dicts get shallow-merged;
+        # None deletes; completed values auto-resolve plot threads.
+        cls._merge_state_update_with_conflict_resolution(
+            campaign_state, delta.state_update
+        )
+
+        # --- 4. Apply deferred tool writes ---
+        current_turn_hint = int(preflight.turns[-1].id) if preflight.turns else 0
+        for entry in delta.deferred_tool_writes:
+            tool_name = entry.get("tool") or entry.get("tool_name", "")
+            payload = entry.get("payload", {})
+
+            if tool_name == "plot_plan":
+                cls._apply_plot_plan_tool(
+                    campaign_state,
+                    payload,
+                    current_turn=current_turn_hint,
+                )
+            elif tool_name == "chapter_plan":
+                cls._apply_chapter_plan_tool(
+                    campaign_state,
+                    payload,
+                    current_turn=current_turn_hint,
+                    on_rails=bool(campaign_state.get("on_rails", False)),
+                )
+            elif tool_name == "consequence_log":
+                cls._apply_consequence_log_tool(
+                    campaign_state,
+                    payload,
+                    current_turn=current_turn_hint,
+                )
+            elif tool_name == "sms_write":
+                post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+                cls._sms_write(
+                    campaign_state,
+                    thread=entry.get("thread", ""),
+                    sender=entry.get("sender", ""),
+                    recipient=entry.get("recipient", ""),
+                    message=entry.get("message", ""),
+                    game_time=post_turn_game_time,
+                    turn_id=current_turn_hint,
+                )
+            elif tool_name == "sms_read":
+                cls._sms_mark_threads_read(
+                    campaign_state,
+                    actor_id=preflight.user_id,
+                    player_state=player_state,
+                    thread_markers=entry.get("thread_markers", {}),
+                )
+            elif tool_name == "sms_schedule":
+                cls._schedule_sms_delivery(
+                    campaign_id=campaign.id,
+                    delay_seconds=entry.get("delay_seconds", 60),
+                    thread=entry.get("thread", ""),
+                    sender=entry.get("sender", ""),
+                    recipient=entry.get("recipient", ""),
+                    message=entry.get("message", ""),
+                )
+
+        # --- 5. Apply remaining state processing ---
+        # Unpack delta fields
+        state_update = delta.state_update
+        player_state_update = delta.player_state_update
+        character_updates = delta.character_updates
+        summary_update = delta.summary_update
+        calendar_update = delta.calendar_update
+        give_item = delta.give_item
+        xp_awarded = delta.xp_awarded
+        turn_visibility = delta.turn_visibility
+        story_progression = delta.story_progression
+        scene_image_prompt = delta.scene_image_prompt
+        scene_output_raw = delta.scene_output_raw
+        narration = delta.narration
+        raw_narration = delta.raw_narration
+        reasoning = delta.reasoning
+        scene_output = delta.scene_output
+        forced_planning_payload = delta.forced_planning_payload
+        ephemeral_notices = delta.ephemeral_notices
+        sms_activity_detected = delta.sms_activity_detected
+        private_phone_redacted = delta.private_phone_redacted
+        stored_player_action = delta.stored_player_action
+        suppress_recent_context = delta.suppress_recent_context
+        auto_forced_memory_search = delta.auto_forced_memory_search
+        empty_response_repair_count = delta.empty_response_repair_count
+        anti_echo_retry_count = delta.anti_echo_retry_count
+        action = preflight.action
+
+        # Ensure minimum state update contract
+        state_update = cls._ensure_minimum_state_update_contract(
+            campaign_state,
+            state_update,
+        )
+        state_update, calendar_update = cls._extract_calendar_update_from_state_update(
+            state_update,
+            calendar_update,
+        )
+
+        # Turn visibility normalization
+        turn_visibility = cls._normalize_turn_visibility(
+            campaign,
+            player,
+            turn_visibility,
+            is_private_context=(getattr(ctx, "guild", None) is None),
+        )
+        turn_visibility = cls._promote_player_npc_slugs(
+            turn_visibility, campaign.id,
+        )
+
+        # Private context handling
+        private_context_candidate = cls._derive_private_context_candidate(
+            campaign,
+            player,
+            player_state,
+            action,
+        )
+        if private_context_candidate is not None:
+            turn_visibility = cls._apply_private_context_candidate(
+                turn_visibility,
+                private_context_candidate,
+            )
+
+        if sms_activity_detected or private_phone_redacted:
+            turn_visibility = cls._force_private_visibility_for_phone_activity(
+                turn_visibility,
+                actor_slug=str(
+                    turn_visibility.get("actor_player_slug")
+                    or cls._player_slug_key(
+                        player_state.get("character_name")
+                    )
+                    or ""
+                ).strip(),
+                actor_user_id=ctx.author.id,
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "private_phone_redacted",
+            )
+
+        cls._persist_private_context_state(
+            player_state,
+            turn_visibility,
+            action,
+            private_context_candidate,
+        )
+
+        # Room state rescue and split
+        state_update, player_state_update = cls._rescue_misplaced_room_state(
+            state_update, player_state_update
+        )
+        state_update, player_state_update = cls._split_room_state(
+            state_update, player_state_update
+        )
+
+        # Apply state update to campaign_state
+        pre_turn_game_time = preflight.pre_turn_game_time
+        campaign_state = cls._apply_state_update(
+            campaign_state, state_update
+        )
+        campaign_state = cls._ensure_game_time_progress(
+            campaign_state,
+            pre_turn_game_time,
+            action_text=action,
+            narration_text=raw_narration,
+        )
+
+        # Forced planning payload application
+        if isinstance(forced_planning_payload, dict):
+            _planning_tool_name = str(
+                forced_planning_payload.get("tool_call") or ""
+            ).strip()
+            if _planning_tool_name == "plot_plan":
+                _plan_result = cls._apply_plot_plan_tool(
+                    campaign_state,
+                    forced_planning_payload,
+                    current_turn=current_turn_hint,
+                )
+                _zork_log(
+                    "FORCED PLOT PLAN APPLIED",
+                    json.dumps(_plan_result, ensure_ascii=True),
+                )
+                cls._increment_auto_fix_counter(
+                    campaign_state, "forced_planning_tool"
+                )
+            elif _planning_tool_name == "chapter_plan":
+                _plan_result = cls._apply_chapter_plan_tool(
+                    campaign_state,
+                    forced_planning_payload,
+                    current_turn=current_turn_hint,
+                    on_rails=bool(campaign_state.get("on_rails", False)),
+                )
+                _zork_log(
+                    "FORCED CHAPTER PLAN APPLIED",
+                    json.dumps(_plan_result, ensure_ascii=True),
+                )
+                cls._increment_auto_fix_counter(
+                    campaign_state, "forced_planning_tool"
+                )
+            elif _planning_tool_name == "consequence_log":
+                _cons_result = cls._apply_consequence_log_tool(
+                    campaign_state,
+                    forced_planning_payload,
+                    current_turn=current_turn_hint,
+                )
+                _zork_log(
+                    "FORCED CONSEQUENCE LOG APPLIED",
+                    json.dumps(_cons_result, ensure_ascii=True),
+                )
+                cls._increment_auto_fix_counter(
+                    campaign_state, "forced_planning_tool"
+                )
+
+        # Auto-fix counter increments
+        if auto_forced_memory_search:
+            cls._increment_auto_fix_counter(
+                campaign_state, "forced_memory_search"
+            )
+        if empty_response_repair_count > 0:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "empty_response_repair_retry",
+                amount=empty_response_repair_count,
+            )
+        if anti_echo_retry_count > 0:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "anti_echo_retry",
+                amount=anti_echo_retry_count,
+            )
+
+        campaign_state = cls._scrub_inventory_from_state(campaign_state)
+        campaign.state_json = cls._dump_json(campaign_state)
+
+        # Chapter/scene advancement
+        story_outline = campaign_state.get("story_outline")
+        if isinstance(story_outline, dict):
+            chapters = story_outline.get("chapters", [])
+            old_ch = cls._coerce_non_negative_int(
+                campaign_state.get("current_chapter", 0), default=0
+            )
+            if isinstance(chapters, list) and chapters:
+                old_ch = min(old_ch, len(chapters) - 1)
+
+            new_ch_raw = state_update.get("current_chapter")
+            new_sc_raw = state_update.get("current_scene")
+
+            new_ch = None
+            if new_ch_raw is not None:
+                new_ch = cls._coerce_non_negative_int(new_ch_raw, default=old_ch)
+                if isinstance(chapters, list) and chapters:
+                    new_ch = min(new_ch, len(chapters) - 1)
+
+            scene_ch_idx = new_ch if new_ch is not None else old_ch
+            new_sc = None
+            if new_sc_raw is not None:
+                new_sc = cls._coerce_non_negative_int(new_sc_raw, default=0)
+                if isinstance(chapters, list) and 0 <= scene_ch_idx < len(chapters):
+                    scene_list = chapters[scene_ch_idx].get("scenes", [])
+                    if isinstance(scene_list, list) and scene_list:
+                        new_sc = min(new_sc, len(scene_list) - 1)
+                    else:
+                        new_sc = 0
+
+            if new_ch is not None and new_ch != old_ch:
+                if isinstance(chapters, list) and 0 <= old_ch < len(chapters):
+                    chapters[old_ch]["completed"] = True
+                campaign_state["current_chapter"] = new_ch
+                if new_sc is None:
+                    campaign_state["current_scene"] = 0
+
+            if new_sc is not None:
+                campaign_state["current_scene"] = new_sc
+            state_update.pop("current_chapter", None)
+            state_update.pop("current_scene", None)
+            campaign.state_json = cls._dump_json(campaign_state)
+
+        story_progressed = cls._apply_story_progression_hint(
+            campaign_state,
+            story_progression,
+            state_update if isinstance(state_update, dict) else {},
+        )
+        if story_progressed:
+            _zork_log(
+                "STORY PROGRESSION APPLIED",
+                json.dumps(
+                    {
+                        "current_chapter": campaign_state.get("current_chapter"),
+                        "current_scene": campaign_state.get("current_scene"),
+                        "story_progression": story_progression,
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state, "story_progression_hint"
+            )
+
+        auto_story_advanced = False
+        if not story_progressed:
+            auto_story_advanced = cls._auto_advance_on_rails_story_context(
+                campaign_state,
+                action_text=action,
+                narration=raw_narration,
+                summary_update=summary_update,
+                state_update=state_update if isinstance(state_update, dict) else {},
+                player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
+                character_updates=character_updates if isinstance(character_updates, dict) else {},
+                calendar_update=calendar_update,
+            )
+        if auto_story_advanced:
+            _zork_log(
+                "AUTO STORY ADVANCE",
+                json.dumps(
+                    {
+                        "current_chapter": campaign_state.get("current_chapter"),
+                        "current_scene": campaign_state.get("current_scene"),
+                        "action": str(action or "")[:160],
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state, "auto_story_advance"
+            )
+
+        # Character updates application
+        _on_rails = bool(campaign_state.get("on_rails", False))
+        if character_updates and isinstance(character_updates, dict):
+            existing_chars = cls.get_campaign_characters(campaign)
+            _pre_slugs = set(existing_chars.keys())
+            existing_chars = cls._apply_character_updates(
+                existing_chars,
+                character_updates,
+                on_rails=_on_rails,
+                campaign_id=campaign.id,
+            )
+            campaign.characters_json = cls._dump_json(existing_chars)
+            _zork_log(
+                f"CHARACTER UPDATES campaign={campaign.id}",
+                json.dumps(character_updates, indent=2),
+            )
+            # Auto-generate portraits for new characters with appearance.
+            for _slug in character_updates:
+                if _slug not in _pre_slugs and _slug in existing_chars:
+                    _char = existing_chars[_slug]
+                    _appearance = str(_char.get("appearance") or "").strip()
+                    if _appearance and not _char.get("image_url"):
+                        _char_name = _char.get("name", _slug)
+                        asyncio.ensure_future(
+                            cls._enqueue_character_portrait(
+                                ctx, campaign, _slug, _char_name, _appearance,
+                            )
+                        )
+
+        # Calendar update application
+        if calendar_update and isinstance(calendar_update, dict):
+            campaign_state = cls._apply_calendar_update(
+                campaign_state,
+                calendar_update,
+                resolution_context=(
+                    f"{action}\n{raw_narration}\n{summary_update or ''}"
+                ),
+                actor_user_id=ctx.author.id,
+            )
+            campaign.state_json = cls._dump_json(campaign_state)
+
+        _turn_is_public = (
+            str((turn_visibility or {}).get("scope") or "").strip().lower()
+            in {"public", "local"}
+        )
+
+        # Player state update application
+        player_state = cls.get_player_state(player)
+        _pre_update_inv = {
+            e["name"].lower(): e["name"]
+            for e in cls._get_inventory_rich(player_state)
+        }
+        player_state_update = cls._sanitize_player_state_update(
+            player_state,
+            player_state_update,
+            action_text=action,
+            narration_text=raw_narration,
+        )
+        player_state = cls._apply_state_update(
+            player_state, player_state_update
+        )
+        player_state_update = cls._sync_game_time_to_player_state(
+            state_update, player_state_update
+        )
+        turn_visibility = cls._sanitize_turn_awareness_for_scene(
+            campaign,
+            player_state,
+            turn_visibility,
+        )
+        turn_visibility["location_key"] = (
+            cls._room_key_from_player_state(player_state).strip() or None
+        )
+        player.state_json = cls._dump_json(player_state)
+
+        # Location syncing
+        cls._sync_main_party_room_state(
+            campaign.id,
+            player.user_id,
+            player_state,
+        )
+        _active_char_sync_count = cls._sync_active_player_character_location(
+            campaign,
+            player_state=player_state,
+        )
+        _state_loc_sync_count = cls._auto_sync_companion_locations(
+            campaign_state,
+            player_state=player_state,
+            narration_text=raw_narration,
+        )
+        _char_loc_sync_count = cls._auto_sync_character_locations(
+            campaign,
+            player_state=player_state,
+            narration_text=raw_narration,
+        )
+        _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
+            campaign, state_update
+        )
+        if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_active_character",
+                amount=_active_char_sync_count,
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_state_entities",
+                amount=_state_loc_sync_count,
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_world_characters",
+                amount=_char_loc_sync_count,
+            )
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_roster_overlay",
+                amount=_roster_overlay_sync_count,
+            )
+            _zork_log(
+                f"LOCATION AUTO-SYNC campaign={campaign.id}",
+                (
+                    f"active_player_character={_active_char_sync_count} "
+                    f"state_entities={_state_loc_sync_count} "
+                    f"world_characters={_char_loc_sync_count} "
+                    f"roster_overlay={_roster_overlay_sync_count}"
+                ),
+            )
+        _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
+            campaign,
+            campaign_state,
+            skip_user_id=player.user_id,
+        )
+        if _player_entity_sync_count:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_other_players",
+                amount=_player_entity_sync_count,
+            )
+            _zork_log(
+                f"PLAYER ENTITY AUTO-SYNC campaign={campaign.id}",
+                f"other_players={_player_entity_sync_count}",
+            )
+        campaign.state_json = cls._dump_json(campaign_state)
+
+        # --- give_item processing ---
+        if give_item is None:
+            _cur_inv_names = {
+                e["name"].lower()
+                for e in cls._get_inventory_rich(player_state)
+            }
+            _removed = [
+                _pre_update_inv[k]
+                for k in _pre_update_inv
+                if k not in _cur_inv_names
+            ]
+            if _removed:
+                _give_re = re.compile(
+                    r"\b(?:give|hand|pass|toss|offer|slide)\b",
+                    re.IGNORECASE,
+                )
+                _refuse_re = re.compile(
+                    r"\b(?:doesn'?t take|does not take|refuse[sd]?|reject[sd]?|decline[sd]?"
+                    r"|push(?:es|ed)? (?:it |the \w+ )?(?:back|away)"
+                    r"|won'?t (?:take|accept)|shake[sd]? (?:his|her|their) head"
+                    r"|hands? it back|gives? it back|returns? (?:it|the))\b",
+                    re.IGNORECASE,
+                )
+                if (_give_re.search(action) or _give_re.search(raw_narration or "")) and not _refuse_re.search(raw_narration or ""):
+                    _mention_re = re.compile(r"<@!?(\d+)>")
+                    for _m in _mention_re.finditer(raw_narration or ""):
+                        _target_uid = int(_m.group(1))
+                        if _target_uid != player.user_id:
+                            _inferred_item = _removed[0] if len(_removed) == 1 else None
+                            if _inferred_item is None:
+                                _action_lower = action.lower()
+                                for _ri in _removed:
+                                    if _ri.lower() in _action_lower:
+                                        _inferred_item = _ri
+                                        break
+                            if _inferred_item:
+                                give_item = {
+                                    "item": _inferred_item,
+                                    "to_discord_mention": f"<@{_target_uid}>",
+                                }
+                                logger.info(
+                                    "give_item inferred from action/narration: %s -> user %s",
+                                    _inferred_item, _target_uid,
+                                )
+                                break
+
+        if isinstance(give_item, dict):
+            gi_item_name = str(give_item.get("item") or "").strip()
+            gi_mention = str(give_item.get("to_discord_mention") or "").strip()
+            gi_target_uid = None
+            if gi_mention.startswith("<@") and gi_mention.endswith(">"):
+                try:
+                    gi_target_uid = int(gi_mention.strip("<@!>"))
+                except (ValueError, TypeError):
+                    pass
+            if gi_item_name and gi_target_uid and gi_target_uid != player.user_id:
+                giver_inv = cls._get_inventory_rich(player_state)
+                giver_has_now = any(
+                    e["name"].lower() == gi_item_name.lower() for e in giver_inv
+                )
+                giver_had_before = gi_item_name.lower() in _pre_update_inv
+                if giver_has_now or giver_had_before:
+                    target_player = ZorkPlayer.query.filter_by(
+                        campaign_id=campaign.id, user_id=gi_target_uid
+                    ).first()
+                    if target_player is not None:
+                        if giver_has_now:
+                            player_state["inventory"] = cls._apply_inventory_delta(
+                                giver_inv, [], [gi_item_name], origin_hint=""
+                            )
+                            player.state_json = cls._dump_json(player_state)
+                        target_state = cls.get_player_state(target_player)
+                        target_inv = cls._get_inventory_rich(target_state)
+                        received_origin = f"Received from <@{player.user_id}>"
+                        target_state["inventory"] = cls._apply_inventory_delta(
+                            target_inv, [gi_item_name], [], origin_hint=received_origin
+                        )
+                        target_player.state_json = cls._dump_json(target_state)
+                        target_player.updated = db.func.now()
+                        logger.info(
+                            "give_item: '%s' transferred from user %s to user %s (campaign %s)",
+                            gi_item_name, player.user_id, gi_target_uid, campaign.id,
+                        )
+                    else:
+                        logger.warning(
+                            "give_item: target user %s not found in campaign %s",
+                            gi_target_uid, campaign.id,
+                        )
+                else:
+                    logger.warning(
+                        "give_item: item '%s' not in giver's inventory", gi_item_name
+                    )
+
+        # XP award
+        if isinstance(xp_awarded, int) and xp_awarded > 0:
+            player.xp += xp_awarded
+
+        # Scene output normalization
+        scene_output = cls._normalize_scene_output(
+            campaign,
+            scene_output_raw,
+            fallback_narration=narration,
+            turn_visibility=turn_visibility,
+            fallback_location_key=cls._room_key_from_player_state(player_state),
+            actor_user_id=ctx.author.id,
+            actor_player_slug=str(
+                turn_visibility.get("actor_player_slug") or ""
+            ).strip(),
+        )
+        if sms_activity_detected or private_phone_redacted:
+            scene_output = cls._scrub_scene_output_npc_awareness(
+                scene_output
+            )
+        rendered_scene_output = cls._scene_output_rendered_text(
+            scene_output
+        )
+        if rendered_scene_output:
+            narration = rendered_scene_output
+            raw_narration = rendered_scene_output
+        if scene_output:
+            _zork_log(
+                f"SCENE OUTPUT campaign={campaign.id}",
+                json.dumps(scene_output, indent=2, ensure_ascii=False),
+            )
+
+        # Summary update
+        if summary_update:
+            summary_update = summary_update.strip()
+            summary_update = cls._strip_inventory_mentions(summary_update)
+            if not _turn_is_public:
+                _zork_log(
+                    f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
+                    summary_update,
+                )
+            elif not cls._scene_output_is_summary_public_safe(scene_output):
+                _zork_log(
+                    f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
+                    summary_update,
+                )
+            elif cls._should_keep_summary_update(
+                summary_update,
+                state_update=state_update,
+                player_state_update=player_state_update,
+                character_updates=character_updates,
+                calendar_update=calendar_update,
+            ):
+                campaign.summary = cls._append_summary(
+                    campaign.summary, summary_update
+                )
+            else:
+                _zork_log(
+                    f"SUMMARY FILTERED campaign={campaign.id}",
+                    summary_update,
+                )
+
+        clean_narration = cls._strip_prompt_artifacts(
+            cls._strip_ephemeral_context_lines(
+                cls._strip_narration_footer(narration)
+            )
+        )
+        persisted_narration = clean_narration
+        display_narration = clean_narration
+
+        post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+        calendar_event_notifications = cls._calendar_collect_fired_events(
+            campaign.id,
+            campaign_state,
+            from_time=pre_turn_game_time,
+            to_time=post_turn_game_time,
+        )
+        sms_notice = cls._sms_unread_hourly_notification(
+            campaign_state,
+            actor_id=ctx.author.id,
+            player_state=player_state,
+            game_time=post_turn_game_time,
+        )
+        if sms_notice:
+            display_narration = f"{display_narration}\n\n{sms_notice}"
+            cls._increment_auto_fix_counter(
+                campaign_state, "sms_unread_notice"
+            )
+            sms_summary = cls._sms_unread_summary_for_player(
+                campaign_state,
+                actor_id=ctx.author.id,
+                player_state=player_state,
+            )
+            thread_markers = (
+                sms_summary.get("thread_markers")
+                if isinstance(sms_summary, dict)
+                else {}
+            )
+            if isinstance(thread_markers, dict) and thread_markers:
+                read_changed = cls._sms_mark_threads_read(
+                    campaign_state,
+                    actor_id=ctx.author.id,
+                    player_state=player_state,
+                    thread_markers=thread_markers,
+                )
+                if read_changed:
+                    cls._increment_auto_fix_counter(
+                        campaign_state, "sms_auto_mark_read"
+                    )
+
+        # Timer scheduling
+        timer_scheduled_delay = delta.timer_scheduled_delay
+        timer_scheduled_event = delta.timer_scheduled_event
+        timer_scheduled_interruptible = delta.timer_scheduled_interruptible
+        timer_scheduled_interrupt_scope = delta.timer_scheduled_interrupt_scope
+
+        if timer_scheduled_delay is not None:
+            cls.cancel_pending_timer(campaign.id)
+            cls._schedule_timer(
+                campaign.id,
+                ctx.channel.id,
+                timer_scheduled_delay,
+                timer_scheduled_event or "Something happens",
+                interruptible=timer_scheduled_interruptible,
+                interrupt_action=delta.timer_scheduled_interrupt_action,
+                interrupt_scope=timer_scheduled_interrupt_scope,
+                interrupt_user_id=delta.timer_scheduled_interrupt_user_id or ctx.author.id,
+            )
+            expiry_ts = int(time.time()) + timer_scheduled_delay
+            event_hint = timer_scheduled_event or "Something happens"
+            if timer_scheduled_interruptible:
+                if timer_scheduled_interrupt_scope == "local":
+                    interrupt_hint = "acting player can prevent"
+                else:
+                    interrupt_hint = "act to prevent!"
+            else:
+                interrupt_hint = "unavoidable"
+            display_narration = (
+                f"{display_narration}\n\n"
+                f"\u23f0 <t:{expiry_ts}:R>: {event_hint} ({interrupt_hint})"
+            )
+
+        # Time jump notifications
+        time_jump_notification = None
+        if _turn_is_public and getattr(ctx, "guild", None) is not None:
+            delta_minutes = max(
+                0,
+                cls._game_time_to_total_minutes(post_turn_game_time)
+                - cls._game_time_to_total_minutes(pre_turn_game_time),
+            )
+            if delta_minutes >= cls.PRIVATE_DM_TIME_JUMP_NOTIFY_MINUTES:
+                recipients = cls._recent_private_dm_notification_targets(
+                    campaign.id,
+                    exclude_user_id=ctx.author.id,
+                )
+                if recipients:
+                    time_jump_notification = {
+                        "campaign_name": campaign.name,
+                        "recipient_user_ids": recipients,
+                        "from_time": pre_turn_game_time,
+                        "to_time": post_turn_game_time,
+                        "delta_minutes": delta_minutes,
+                        "event_summary": cls._brief_event_summary(
+                            action_text=action,
+                            summary_update=summary_update,
+                            narration_text=raw_narration,
+                        ),
+                    }
+
+        campaign.last_narration = persisted_narration
+        campaign.updated = db.func.now()
+        player.updated = db.func.now()
+        cls._set_turn_ephemeral_notices(
+            campaign.id,
+            ctx.author.id,
+            ephemeral_notices,
+        )
+
+        # Turn persistence (ZorkTurn rows)
+        player_turn_meta = cls._dump_json(
+            {
+                "game_time": pre_turn_game_time,
+                "visibility": turn_visibility,
+                "location_key": cls._room_key_from_player_state(player_state),
+                "context_key": turn_visibility.get("context_key"),
+                "suppress_context": suppress_recent_context,
+            }
+        )
+        narrator_turn_meta_payload = {
+            "game_time": post_turn_game_time,
+            "visibility": turn_visibility,
+            "actor_player_slug": cls._player_slug_key(
+                player_state.get("character_name")
+            ),
+            "location_key": cls._room_key_from_player_state(player_state),
+            "context_key": turn_visibility.get("context_key"),
+            "suppress_context": suppress_recent_context,
+        }
+        if reasoning:
+            narrator_turn_meta_payload["reasoning"] = reasoning
+        if summary_update:
+            narrator_turn_meta_payload["summary_update"] = summary_update
+        if scene_output:
+            narrator_turn_meta_payload["scene_output"] = scene_output
+            rendered_scene_text = cls._scene_output_rendered_text(
+                scene_output
+            )
+            if rendered_scene_text:
+                narrator_turn_meta_payload["scene_output_rendered"] = (
+                    rendered_scene_text
+                )
+            narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                turn_id=None,
+                game_time=post_turn_game_time,
+                scene_output=scene_output,
+                turn_visibility=turn_visibility,
+            )
+        narrator_turn_meta = cls._dump_json(narrator_turn_meta_payload)
+
+        # Don't store OOC meta-messages in turn history.
+        _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
+        player_turn = None
+        if not _is_ooc and stored_player_action:
+            player_turn = ZorkTurn(
+                campaign_id=campaign.id,
+                user_id=ctx.author.id,
+                kind="player",
+                content=stored_player_action,
+                channel_id=ctx.channel.id,
+                meta_json=player_turn_meta,
+            )
+            db.session.add(player_turn)
+        narrator_turn = ZorkTurn(
+            campaign_id=campaign.id,
+            user_id=ctx.author.id,
+            kind="narrator",
+            content=persisted_narration,
+            channel_id=ctx.channel.id,
+            meta_json=narrator_turn_meta,
+        )
+        db.session.add(narrator_turn)
+        db.session.flush()
+        if scene_output:
+            narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                turn_id=narrator_turn.id,
+                game_time=post_turn_game_time,
+                scene_output=scene_output,
+                turn_visibility=turn_visibility,
+            )
+            narrator_turn.meta_json = cls._dump_json(
+                narrator_turn_meta_payload
+            )
+        if player_turn is not None:
+            cls._record_turn_game_time(
+                campaign_state,
+                player_turn.id,
+                pre_turn_game_time,
+            )
+        cls._record_turn_game_time(
+            campaign_state,
+            narrator_turn.id,
+            post_turn_game_time,
+        )
+
+        # State version increment
+        campaign_state["_state_version"] = campaign_state.get("_state_version", 0) + 1
+        campaign.state_json = cls._dump_json(campaign_state)
+        db.session.commit()
+
+        cls._create_snapshot(narrator_turn, campaign)
+
+        # Fire-and-forget: embed the narrator turn for memory search.
+        try:
+            if not suppress_recent_context:
+                ZorkMemory.store_turn_embedding(
+                    narrator_turn.id,
+                    campaign.id,
+                    ctx.author.id,
+                    "narrator",
+                    persisted_narration,
+                    metadata=cls._turn_embedding_metadata(
+                        visibility=turn_visibility,
+                        actor_player_slug=player_state.get("character_name"),
+                        location_key=cls._room_key_from_player_state(player_state),
+                        channel_id=ctx.channel.id,
+                    ),
+                )
+        except Exception:
+            logger.debug(
+                "Zork memory embedding skipped for turn %s",
+                narrator_turn.id,
+                exc_info=True,
+            )
+
+        # Scene image enqueue
+        if isinstance(scene_image_prompt, str):
+            refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(
+                campaign, player, player_state
+            )
+            cleaned_scene_prompt = cls._enrich_scene_image_prompt(
+                scene_image_prompt,
+                player_state=player_state,
+                party_snapshot=refreshed_party_snapshot,
+            )
+            if cleaned_scene_prompt:
+                await cls._enqueue_scene_image(
+                    ctx,
+                    cleaned_scene_prompt,
+                    campaign_id=campaign.id,
+                    room_key=cls._room_key_from_player_state(player_state),
+                )
+
+        # Time jump notifications
+        if isinstance(time_jump_notification, dict):
+            asyncio.ensure_future(
+                cls._send_private_dm_time_jump_notifications(
+                    campaign_name=str(
+                        time_jump_notification.get("campaign_name") or campaign.name
+                    ),
+                    recipient_user_ids=list(
+                        time_jump_notification.get("recipient_user_ids") or []
+                    ),
+                    from_time=dict(
+                        time_jump_notification.get("from_time") or {}
+                    ),
+                    to_time=dict(
+                        time_jump_notification.get("to_time") or {}
+                    ),
+                    delta_minutes=int(
+                        time_jump_notification.get("delta_minutes") or 0
+                    ),
+                    event_summary=str(
+                        time_jump_notification.get("event_summary")
+                        or "Shared time advanced."
+                    ),
+                )
+            )
+
+        # Calendar event notifications
+        if calendar_event_notifications:
+            asyncio.ensure_future(
+                cls._send_calendar_event_notifications(
+                    campaign_id=campaign.id,
+                    campaign_name=campaign.name,
+                    notifications=calendar_event_notifications,
+                    preferred_channel_id=(
+                        int(ctx.channel.id)
+                        if getattr(ctx, "guild", None) is not None
+                        else None
+                    ),
+                )
+            )
+
+        return display_narration
+
+    @classmethod
+    async def _play_action_llm(
+        cls,
+        preflight: "PreflightContext",
+        campaign,
+        campaign_state: Dict[str, Any],
+    ) -> "TurnDelta":
+        """
+        Phase 2: LLM execution. Runs WITHOUT holding any lock.
+
+        Handles the tool loop, response parsing, and validation retries.
+        Returns a TurnDelta with all extracted data.
+
+        For deferred tools (plot_plan, chapter_plan, consequence_log, sms_write,
+        sms_read), changes are applied to the local campaign_state dict and
+        recorded in delta.deferred_tool_writes for Phase 3 to commit.
+
+        For timers (set_timer, sms_schedule), params are recorded in
+        delta.timer_scheduled_* fields for Phase 3 to schedule.
+        """
+        # --- Unpack preflight context ---
+        system_prompt = preflight.system_prompt
+        user_prompt = preflight.user_prompt
+        gpt = preflight.gpt
+        action = preflight.action
+        turns = preflight.turns
+        party_snapshot = preflight.party_snapshot
+        base_user_prompt = preflight.base_user_prompt
+        turn_prompt_tail = preflight.turn_prompt_tail
+        turn_tail_extra_lines = list(preflight.turn_tail_extra_lines)
+        prompt_difficulty = preflight.prompt_difficulty
+        current_prompt_stage = preflight.current_prompt_stage
+        first_payload = preflight.first_payload
+        memory_lookup_enabled = preflight.memory_lookup_enabled
+        is_new_player = preflight.is_new_player
+        turn_attachment_context = preflight.turn_attachment_context
+        viewer_slug = preflight.viewer_slug
+        viewer_location_key = preflight.viewer_location_key
+        viewer_private_context_key = preflight.viewer_private_context_key
+        viewer_private_context = preflight.viewer_private_context
+        private_context_candidate = preflight.private_context_candidate
+        sms_activity_detected = preflight.sms_activity_detected
+        is_dm = preflight.is_dm
+        channel_id = preflight.channel_id
+        on_rails = preflight.on_rails
+        is_timed_events_enabled = preflight.is_timed_events_enabled
+        state_version = preflight.state_version
+        player_state = dict(preflight.player_state)
+        user_id = preflight.user_id
+
+        # --- Initialize TurnDelta ---
+        delta = TurnDelta()
+        delta.state_version_at_read = state_version
+        delta.sms_activity_detected = sms_activity_detected
+
+        # --- Local tracking variables ---
+        auto_forced_memory_search = preflight.auto_forced_memory_search
+        recent_turns_loaded = False
+        memory_recall_help_emitted = False
+        empty_response_repair_count = 0
+        anti_echo_retry_count = 0
+        used_tool_names: set = set()
+        seen_tool_signatures: set = set()
+        forced_planning_payload = None
+
+        # Support chained tool calls
+        tool_prompt_blocks: List[str] = []
+        tool_augmented_prompt = user_prompt
+
+        def _rebuild_tool_prompt() -> None:
+            nonlocal tool_augmented_prompt
+            tool_augmented_prompt = cls._recompose_prompt_with_tail(
+                base_user_prompt,
+                turn_prompt_tail,
+                *tool_prompt_blocks,
+            )
+
+        def _append_tool_prompt(*blocks: object) -> None:
+            nonlocal tool_augmented_prompt
+            for block in blocks:
+                text = str(block or "").strip()
+                if text:
+                    tool_prompt_blocks.append(text)
+            tool_prompt_blocks[:] = [
+                block
+                for block in tool_prompt_blocks
+                if not str(block or "").strip().startswith("TOOL_BUDGET:")
+            ]
+            if current_prompt_stage != cls.PROMPT_STAGE_FINAL:
+                tool_prompt_blocks.append(_tool_budget_note())
+            _rebuild_tool_prompt()
+            _zork_log(
+                "TURN AUGMENTED PROMPT",
+                f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{tool_augmented_prompt}",
+            )
+
+        def _tool_budget_note() -> str:
+            remaining = max(0, max_tool_chain_steps - tool_chain_steps)
+            if remaining <= 0:
+                return f"TOOL_BUDGET: 0 call(s) remaining. Return final JSON now (no tool_call)."
+            if remaining == 1:
+                if current_prompt_stage == cls.PROMPT_STAGE_FINAL:
+                    return f"TOOL_BUDGET: 1 call(s) remaining. Return final JSON now (no tool_call)."
+                return f"TOOL_BUDGET: 1 call(s) remaining. Return ready_to_write or final JSON now."
+            return f"TOOL_BUDGET: {remaining} call(s) remaining."
+
+        def _switch_prompt_stage(next_stage: str) -> None:
+            nonlocal current_prompt_stage
+            nonlocal system_prompt
+            nonlocal user_prompt
+            nonlocal base_user_prompt
+            nonlocal turn_prompt_tail
+            if next_stage == current_prompt_stage:
+                return
+            current_prompt_stage = next_stage
+            system_prompt, user_prompt = cls.build_prompt(
+                campaign,
+                SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+                action,
+                turns,
+                party_snapshot=party_snapshot,
+                is_new_player=is_new_player,
+                turn_attachment_context=turn_attachment_context,
+                turn_visibility_default="public",
+                tail_extra_lines=turn_tail_extra_lines,
+                prompt_stage=current_prompt_stage,
+                channel_id=channel_id,
+            )
+            base_user_prompt = user_prompt
+            turn_prompt_tail = cls._build_turn_prompt_tail(
+                SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+                player_state,
+                action,
+                turn_attachment_context,
+                cls._turn_stage_note(
+                    prompt_difficulty,
+                    current_prompt_stage,
+                    campaign=campaign,
+                    channel_id=channel_id,
+                ),
+                extra_lines=turn_tail_extra_lines,
+            )
+            _rebuild_tool_prompt()
+
+        tool_chain_steps = 0
+        max_tool_chain_steps = 6
+
+        # Auto-forced memory search logic
+        if (
+            current_prompt_stage != cls.PROMPT_STAGE_BOOTSTRAP
+            and not (first_payload and cls._is_tool_call(first_payload))
+            and memory_lookup_enabled
+            and cls._should_force_auto_memory_search(action)
+        ):
+            forced_queries = cls._derive_auto_memory_queries(
+                action,
+                player_state,
+                party_snapshot,
+                limit=4,
+            )
+            if forced_queries:
+                first_payload = {
+                    "tool_call": "memory_search",
+                    "queries": forced_queries,
+                }
+                auto_forced_memory_search = True
+                _zork_log(
+                    "FORCED MEMORY SEARCH",
+                    f"queries={forced_queries}",
+                )
+
+        # --- Main tool loop ---
+        response = ""
+        while (
+            first_payload
+            and cls._is_tool_call(first_payload)
+            and tool_chain_steps < max_tool_chain_steps
+        ):
+            tool_chain_steps += 1
+            tool_name = str(first_payload.get("tool_call") or "").strip()
+            if tool_name:
+                used_tool_names.add(tool_name)
+            tool_signature = cls._tool_call_signature(first_payload)
+            if tool_signature and tool_signature in seen_tool_signatures:
+                _zork_log(
+                    "TOOL DEDUP SKIP",
+                    f"tool={tool_name!r} payload={tool_signature}",
+                )
+                tool_result_block = (
+                    "TOOL_DEDUP_RESULT: duplicate tool_call payload already executed this turn. "
+                    "Skipped duplicate execution.\n"
+                    "Do NOT repeat identical tool calls. Use a distinct tool/payload or return final JSON (no tool_call)."
+                )
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("TOOL DEDUP AUGMENTED RESPONSE", response)
+                json_text_tc = cls._extract_json(response)
+                if not json_text_tc:
+                    first_payload = None
+                    break
+                try:
+                    first_payload = cls._parse_json_lenient(json_text_tc)
+                except Exception:
+                    first_payload = None
+                    break
+                continue
+            if tool_signature:
+                seen_tool_signatures.add(tool_signature)
+
+            if (
+                not memory_lookup_enabled
+                and tool_name
+                in {
+                    "memory_search",
+                    "memory_terms",
+                    "memory_turn",
+                    "memory_store",
+                }
+            ):
+                tool_result_block = (
+                    "MEMORY_TOOLS_DISABLED: Long-term memory lookup is currently disabled for this turn "
+                    "(early campaign context is still within prompt budget). "
+                    "Do NOT call memory_* tools; continue with direct context or use non-memory tools."
+                )
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("MEMORY TOOL DISABLED AUGMENTED RESPONSE", response)
+                json_text_tc = cls._extract_json(response)
+                if not json_text_tc:
+                    first_payload = None
+                    break
+                try:
+                    first_payload = cls._parse_json_lenient(json_text_tc)
+                except Exception:
+                    first_payload = None
+                    break
+                continue
+
+            if tool_name == "recent_turns":
+                recent_turns_loaded = True
+                raw_player_slugs = first_payload.get("player_slugs")
+                if isinstance(raw_player_slugs, list):
+                    requested_player_slugs = {
+                        cls._player_slug_key(item)
+                        for item in raw_player_slugs
+                        if cls._player_slug_key(item)
+                    }
+                elif isinstance(raw_player_slugs, str):
+                    requested_player_slugs = {
+                        cls._player_slug_key(raw_player_slugs)
+                    } if cls._player_slug_key(raw_player_slugs) else set()
+                else:
+                    requested_player_slugs = set()
+                raw_npc_slugs = first_payload.get("npc_slugs")
+                if isinstance(raw_npc_slugs, list):
+                    requested_npc_slugs = {
+                        str(item or "").strip()
+                        for item in raw_npc_slugs
+                        if str(item or "").strip()
+                    }
+                elif isinstance(raw_npc_slugs, str):
+                    requested_npc_slugs = {
+                        str(raw_npc_slugs).strip()
+                    } if str(raw_npc_slugs).strip() else set()
+                else:
+                    requested_npc_slugs = set()
+                try:
+                    recent_limit = max(
+                        1,
+                        min(
+                            48,
+                            int(first_payload.get("limit") or cls.MAX_RECENT_TURNS),
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    recent_limit = cls.MAX_RECENT_TURNS
+                recent_turns = cls.get_recent_turns(
+                    campaign.id,
+                    limit=recent_limit,
+                )
+                recent_text = cls._recent_turns_text_for_viewer(
+                    campaign,
+                    recent_turns,
+                    viewer_user_id=user_id,
+                    viewer_slug=viewer_slug,
+                    viewer_location_key=viewer_location_key,
+                    viewer_private_context_key=viewer_private_context_key,
+                    requested_player_slugs=requested_player_slugs,
+                    requested_npc_slugs=requested_npc_slugs,
+                )
+                recent_location_hint = cls._recent_turns_location_hint(
+                    recent_turns,
+                    viewer_user_id=user_id,
+                    viewer_slug=viewer_slug,
+                    viewer_location_key=viewer_location_key,
+                    viewer_private_context_key=viewer_private_context_key,
+                )
+                rt_meta = cls._compute_recent_turns_metadata(
+                    recent_turns,
+                    viewer_user_id=user_id,
+                    viewer_slug=viewer_slug,
+                )
+                rt_note_lines = [
+                    "RECENT_TURNS_NOTE: Immediate visible continuity for the acting player.",
+                    "Local continuity is room-scoped; older local turns from other rooms may be missing.",
+                ]
+                rt_note_lines.append(
+                    f"Loaded {rt_meta['turn_count']} turns spanning ~{rt_meta['time_span_minutes']} real minutes."
+                )
+                if rt_meta["active_speakers"]:
+                    rt_note_lines.append(
+                        f"Active speakers: {', '.join(rt_meta['active_speakers'])}."
+                    )
+                if rt_meta["active_listeners"]:
+                    listener_strs = [
+                        f"{name}({count})" for name, count in rt_meta["active_listeners"]
+                    ]
+                    rt_note_lines.append(
+                        f"Frequent listeners: {', '.join(listener_strs)}."
+                    )
+                if rt_meta["private_turn_count"]:
+                    rt_note_lines.append(
+                        f"{rt_meta['private_turn_count']} turn(s) contain private/limited exchanges."
+                    )
+                if rt_meta["viewer_last_turn_ago"] is not None:
+                    rt_note_lines.append(
+                        f"Viewer's last turn: {rt_meta['viewer_last_turn_ago']} turn(s) ago."
+                    )
+                tool_result_block = (
+                    "RECENT_TURNS_LOADED: true\n"
+                    + "\n".join(rt_note_lines) + "\n"
+                    f"RECENT_TURNS_LOCATIONS: current={recent_location_hint.get('current_location_key')} "
+                    f"last_other={recent_location_hint.get('last_other_location_key')}\n"
+                    f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
+                    f"RECENT_TURNS:\n{recent_text}\n"
+                )
+                _switch_prompt_stage(cls.PROMPT_STAGE_RESEARCH)
+                _zork_log("RECENT TURNS BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("RECENT TURNS AUGMENTED RESPONSE", response)
+
+            elif tool_name == "ready_to_write":
+                _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+                tool_result_block = (
+                    "RESEARCH_COMPLETE: Context gathering is complete.\n"
+                    "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
+                    "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update.\n"
+                    + cls.WRITING_CRAFT_PROMPT
+                )
+                _zork_log("READY TO WRITE", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("FINALIZATION RESPONSE", response)
+
+            elif tool_name == "communication_rules":
+                raw_keys = first_payload.get("keys") or []
+                if isinstance(raw_keys, str):
+                    raw_keys = [raw_keys]
+                requested_keys = [
+                    str(key or "").strip().upper()
+                    for key in raw_keys
+                    if str(key or "").strip()
+                ][:8]
+                requested_set = set(requested_keys)
+                lines = [
+                    f"{rule_key}: {rule_text}"
+                    for rule_key, rule_text in cls.DEFAULT_GM_COMMUNICATION_RULES.items()
+                    if rule_key in requested_set
+                ]
+                if lines:
+                    tool_result_block = (
+                        "COMMUNICATION_RULES_RESULT:\n"
+                        + "\n".join(lines)
+                    )
+                else:
+                    tool_result_block = (
+                        "COMMUNICATION_RULES_RESULT: no matching keys found. "
+                        f"Available keys: {', '.join(cls.COMMUNICATION_RULE_KEYS)}"
+                    )
+                _zork_log("COMMUNICATION RULES BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("COMMUNICATION RULES AUGMENTED RESPONSE", response)
+
+            elif tool_name == "memory_search":
+                # Support both "queries": [...] and legacy "query": "..."
+                raw_queries = first_payload.get("queries") or []
+                if not raw_queries:
+                    legacy = str(first_payload.get("query") or "").strip()
+                    if legacy:
+                        raw_queries = [legacy]
+                queries = [
+                    str(q).strip()
+                    for q in raw_queries
+                    if str(q).strip()
+                ]
+                try:
+                    source_before_lines = int(
+                        first_payload.get("before_lines", 0)
+                    )
+                except (TypeError, ValueError):
+                    source_before_lines = 0
+                try:
+                    source_after_lines = int(
+                        first_payload.get("after_lines", 0)
+                    )
+                except (TypeError, ValueError):
+                    source_after_lines = 0
+                source_before_lines = max(0, min(50, source_before_lines))
+                source_after_lines = max(0, min(50, source_after_lines))
+                category_scope = " ".join(
+                    str(first_payload.get("category") or "").strip().lower().split()
+                )
+                interaction_participant_slug = None
+                awareness_npc_slug = None
+                visibility_scope_filter = None
+                structured_turn_scope = False
+                if category_scope in {"interaction", "interactions"}:
+                    structured_turn_scope = True
+                elif category_scope.startswith("interaction:"):
+                    structured_turn_scope = True
+                    interaction_participant_slug = cls._player_slug_key(
+                        category_scope.split(":", 1)[1]
+                    )
+                elif category_scope.startswith("awareness:"):
+                    structured_turn_scope = True
+                    awareness_npc_slug = str(
+                        category_scope.split(":", 1)[1] or ""
+                    ).strip()
+                elif category_scope.startswith("visibility:"):
+                    structured_turn_scope = True
+                    visibility_scope_filter = str(
+                        category_scope.split(":", 1)[1] or ""
+                    ).strip().lower()
+                source_docs = ZorkMemory.list_source_material_documents(
+                    campaign.id,
+                    limit=cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
+                )
+                has_source_material = bool(source_docs)
+                source_total_chunks = 0
+                for row in source_docs:
+                    try:
+                        source_total_chunks += int(row.get("chunk_count") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                source_scope = False
+                source_scope_key = None
+                if category_scope in (
+                    cls.SOURCE_MATERIAL_CATEGORY,
+                    "source-material",
+                ):
+                    source_scope = True
+                elif category_scope.startswith(
+                    f"{cls.SOURCE_MATERIAL_CATEGORY}:"
+                ):
+                    source_scope = True
+                    source_scope_key = ZorkMemory._normalize_source_document_key(
+                        category_scope.split(":", 1)[1]
+                    )
+                roster_hints = (
+                    cls._record_memory_search_usage_and_hints(campaign, queries)
+                    if queries
+                    else []
+                )
+                recall_records: List[Dict[str, object]] = []
+                if queries:
+                    _zork_log(
+                        "MEMORY SEARCH",
+                        f"queries={queries}\ncategory={category_scope or '(none)'}",
+                    )
+                    try:
+                        backfilled = ZorkMemory.backfill_campaign(campaign.id)
+                    except Exception:
+                        backfilled = 0
+                    if backfilled:
+                        _zork_log(
+                            "MEMORY BACKFILL",
+                            f"campaign={campaign.id} refreshed_turns={backfilled}",
+                        )
+                    seen_turn_ids: set = set()
+                    seen_source_hits: set = set()
+                    for query in queries:
+                        logger.info(
+                            "Zork memory search requested: campaign=%s query=%r",
+                            campaign.id,
+                            query,
+                        )
+                        results = ZorkMemory.search(
+                            query,
+                            campaign.id,
+                            top_k=5,
+                            viewer_user_id=user_id,
+                            viewer_player_slug=cls._player_slug_key(
+                                player_state.get("character_name")
+                            ),
+                            viewer_location_key=cls._room_key_from_player_state(
+                                player_state
+                            ),
+                            participant_slug=interaction_participant_slug,
+                            aware_npc_slug=awareness_npc_slug,
+                            visibility_scope=visibility_scope_filter,
+                        )
+                        if results:
+                            _zork_log(
+                                f"MEMORY SCORES query={query!r}",
+                                "\n".join(
+                                    "  turn="
+                                    f"{int(row.get('turn_id') or 0)} "
+                                    f"score={float(row.get('score') or 0.0):.3f} "
+                                    f"scope={str(row.get('visibility_scope') or 'public')} "
+                                    f"actor={str(row.get('actor_player_slug') or '-') or '-'} "
+                                    f"{str(row.get('content') or '')[:80]}"
+                                    for row in results
+                                ),
+                            )
+                        # Keep only results above relevance threshold.
+                        relevant = [
+                            row
+                            for row in results
+                            if float(row.get("score") or 0.0) >= 0.35
+                            and int(row.get("turn_id") or 0) not in seen_turn_ids
+                        ]
+                        # Sort chronologically so the model sees events in order.
+                        relevant.sort(key=lambda row: int(row.get("turn_id") or 0))
+                        query_records: List[Dict[str, object]] = []
+                        for row in relevant:
+                            turn_id = int(row.get("turn_id") or 0)
+                            kind = str(row.get("kind") or "")
+                            content = str(row.get("content") or "")
+                            score = float(row.get("score") or 0.0)
+                            actor_slug = str(row.get("actor_player_slug") or "").strip()
+                            turn_scope = str(row.get("visibility_scope") or "public").strip()
+                            location_key = str(row.get("location_key") or "").strip()
+                            seen_turn_ids.add(turn_id)
+                            meta_bits = [f"relevance {score:.2f}"]
+                            if actor_slug:
+                                meta_bits.append(f"actor {actor_slug}")
+                            if turn_scope and turn_scope != "public":
+                                meta_bits.append(f"visibility {turn_scope}")
+                            if location_key:
+                                meta_bits.append(f"location {location_key}")
+                            query_records.append(
+                                {
+                                    "kind": "memory_hit",
+                                    "query": query,
+                                    "memory_type": "turn",
+                                    "turn_id": turn_id,
+                                    "turn_kind": kind,
+                                    "relevance": round(score, 3),
+                                    "actor_player_slug": actor_slug or None,
+                                    "visibility_scope": turn_scope or "public",
+                                    "location_key": location_key or None,
+                                    "text": cls._memory_tool_text_value(
+                                        content,
+                                        max_chars=300,
+                                    ),
+                                }
+                            )
+                        manual_records: List[Dict[str, object]] = []
+                        if category_scope and not source_scope and not structured_turn_scope:
+                            manual_hits = ZorkMemory.search_manual_memories(
+                                query,
+                                campaign.id,
+                                category=category_scope,
+                                top_k=5,
+                            )
+                            for mem_category, mem_content, mem_score in manual_hits:
+                                if mem_score < 0.35:
+                                    continue
+                                manual_records.append(
+                                    {
+                                        "kind": "memory_hit",
+                                        "query": query,
+                                        "memory_type": "manual",
+                                        "category": mem_category,
+                                        "relevance": round(float(mem_score or 0.0), 3),
+                                        "text": cls._memory_tool_text_value(
+                                            mem_content,
+                                            max_chars=300,
+                                        ),
+                                    }
+                                )
+                        source_records: List[Dict[str, object]] = []
+                        if has_source_material and (
+                            source_scope or not category_scope
+                        ):
+                            source_hits = ZorkMemory.search_source_material(
+                                query,
+                                campaign.id,
+                                document_key=source_scope_key,
+                                top_k=10 if source_scope else 6,
+                                before_lines=source_before_lines,
+                                after_lines=source_after_lines,
+                            )
+                            for (
+                                source_doc_key,
+                                source_doc_label,
+                                source_chunk_index,
+                                source_chunk_text,
+                                source_score,
+                            ) in source_hits:
+                                if source_score < 0.40:
+                                    continue
+                                source_hit_key = (
+                                    str(source_doc_key or "").strip(),
+                                    int(source_chunk_index or 0),
+                                )
+                                if source_hit_key in seen_source_hits:
+                                    continue
+                                seen_source_hits.add(source_hit_key)
+                                source_text_lines = [
+                                    line.strip()
+                                    for line in str(source_chunk_text or "").splitlines()
+                                    if line.strip()
+                                ]
+                                source_text = (
+                                    "\n    ".join(source_text_lines)
+                                    if source_text_lines
+                                    else str(source_chunk_text or "").strip()
+                                )
+                                if len(source_text) > 4000:
+                                    source_text = (
+                                        source_text[:4000]
+                                        .rsplit(" ", 1)[0]
+                                        .strip()
+                                        + "..."
+                                    )
+                                source_records.append(
+                                    {
+                                        "kind": "memory_hit",
+                                        "query": query,
+                                        "memory_type": "source",
+                                        "document_key": source_doc_key,
+                                        "document_label": source_doc_label,
+                                        "chunk_index": int(source_chunk_index or 0),
+                                        "relevance": round(float(source_score or 0.0), 3),
+                                        "text": cls._memory_tool_text_value(
+                                            source_text,
+                                            max_chars=4000,
+                                        ),
+                                    }
+                                )
+                        if query_records or manual_records or source_records:
+                            recall_records.append(
+                                {
+                                    "kind": "memory_query_result",
+                                    "query": query,
+                                    "category": category_scope or None,
+                                    "hit_count": len(query_records)
+                                    + len(manual_records)
+                                    + len(source_records),
+                                }
+                            )
+                            recall_records.extend(query_records)
+                            recall_records.extend(manual_records)
+                            recall_records.extend(source_records)
+                        else:
+                            recall_records.append(
+                                {
+                                    "kind": "memory_query_result",
+                                    "query": query,
+                                    "category": category_scope or None,
+                                    "hit_count": 0,
+                                }
+                            )
+                if recall_records:
+                    tool_result_block = (
+                        "MEMORY_RECALL:\n"
+                        + cls._memory_tool_jsonl(recall_records)
+                    )
+                elif queries:
+                    if category_scope:
+                        if source_scope:
+                            source_scope_label = (
+                                f"'{cls.SOURCE_MATERIAL_CATEGORY}:{source_scope_key}'"
+                                if source_scope_key
+                                else f"'{cls.SOURCE_MATERIAL_CATEGORY}'"
+                            )
+                            tool_result_block = (
+                                "MEMORY_RECALL: No relevant memories found "
+                                f"in source material category {source_scope_label}."
+                            )
+                        else:
+                            tool_result_block = (
+                                "MEMORY_RECALL: No relevant memories found "
+                                f"(including manual category '{category_scope}')."
+                            )
+                    else:
+                        tool_result_block = "MEMORY_RECALL: No relevant memories found."
+                else:
+                    tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
+                emit_full_memory_help = not memory_recall_help_emitted
+                if has_source_material and emit_full_memory_help:
+                    source_index_lines = [
+                        cls._memory_tool_jsonl(
+                            [
+                                {
+                                    "kind": "source_index_meta",
+                                    "document_count": len(source_docs),
+                                    "snippet_count": source_total_chunks,
+                                }
+                            ]
+                        )
+                    ]
+                    for row in source_docs[:5]:
+                        source_format = cls._source_material_format_heuristic(
+                            str(row.get("sample_chunk") or "")
+                        )
+                        source_index_lines.append(
+                            cls._memory_tool_jsonl(
+                                [
+                                    {
+                                        "kind": "source_index_entry",
+                                        "document_key": row.get("document_key"),
+                                        "document_label": row.get("document_label"),
+                                        "format": source_format,
+                                        "snippet_count": int(row.get("chunk_count") or 0),
+                                    }
+                                ]
+                            )
+                        )
+                    tool_result_block = (
+                        f"{tool_result_block}\n"
+                        + "\n".join(source_index_lines)
+                    )
+                if emit_full_memory_help:
+                    tool_result_block = (
+                        f"{tool_result_block}"
+                        "\nMEMORY_RECALL_NEXT_ACTIONS:\n"
+                        "- To retrieve FULL text for a specific hit turn number:\n"
+                        '  {"tool_call": "memory_turn", "turn_id": 1234}\n'
+                        "- To discover curated memory categories/terms before narrowing search:\n"
+                        '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
+                        "- To search inside one curated category after term discovery:\n"
+                        '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
+                        "- To search narrator memories for interactions involving a player slug:\n"
+                        '  {"tool_call": "memory_search", "category": "interaction:player-slug", "queries": ["argument", "kiss", "deal"]}\n'
+                        "- To search for turns noticed by a specific NPC slug:\n"
+                        '  {"tool_call": "memory_search", "category": "awareness:npc-slug", "queries": ["overheard", "promise", "threat"]}\n'
+                        "- To restrict narrator-memory recall by visibility scope:\n"
+                        '  {"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
+                        "- To inspect off-scene SMS communications:\n"
+                        '  {"tool_call": "sms_list", "wildcard": "*"}\n'
+                        '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
+                        "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
+                        '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
+                    )
+                    if has_source_material:
+                        tool_result_block = (
+                            f"{tool_result_block}"
+                            "- To query indexed source-canon snippets (faithful adaptation):\n"
+                            '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
+                            "- To scope one source document only:\n"
+                            '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
+                            "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
+                            '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
+                            "- To browse all keys in a rulebook-format source document (list before drilling in):\n"
+                            '  {"tool_call": "source_browse", "document_key": "document-key"}\n'
+                            "- To filter rulebook keys by wildcard:\n"
+                            '  {"tool_call": "source_browse", "document_key": "document-key", "wildcard": "keyword*"}\n'
+                        )
+                    memory_recall_help_emitted = True
+                else:
+                    tool_result_block = (
+                        f"{tool_result_block}\n"
+                        "MEMORY_RECALL_NEXT_ACTIONS: Use memory_turn for one hit, refine memory_search, or return final JSON."
+                    )
+                if roster_hints and emit_full_memory_help:
+                    hint_lines = []
+                    for hint in roster_hints[:6]:
+                        term = str(hint.get("term") or hint.get("slug") or "").strip() or "unknown-term"
+                        slug = str(hint.get("slug") or "").strip() or "character-slug"
+                        try:
+                            count = int(hint.get("count") or 0)
+                        except (TypeError, ValueError):
+                            count = 0
+                        hint_lines.append(
+                            "- You have searched for "
+                            f"'{term}' {count} times and it is not in WORLD_CHARACTERS. "
+                            "If this is stable/non-stale information and you confirm it, "
+                            f"store it via character_updates using slug '{slug}'."
+                        )
+                    if hint_lines:
+                        tool_result_block = (
+                            f"{tool_result_block}\n"
+                            "MEMORY_RECALL_ROSTER_RECOMMENDATIONS:\n"
+                            + "\n".join(hint_lines)
+                        )
+                _zork_log("MEMORY RECALL BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("AUGMENTED API RESPONSE", response)
+
+            elif tool_name == "memory_turn":
+                turn_id_raw = (
+                    first_payload.get("turn_id")
+                    or first_payload.get("id")
+                    or first_payload.get("turn")
+                )
+                try:
+                    turn_id = int(turn_id_raw)
+                except (TypeError, ValueError):
+                    turn_id = 0
+                if turn_id > 0:
+                    target_turn = ZorkTurn.query.filter_by(
+                        campaign_id=campaign.id,
+                        id=turn_id,
+                    ).first()
+                else:
+                    target_turn = None
+                if target_turn is None:
+                    tool_result_block = (
+                        "MEMORY_TURN_RESULT:\n"
+                        + cls._memory_tool_jsonl(
+                            [
+                                {
+                                    "kind": "memory_turn_result",
+                                    "status": "not_found",
+                                    "turn_id": turn_id or None,
+                                }
+                            ]
+                        )
+                    )
+                elif not cls._turn_visible_to_viewer(
+                    target_turn,
+                    user_id,
+                    cls._player_slug_key(player_state.get("character_name")),
+                    cls._room_key_from_player_state(player_state).lower(),
+                ):
+                    tool_result_block = (
+                        "MEMORY_TURN_RESULT:\n"
+                        + cls._memory_tool_jsonl(
+                            [
+                                {
+                                    "kind": "memory_turn_result",
+                                    "status": "not_visible",
+                                    "turn_id": int(target_turn.id or 0) or None,
+                                }
+                            ]
+                        )
+                    )
+                else:
+                    full_text = (target_turn.content or "").strip()
+                    if not full_text:
+                        full_text = "(empty turn content)"
+                    tool_result_block = (
+                        "MEMORY_TURN_RESULT:\n"
+                        + cls._memory_tool_jsonl(
+                            [
+                                {
+                                    "kind": "memory_turn_result",
+                                    "status": "ok",
+                                    "turn_id": int(target_turn.id or 0) or None,
+                                    "turn_kind": str(target_turn.kind or ""),
+                                    "user_id": int(target_turn.user_id or 0) or None,
+                                    "full_text": cls._memory_tool_text_value(
+                                        full_text,
+                                        max_chars=12000,
+                                    ),
+                                }
+                            ]
+                        )
+                    )
+                _zork_log("MEMORY TURN BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("MEMORY TURN AUGMENTED RESPONSE", response)
+
+            elif tool_name == "memory_terms":
+                wildcard = str(
+                    first_payload.get("wildcard")
+                    or first_payload.get("query")
+                    or first_payload.get("term")
+                    or "%"
+                ).strip()[:80]
+                terms = ZorkMemory.list_manual_memory_terms(
+                    campaign.id,
+                    wildcard=wildcard or "%",
+                    limit=20,
+                )
+                if terms:
+                    records = []
+                    for row in terms:
+                        records.append(
+                            {
+                                "kind": "memory_term",
+                                "term": row.get("term"),
+                                "category": row.get("category"),
+                                "count": int(row.get("count") or 0),
+                                "last_at": row.get("last_at"),
+                            }
+                        )
+                    tool_result_block = (
+                        f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}):\n"
+                        + cls._memory_tool_jsonl(records)
+                    )
+                else:
+                    tool_result_block = (
+                        f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}): none"
+                    )
+                _zork_log("MEMORY TERMS BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("MEMORY TERMS AUGMENTED RESPONSE", response)
+
+            elif tool_name == "memory_store":
+                category = " ".join(
+                    str(first_payload.get("category") or "").strip().lower().split()
+                )[:120]
+                term = " ".join(
+                    str(first_payload.get("term") or "").strip().lower().split()
+                )[:80]
+                memory_text = str(
+                    first_payload.get("memory")
+                    or first_payload.get("content")
+                    or ""
+                ).strip()[:1200]
+                wildcard = str(
+                    first_payload.get("wildcard")
+                    or term
+                    or category
+                    or "%"
+                ).strip()[:80]
+                pre_terms = ZorkMemory.list_manual_memory_terms(
+                    campaign.id,
+                    wildcard=wildcard or "%",
+                    limit=20,
+                )
+                stored_ok = False
+                store_reason = "missing_fields"
+                if category and memory_text:
+                    stored_ok, store_reason = ZorkMemory.store_manual_memory(
+                        campaign.id,
+                        category=category,
+                        term=term or category,
+                        content=memory_text,
+                    )
+                post_terms = ZorkMemory.list_manual_memory_terms(
+                    campaign.id,
+                    wildcard=wildcard or "%",
+                    limit=20,
+                )
+                term_lines = []
+                for row in pre_terms[:15]:
+                    term_lines.append(
+                        f"- term='{row.get('term')}' category='{row.get('category')}' count={row.get('count')}"
+                    )
+                if not term_lines:
+                    term_lines.append("- none")
+                status_text = (
+                    "stored"
+                    if stored_ok
+                    else f"skipped ({store_reason})"
+                )
+                tool_result_block = (
+                    "MEMORY_STORE_RESULT:\n"
+                    f"- requested_category: {category or '(missing)'}\n"
+                    f"- requested_term: {term or '(defaulted)'}\n"
+                    f"- pre_store_wildcard: {wildcard or '%'}\n"
+                    "- existing_terms_before:\n"
+                    + "\n".join(term_lines)
+                    + "\n"
+                    f"- store_status: {status_text}\n"
+                    f"- existing_terms_after_count: {len(post_terms)}"
+                )
+                _zork_log("MEMORY STORE BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
+
+            elif tool_name == "source_browse":
+                browse_doc_key = str(
+                    first_payload.get("document_key")
+                    or first_payload.get("document")
+                    or ""
+                ).strip()[:120]
+                browse_wildcard_raw = first_payload.get("wildcard")
+                browse_wildcard = (
+                    str(browse_wildcard_raw).strip()[:120]
+                    if browse_wildcard_raw is not None
+                    else ""
+                )
+                browse_wildcard_specified = bool(browse_wildcard)
+                browse_wildcard = browse_wildcard or "%"
+                wildcard_meta = f"wildcard={browse_wildcard!r}"
+                if not browse_wildcard_specified:
+                    wildcard_meta = "wildcard=(omitted)"
+                browse_limit = 255
+                try:
+                    browse_limit = max(1, min(255, int(first_payload.get("limit") or 255)))
+                except (TypeError, ValueError):
+                    pass
+                lines = ZorkMemory.browse_source_keys(
+                    campaign.id,
+                    document_key=browse_doc_key or None,
+                    wildcard=browse_wildcard,
+                    limit=browse_limit,
+                )
+                if lines:
+                    tool_result_block = (
+                        f"SOURCE_BROWSE_RESULT "
+                        f"(document_key={browse_doc_key or '*'!r}, "
+                        f"{wildcard_meta}, "
+                        f"showing {len(lines)}):\n"
+                        + "\n".join(lines)
+                    )
+                else:
+                    tool_result_block = (
+                        f"SOURCE_BROWSE_RESULT "
+                        f"(document_key={browse_doc_key or '*'!r}, "
+                        f"{wildcard_meta}): no entries found"
+                    )
+                _zork_log("SOURCE BROWSE BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("SOURCE BROWSE AUGMENTED RESPONSE", response)
+
+            elif tool_name == "name_generate":
+                raw_origins = first_payload.get("origins") or []
+                if isinstance(raw_origins, str):
+                    raw_origins = [raw_origins]
+                origins = [
+                    str(o).strip().lower()
+                    for o in raw_origins
+                    if str(o or "").strip()
+                ][:4]
+                ng_gender = str(
+                    first_payload.get("gender") or "both"
+                ).strip().lower()
+                ng_count = 5
+                try:
+                    ng_count = max(1, min(6, int(first_payload.get("count") or 5)))
+                except (TypeError, ValueError):
+                    pass
+                ng_context = str(
+                    first_payload.get("context") or ""
+                ).strip()[:300]
+                names = cls._fetch_random_names(
+                    origins=origins or None,
+                    gender=ng_gender,
+                    count=ng_count,
+                )
+                if names:
+                    tool_result_block = (
+                        f"NAME_GENERATE_RESULT "
+                        f"(origins={origins or 'any'}, "
+                        f"gender={ng_gender}, "
+                        f"count={len(names)}):\n"
+                        + "\n".join(f"- {n}" for n in names)
+                        + "\n\nEvaluate these against your character concept"
+                    )
+                    if ng_context:
+                        tool_result_block += (
+                            f" ({ng_context})"
+                        )
+                    tool_result_block += (
+                        ". Pick the best fit, or call name_generate again "
+                        "with different origins/gender for more options."
+                    )
+                else:
+                    tool_result_block = (
+                        f"NAME_GENERATE_RESULT "
+                        f"(origins={origins or 'any'}): "
+                        "no names returned — try broader origins "
+                        "or fewer filters."
+                    )
+                _zork_log("NAME GENERATE BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("NAME GENERATE AUGMENTED RESPONSE", response)
+
+            elif tool_name == "plot_plan":
+                # DEFERRED: Apply to local campaign_state, record in delta
+                campaign_state_plot = dict(campaign_state)
+                latest_turn_id = 0
+                if isinstance(turns, list):
+                    for turn in turns:
+                        try:
+                            latest_turn_id = max(
+                                latest_turn_id, int(getattr(turn, "id", 0) or 0)
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                plan_result = cls._apply_plot_plan_tool(
+                    campaign_state_plot,
+                    first_payload,
+                    current_turn=latest_turn_id,
+                )
+                # Update local campaign_state
+                campaign_state.update(campaign_state_plot)
+                # Record deferred write
+                delta.deferred_tool_writes.append({
+                    "tool": "plot_plan",
+                    "payload": first_payload,
+                    "state_snapshot": dict(campaign_state_plot),
+                })
+                active_plans = list(plan_result.get("active") or [])
+                lines = [
+                    "PLOT_PLAN_RESULT:",
+                    f"- updated: {int(plan_result.get('updated', 0) or 0)}",
+                    f"- removed: {int(plan_result.get('removed', 0) or 0)}",
+                    f"- total_threads: {int(plan_result.get('total', 0) or 0)}",
+                    f"- active_threads: {len(active_plans)}",
+                ]
+                for row in active_plans[:8]:
+                    lines.append(
+                        "- "
+                        f"thread='{row.get('thread')}' target_turns={row.get('target_turns')} "
+                        f"setup=\"{row.get('setup')}\" payoff=\"{row.get('intended_payoff')}\""
+                    )
+                tool_result_block = "\n".join(lines)
+                _zork_log("PLOT PLAN BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("PLOT PLAN AUGMENTED RESPONSE", response)
+
+            elif tool_name == "chapter_plan":
+                # DEFERRED: Apply to local campaign_state, record in delta
+                campaign_state_chapter = dict(campaign_state)
+                latest_turn_id = 0
+                if isinstance(turns, list):
+                    for turn in turns:
+                        try:
+                            latest_turn_id = max(
+                                latest_turn_id, int(getattr(turn, "id", 0) or 0)
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                plan_result = cls._apply_chapter_plan_tool(
+                    campaign_state_chapter,
+                    first_payload,
+                    current_turn=latest_turn_id,
+                    on_rails=bool(campaign_state_chapter.get("on_rails", False)),
+                )
+                if not bool(plan_result.get("ignored")):
+                    # Update local campaign_state
+                    campaign_state.update(campaign_state_chapter)
+                    # Record deferred write
+                    delta.deferred_tool_writes.append({
+                        "tool": "chapter_plan",
+                        "payload": first_payload,
+                        "state_snapshot": dict(campaign_state_chapter),
+                    })
+                active_chapters = list(plan_result.get("active") or [])
+                if bool(plan_result.get("ignored")):
+                    tool_result_block = (
+                        "CHAPTER_PLAN_RESULT: ignored.\n"
+                        f"- reason: {plan_result.get('reason')}"
+                    )
+                else:
+                    lines = [
+                        "CHAPTER_PLAN_RESULT:",
+                        f"- updated: {int(plan_result.get('updated', 0) or 0)}",
+                        f"- total_chapters: {int(plan_result.get('total', 0) or 0)}",
+                        f"- active_chapters: {len(active_chapters)}",
+                    ]
+                    for row in active_chapters[:8]:
+                        lines.append(
+                            "- "
+                            f"chapter='{row.get('slug')}' title='{row.get('title')}' "
+                            f"current_scene='{row.get('current_scene')}'"
+                        )
+                    tool_result_block = "\n".join(lines)
+                _zork_log("CHAPTER PLAN BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("CHAPTER PLAN AUGMENTED RESPONSE", response)
+
+            elif tool_name == "consequence_log":
+                # DEFERRED: Apply to local campaign_state, record in delta
+                campaign_state_cons = dict(campaign_state)
+                latest_turn_id = 0
+                if isinstance(turns, list):
+                    for turn in turns:
+                        try:
+                            latest_turn_id = max(
+                                latest_turn_id,
+                                int(getattr(turn, "id", 0) or 0),
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                cons_result = cls._apply_consequence_log_tool(
+                    campaign_state_cons,
+                    first_payload,
+                    current_turn=latest_turn_id,
+                )
+                # Update local campaign_state
+                campaign_state.update(campaign_state_cons)
+                # Record deferred write
+                delta.deferred_tool_writes.append({
+                    "tool": "consequence_log",
+                    "payload": first_payload,
+                    "state_snapshot": dict(campaign_state_cons),
+                })
+                active_rows = list(cons_result.get("active") or [])
+                lines = [
+                    "CONSEQUENCE_LOG_RESULT:",
+                    f"- added: {int(cons_result.get('added', 0) or 0)}",
+                    f"- updated: {int(cons_result.get('updated', 0) or 0)}",
+                    f"- resolved: {int(cons_result.get('resolved', 0) or 0)}",
+                    f"- removed: {int(cons_result.get('removed', 0) or 0)}",
+                    f"- total: {int(cons_result.get('total', 0) or 0)}",
+                    f"- active: {len(active_rows)}",
+                ]
+                for row in active_rows[:8]:
+                    expires = cls._coerce_non_negative_int(
+                        row.get("expires_at_turn", 0), default=0
+                    )
+                    exp_text = (
+                        f"expires@turn{expires}" if expires > 0 else "no-expiry"
+                    )
+                    lines.append(
+                        "- "
+                        f"id='{row.get('id')}' severity='{row.get('severity')}' {exp_text} "
+                        f"consequence=\"{row.get('consequence')}\""
+                    )
+                tool_result_block = "\n".join(lines)
+                _zork_log("CONSEQUENCE LOG BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("CONSEQUENCE LOG AUGMENTED RESPONSE", response)
+
+            elif tool_name == "sms_list":
+                sms_activity_detected = True
+                wildcard = str(
+                    first_payload.get("wildcard")
+                    or first_payload.get("query")
+                    or "*"
+                ).strip()[:80] or "*"
+                campaign_state_sms = dict(campaign_state)
+                threads = cls._sms_list_threads(
+                    campaign_state_sms, wildcard=wildcard, limit=20
+                )
+                if threads:
+                    lines = []
+                    for row in threads:
+                        lines.append(
+                            f"- thread='{row.get('thread')}' label='{row.get('label')}' "
+                            f"count={row.get('count')} last_from='{row.get('last_from')}' "
+                            f"last='Day {int(row.get('day', 0))} {int(row.get('hour', 0)):02d}:{int(row.get('minute', 0)):02d}' "
+                            f"preview=\"{row.get('last_preview')}\""
+                        )
+                    tool_result_block = (
+                        f"SMS_LIST_RESULT (wildcard={wildcard!r}):\n"
+                        + "\n".join(lines)
+                    )
+                else:
+                    tool_result_block = (
+                        f"SMS_LIST_RESULT (wildcard={wildcard!r}): none"
+                    )
+                _zork_log("SMS LIST BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("SMS LIST AUGMENTED RESPONSE", response)
+
+            elif tool_name == "sms_read":
+                # DEFERRED: Apply to local campaign_state, record in delta
+                sms_activity_detected = True
+                thread = str(
+                    first_payload.get("thread")
+                    or first_payload.get("contact")
+                    or first_payload.get("conversation")
+                    or ""
+                ).strip()[:80]
+                raw_limit = first_payload.get("limit", 20)
+                try:
+                    read_limit = int(raw_limit)
+                except (TypeError, ValueError):
+                    read_limit = 20
+                read_limit = max(1, min(40, read_limit))
+                campaign_state_sms = dict(campaign_state)
+                thread_key, thread_label, messages = cls._sms_read_thread(
+                    campaign_state_sms, thread=thread, limit=read_limit
+                )
+                thread_markers: Dict[str, int] = {}
+                if messages:
+                    for msg in messages:
+                        if not isinstance(msg, dict):
+                            continue
+                        msg_thread = cls._sms_normalize_thread_key(
+                            msg.get("thread") or thread_key or thread
+                        )
+                        if not msg_thread:
+                            continue
+                        seq = cls._coerce_non_negative_int(
+                            msg.get("seq", 0), default=0
+                        )
+                        turn_id_msg = cls._coerce_non_negative_int(
+                            msg.get("turn_id", 0), default=0
+                        )
+                        marker = seq if seq > 0 else turn_id_msg
+                        if marker <= 0:
+                            continue
+                        prev_marker = cls._coerce_non_negative_int(
+                            thread_markers.get(msg_thread, 0), default=0
+                        )
+                        if marker > prev_marker:
+                            thread_markers[msg_thread] = marker
+                if thread_markers:
+                    read_changed = cls._sms_mark_threads_read(
+                        campaign_state_sms,
+                        actor_id=user_id,
+                        player_state=player_state,
+                        thread_markers=thread_markers,
+                    )
+                    if read_changed:
+                        # Update local campaign_state
+                        campaign_state.update(campaign_state_sms)
+                        # Record deferred write
+                        delta.deferred_tool_writes.append({
+                            "tool": "sms_read",
+                            "thread_markers": thread_markers,
+                        })
+                if thread_key is None:
+                    tool_result_block = (
+                        f"SMS_READ_RESULT: thread not found for query '{thread or '(empty)'}'."
+                    )
+                elif not messages:
+                    tool_result_block = (
+                        f"SMS_READ_RESULT: thread '{thread_label}' has no messages."
+                    )
+                else:
+                    lines = []
+                    for msg in messages:
+                        lines.append(
+                            f"- [Day {int(msg.get('day', 0))} {int(msg.get('hour', 0)):02d}:{int(msg.get('minute', 0)):02d}] "
+                            f"{msg.get('from')} -> {msg.get('to')}: {msg.get('message')}"
+                        )
+                    tool_result_block = (
+                        f"SMS_READ_RESULT (thread='{thread_key}', label='{thread_label}'):\n"
+                        + "\n".join(lines)
+                    )
+                _zork_log("SMS READ BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("SMS READ AUGMENTED RESPONSE", response)
+
+            elif tool_name == "sms_write":
+                # DEFERRED: Apply to local campaign_state, record in delta
+                sms_activity_detected = True
+                thread = str(
+                    first_payload.get("thread")
+                    or first_payload.get("contact")
+                    or first_payload.get("conversation")
+                    or ""
+                ).strip()[:80]
+                sender = str(
+                    first_payload.get("from")
+                    or first_payload.get("sender")
+                    or player_state.get("character_name")
+                    or f"Player {user_id}"
+                ).strip()[:80]
+                recipient = str(
+                    first_payload.get("to")
+                    or first_payload.get("recipient")
+                    or thread
+                ).strip()[:80]
+                message_text = str(
+                    first_payload.get("message")
+                    or first_payload.get("content")
+                    or first_payload.get("text")
+                    or ""
+                ).strip()
+                if not message_text:
+                    tool_result_block = (
+                        "SMS_WRITE_RESULT: skipped (missing message text)."
+                    )
+                else:
+                    campaign_state_sms = dict(campaign_state)
+                    game_time_sms = cls._extract_game_time_snapshot(
+                        campaign_state_sms
+                    )
+                    thread_key, thread_label, entry = cls._sms_write(
+                        campaign_state_sms,
+                        thread=thread or recipient or sender,
+                        sender=sender,
+                        recipient=recipient,
+                        message=message_text,
+                        game_time=game_time_sms,
+                        turn_id=0,
+                    )
+                    # Update local campaign_state
+                    campaign_state.update(campaign_state_sms)
+                    # Record deferred write
+                    delta.deferred_tool_writes.append({
+                        "tool": "sms_write",
+                        "thread": thread_key,
+                        "entry": entry,
+                        "state_snapshot": dict(campaign_state_sms),
+                    })
+                    tool_result_block = (
+                        "SMS_WRITE_RESULT: stored.\n"
+                        f"- thread='{thread_key}' label='{thread_label}'\n"
+                        f"- at Day {int(entry.get('day', 0))} {int(entry.get('hour', 0)):02d}:{int(entry.get('minute', 0)):02d}\n"
+                        f"- {entry.get('from')} -> {entry.get('to')}: {entry.get('message')}"
+                    )
+                _zork_log("SMS WRITE BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("SMS WRITE AUGMENTED RESPONSE", response)
+
+            elif tool_name == "sms_schedule":
+                # Record timer params in delta for Phase 3 to schedule
+                sms_activity_detected = True
+                thread = str(
+                    first_payload.get("thread")
+                    or first_payload.get("contact")
+                    or first_payload.get("conversation")
+                    or ""
+                ).strip()[:80]
+                sender = str(
+                    first_payload.get("from")
+                    or first_payload.get("sender")
+                    or thread
+                ).strip()[:80]
+                recipient = str(
+                    first_payload.get("to")
+                    or first_payload.get("recipient")
+                    or player_state.get("character_name")
+                    or f"Player {user_id}"
+                ).strip()[:80]
+                message_text = str(
+                    first_payload.get("message")
+                    or first_payload.get("content")
+                    or first_payload.get("text")
+                    or ""
+                ).strip()
+                raw_delay_seconds = first_payload.get(
+                    "delay_seconds",
+                    first_payload.get("delay"),
+                )
+                raw_delay_minutes = first_payload.get("delay_minutes")
+                if raw_delay_seconds is None and raw_delay_minutes is not None:
+                    try:
+                        raw_delay_seconds = int(raw_delay_minutes) * 60
+                    except (TypeError, ValueError):
+                        raw_delay_seconds = None
+                try:
+                    delay_seconds = int(raw_delay_seconds)
+                except (TypeError, ValueError):
+                    delay_seconds = 90
+                _speed = cls.get_speed_multiplier(campaign)
+                if _speed > 0:
+                    delay_seconds = int(delay_seconds / _speed)
+                delay_seconds = max(15, min(86_400, delay_seconds))
+
+                if not thread or not sender or not recipient or not message_text:
+                    tool_result_block = (
+                        "SMS_SCHEDULE_RESULT: skipped (missing thread/from/to/message)."
+                    )
+                else:
+                    # Record for Phase 3 to schedule
+                    delta.deferred_tool_writes.append({
+                        "tool": "sms_schedule",
+                        "thread": thread,
+                        "sender": sender,
+                        "recipient": recipient,
+                        "message": message_text,
+                        "delay_seconds": delay_seconds,
+                    })
+                    tool_result_block = (
+                        "SMS_SCHEDULE_RESULT: scheduled.\n"
+                        f"- thread='{thread}'\n"
+                        f"- from='{sender}' to='{recipient}'\n"
+                        f"- delay_seconds={delay_seconds}\n"
+                        "- delivery_visibility=hidden_until_delivery\n"
+                        "- interruptible=false\n"
+                        "Do NOT narrate this delayed SMS as already received in the current scene."
+                    )
+                _zork_log("SMS SCHEDULE BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("SMS SCHEDULE AUGMENTED RESPONSE", response)
+
+            elif (
+                tool_name == "set_timer"
+                and is_timed_events_enabled
+            ):
+                # Record timer params in delta for Phase 3 to schedule
+                raw_delay = first_payload.get("delay_seconds", 60)
+                try:
+                    delay_seconds = int(raw_delay)
+                except (TypeError, ValueError):
+                    delay_seconds = 60
+                _speed = cls.get_speed_multiplier(campaign)
+                if _speed > 0:
+                    delay_seconds = int(delay_seconds / _speed)
+                delay_seconds = max(15, min(300, delay_seconds))
+                delay_seconds = cls._compress_realtime_timer_delay(
+                    delay_seconds
+                )
+                event_description = str(
+                    first_payload.get("event_description")
+                    or "Something happens."
+                ).strip()[:500]
+                interruptible = bool(
+                    first_payload.get(
+                        "interruptible",
+                        first_payload.get("set_timer_interruptible", True),
+                    )
+                )
+                interrupt_action = first_payload.get(
+                    "interrupt_action",
+                    first_payload.get("set_timer_interrupt_action"),
+                )
+                if isinstance(interrupt_action, str):
+                    interrupt_action = interrupt_action.strip()[:500] or None
+                else:
+                    interrupt_action = None
+                interrupt_scope = cls._normalize_timer_interrupt_scope(
+                    first_payload.get("interrupt_scope")
+                    or first_payload.get("set_timer_interrupt_scope")
+                    or "global"
+                )
+
+                # Record timer params in delta
+                delta.timer_scheduled_delay = delay_seconds
+                delta.timer_scheduled_event = event_description
+                delta.timer_scheduled_interruptible = interruptible
+                delta.timer_scheduled_interrupt_scope = interrupt_scope
+                delta.timer_scheduled_interrupt_action = interrupt_action
+                delta.timer_scheduled_interrupt_user_id = user_id
+
+                logger.info(
+                    "Zork timer recorded in delta: campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
+                    campaign.id,
+                    delay_seconds,
+                    event_description,
+                    interruptible,
+                    interrupt_scope,
+                )
+                tool_result_block = (
+                    "TIMER_SET (system confirmation): A timed event has been scheduled.\n"
+                    f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
+                    "Now narrate the current scene. Hint at urgency narratively but do NOT include "
+                    "countdowns, timestamps, emoji clocks, or explicit seconds — the system adds its own countdown."
+                )
+                _zork_log(
+                    "TIMER TOOL CALL",
+                    (
+                        f"delay={delay_seconds}s event={event_description!r} "
+                        f"interruptible={interruptible} scope={interrupt_scope}"
+                    ),
+                )
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+
+            elif tool_name == "story_outline":
+                chapter_slug = str(first_payload.get("chapter") or "").strip()
+                _zork_log(
+                    "STORY OUTLINE TOOL CALL",
+                    f"chapter={chapter_slug!r}",
+                )
+                outline_result = ""
+                campaign_state_so = dict(campaign_state)
+                so = campaign_state_so.get("story_outline")
+                if isinstance(so, dict):
+                    for ch in so.get("chapters", []):
+                        if ch.get("slug") == chapter_slug:
+                            outline_result = json.dumps(ch, indent=2)
+                            break
+                if not outline_result:
+                    outline_result = (
+                        f"No chapter found with slug '{chapter_slug}'."
+                    )
+                tool_result_block = (
+                    f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
+                )
+                _append_tool_prompt(tool_result_block)
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    tool_augmented_prompt,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("STORY OUTLINE AUGMENTED RESPONSE", response)
+
+            else:
+                _zork_log(
+                    "UNKNOWN TOOL CALL",
+                    f"tool={tool_name!r} payload={json.dumps(first_payload, ensure_ascii=True)}",
+                )
+                break
+
+            json_text_tc = cls._extract_json(response)
+            if not json_text_tc:
+                first_payload = None
+                break
+            try:
+                first_payload = cls._parse_json_lenient(json_text_tc)
+            except Exception:
+                first_payload = None
+                break
+
+        # Hard-stop infinite tool loops
+        if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
+            _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+            _append_tool_prompt(
+                "TOOL_CHAIN_LIMIT_REACHED (0 remaining): Stop calling tools now. Return final narration/state JSON directly.\n"
+                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
+            )
+            response = await gpt.turbo_completion(
+                system_prompt,
+                tool_augmented_prompt,
+                temperature=0.8,
+                max_tokens=2048,
+            )
+            if not response:
+                response = "A hollow silence answers. Try again."
+            else:
+                response = cls._clean_response(response)
+            _zork_log("TOOL CHAIN LIMIT FINAL RESPONSE", response)
+            json_text_tc = cls._extract_json(response)
+            if json_text_tc:
+                try:
+                    first_payload = cls._parse_json_lenient(json_text_tc)
+                except Exception:
+                    first_payload = None
+
+        # Last-resort guard: if we're still holding a bare tool_call payload,
+        # force a final non-tool narration/state response
+        if first_payload and cls._is_tool_call(first_payload):
+            unresolved_tool = str(first_payload.get("tool_call") or "unknown")
+            _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+            _append_tool_prompt(
+                f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
+                "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning.\n"
+                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
+            )
+            response = await gpt.turbo_completion(
+                system_prompt,
+                tool_augmented_prompt,
+                temperature=0.8,
+                max_tokens=2048,
+            )
+            if not response:
+                response = "A hollow silence answers. Try again."
+            else:
+                response = cls._clean_response(response)
+            _zork_log("UNRESOLVED TOOL FINAL RESPONSE", response)
+            json_text_tc = cls._extract_json(response)
+            first_payload = None
+            if json_text_tc:
+                try:
+                    first_payload = cls._parse_json_lenient(json_text_tc)
+                except Exception:
+                    first_payload = None
+
+        # Fallback: LLM returned set_timer alongside narration
+        if (
+            first_payload
+            and isinstance(first_payload, dict)
+            and str(first_payload.get("tool_call") or "").strip()
+            == "set_timer"
+            and "narration" in first_payload
+            and is_timed_events_enabled
+        ):
+            raw_delay = first_payload.get("delay_seconds", 60)
+            try:
+                delay_seconds = int(raw_delay)
+            except (TypeError, ValueError):
+                delay_seconds = 60
+            delay_seconds = max(30, min(300, delay_seconds))
+            delay_seconds = cls._compress_realtime_timer_delay(
+                delay_seconds
+            )
+            event_description = str(
+                first_payload.get("event_description")
+                or "Something happens."
+            ).strip()[:500]
+            interruptible = bool(
+                first_payload.get(
+                    "interruptible",
+                    first_payload.get("set_timer_interruptible", True),
+                )
+            )
+            interrupt_action = first_payload.get(
+                "interrupt_action",
+                first_payload.get("set_timer_interrupt_action"),
+            )
+            if isinstance(interrupt_action, str):
+                interrupt_action = interrupt_action.strip()[:500] or None
+            else:
+                interrupt_action = None
+            interrupt_scope = cls._normalize_timer_interrupt_scope(
+                first_payload.get("interrupt_scope")
+                or first_payload.get("set_timer_interrupt_scope")
+                or "global"
+            )
+
+            # Record timer params in delta
+            delta.timer_scheduled_delay = delay_seconds
+            delta.timer_scheduled_event = event_description
+            delta.timer_scheduled_interruptible = interruptible
+            delta.timer_scheduled_interrupt_scope = interrupt_scope
+            delta.timer_scheduled_interrupt_action = interrupt_action
+            delta.timer_scheduled_interrupt_user_id = user_id
+
+            logger.info(
+                "Zork timer recorded in delta (with narration): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
+                campaign.id,
+                delay_seconds,
+                event_description,
+                interruptible,
+                interrupt_scope,
+            )
+
+        # --- Parse final response ---
+        narration = response.strip()
+        reasoning = None
+        state_update: Dict[str, Any] = {}
+        summary_update = None
+        xp_awarded = 0
+        player_state_update: Dict[str, Any] = {}
+        story_progression = None
+        turn_visibility = None
+        scene_output_raw = None
+        scene_image_prompt = None
+        character_updates: Dict[str, Any] = {}
+        give_item = None
+        calendar_update = None
+
+        json_text = cls._extract_json(response)
+        if json_text:
+            try:
+                payload = cls._parse_json_lenient(json_text)
+                scene_output_raw = payload.get("scene_output")
+                narration_candidate = str(
+                    payload.get("narration") or ""
+                ).strip()
+                if not narration_candidate:
+                    narration_candidate = cls._scene_output_text_from_raw(
+                        scene_output_raw
+                    )
+                if not narration_candidate:
+                    narration_candidate = cls._fallback_narration_from_payload(
+                        payload
+                    )
+                if narration_candidate:
+                    narration = narration_candidate
+                reasoning = cls._sanitize_reasoning(
+                    payload.get("reasoning")
+                )
+                state_update = payload.get("state_update", {}) or {}
+                summary_update = payload.get("summary_update")
+                xp_awarded = payload.get("xp_awarded", 0) or 0
+                player_state_update = (
+                    payload.get("player_state_update", {}) or {}
+                )
+                story_progression = cls._normalize_story_progression(
+                    payload.get("story_progression")
+                )
+                turn_visibility = payload.get("turn_visibility")
+                scene_image_prompt = payload.get("scene_image_prompt")
+                character_updates = (
+                    payload.get("character_updates", {}) or {}
+                )
+                give_item = payload.get("give_item")
+                calendar_update = payload.get("calendar_update")
+
+                # Inline timed event fields
+                inline_timer_delay = payload.get("set_timer_delay")
+                inline_timer_event = payload.get("set_timer_event")
+                if (
+                    inline_timer_delay is not None
+                    and inline_timer_event
+                    and is_timed_events_enabled
+                    and delta.timer_scheduled_delay is None  # Don't override if already set
+                ):
+                    try:
+                        t_delay = int(inline_timer_delay)
+                    except (TypeError, ValueError):
+                        t_delay = 60
+                    _speed = cls.get_speed_multiplier(campaign)
+                    if _speed > 0:
+                        t_delay = int(t_delay / _speed)
+                    t_delay = max(15, min(300, t_delay))
+                    t_delay = cls._compress_realtime_timer_delay(
+                        t_delay
+                    )
+                    t_event = str(inline_timer_event).strip()[:500]
+                    t_interruptible = bool(
+                        payload.get("set_timer_interruptible", True)
+                    )
+                    t_interrupt_action = payload.get(
+                        "set_timer_interrupt_action"
+                    )
+                    if isinstance(t_interrupt_action, str):
+                        t_interrupt_action = (
+                            t_interrupt_action.strip()[:500] or None
+                        )
+                    else:
+                        t_interrupt_action = None
+                    t_interrupt_scope = cls._normalize_timer_interrupt_scope(
+                        payload.get("set_timer_interrupt_scope", "global")
+                    )
+                    # Record timer params in delta
+                    delta.timer_scheduled_delay = t_delay
+                    delta.timer_scheduled_event = t_event
+                    delta.timer_scheduled_interruptible = t_interruptible
+                    delta.timer_scheduled_interrupt_scope = t_interrupt_scope
+                    delta.timer_scheduled_interrupt_action = t_interrupt_action
+                    delta.timer_scheduled_interrupt_user_id = user_id
+                    _zork_log(
+                        f"TIMER RECORDED campaign={campaign.id}",
+                        f"delay={t_delay}s event={t_event!r} "
+                        f"interruptible={t_interruptible} "
+                        f"scope={t_interrupt_scope}",
+                    )
+                    logger.info(
+                        "Zork timer recorded (inline): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
+                        campaign.id,
+                        t_delay,
+                        t_event,
+                        t_interruptible,
+                        t_interrupt_scope,
+                    )
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Failed to parse Zork JSON response: {e} — retrying"
+                )
+                _zork_log(
+                    "JSON PARSE RETRY",
+                    f"error={e}\nresponse={response[:500]}",
+                )
+                response = await gpt.turbo_completion(
+                    system_prompt,
+                    user_prompt,
+                    temperature=0.7,
+                    max_tokens=2048,
+                )
+                if response:
+                    response = cls._clean_response(response)
+                    json_text = cls._extract_json(response)
+                    if json_text:
+                        try:
+                            payload = cls._parse_json_lenient(json_text)
+                            scene_output_raw = payload.get("scene_output")
+                            narration_candidate = str(
+                                payload.get("narration") or ""
+                            ).strip()
+                            if not narration_candidate:
+                                narration_candidate = cls._scene_output_text_from_raw(
+                                    scene_output_raw
+                                )
+                            if not narration_candidate:
+                                narration_candidate = (
+                                    cls._fallback_narration_from_payload(
+                                        payload
+                                    )
+                                )
+                            if narration_candidate:
+                                narration = narration_candidate
+                            reasoning = cls._sanitize_reasoning(
+                                payload.get("reasoning")
+                            )
+                            state_update = (
+                                payload.get("state_update", {}) or {}
+                            )
+                            summary_update = payload.get("summary_update")
+                            xp_awarded = payload.get("xp_awarded", 0) or 0
+                            player_state_update = (
+                                payload.get("player_state_update", {}) or {}
+                            )
+                            story_progression = cls._normalize_story_progression(
+                                payload.get("story_progression")
+                            )
+                            turn_visibility = payload.get("turn_visibility")
+                            scene_image_prompt = payload.get(
+                                "scene_image_prompt"
+                            )
+                            character_updates = (
+                                payload.get("character_updates", {}) or {}
+                            )
+                            calendar_update = payload.get("calendar_update")
+                        except Exception as e2:
+                            logger.warning(
+                                f"Retry also failed to parse JSON: {e2}"
+                            )
+            except Exception as e:
+                logger.warning(f"Failed to parse Zork JSON response: {e}")
+
+        # Safety: if narration still looks like raw JSON
+        if narration.lstrip().startswith("{"):
+            try:
+                salvage = json.loads(cls._extract_json(narration) or "{}")
+                if isinstance(salvage, dict) and salvage:
+                    scene_output_raw = salvage.get("scene_output")
+                    narration = str(salvage.get("narration", "")).strip()
+                    reasoning = cls._sanitize_reasoning(
+                        salvage.get("reasoning")
+                    )
+                    if not narration:
+                        narration = cls._scene_output_text_from_raw(
+                            scene_output_raw
+                        )
+                    if not narration:
+                        narration = cls._fallback_narration_from_payload(
+                            salvage
+                        )
+                    if not narration:
+                        narration = "The world shifts, but nothing clear emerges."
+            except (json.JSONDecodeError, Exception):
+                narration = "The world shifts, but nothing clear emerges."
+        if not str(narration or "").strip():
+            narration = cls._fallback_narration_from_payload(
+                {
+                    "summary_update": summary_update,
+                    "state_update": state_update,
+                    "player_state_update": player_state_update,
+                    "character_updates": character_updates,
+                    "calendar_update": calendar_update,
+                }
+            ) or "The world shifts, but nothing clear emerges."
+
+        # Guard: model sometimes returns chain-of-thought planning text
+        if narration and cls._looks_like_reasoning(narration):
+            _zork_log("REASONING LEAK RETRY", narration[:300])
+            _retry_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "Your previous response was internal reasoning, NOT player-facing narration. "
+                "Return the actual in-character narration and JSON state now. "
+                "Include a concise reasoning field.\n"
+            )
+            _retry_resp = await gpt.turbo_completion(
+                system_prompt, _retry_prompt, temperature=0.8, max_tokens=2048,
+            )
+            if _retry_resp:
+                _retry_resp = cls._clean_response(_retry_resp)
+                if not cls._looks_like_reasoning(_retry_resp):
+                    response = _retry_resp
+                    narration = response.strip()
+                    _rj = cls._extract_json(response)
+                    if _rj:
+                        try:
+                            _rp = cls._parse_json_lenient(_rj)
+                            scene_output_raw = _rp.get("scene_output")
+                            _rn = str(_rp.get("narration") or "").strip()
+                            if not _rn:
+                                _rn = cls._scene_output_text_from_raw(
+                                    scene_output_raw
+                                )
+                            if not _rn:
+                                _rn = cls._fallback_narration_from_payload(_rp)
+                            if _rn:
+                                narration = _rn
+                            reasoning = cls._sanitize_reasoning(
+                                _rp.get("reasoning")
+                            )
+                            state_update = _rp.get("state_update", {}) or {}
+                            summary_update = _rp.get("summary_update")
+                            xp_awarded = _rp.get("xp_awarded", 0) or 0
+                            player_state_update = _rp.get("player_state_update", {}) or {}
+                            story_progression = cls._normalize_story_progression(
+                                _rp.get("story_progression")
+                            )
+                            turn_visibility = _rp.get("turn_visibility")
+                            scene_image_prompt = _rp.get("scene_image_prompt")
+                            character_updates = _rp.get("character_updates", {}) or {}
+                            give_item = _rp.get("give_item")
+                            calendar_update = _rp.get("calendar_update")
+                        except Exception:
+                            pass
+
+        # Empty payload retry
+        if cls._is_emptyish_turn_payload(
+            narration=narration,
+            state_update=state_update
+            if isinstance(state_update, dict)
+            else {},
+            player_state_update=player_state_update
+            if isinstance(player_state_update, dict)
+            else {},
+            summary_update=summary_update,
+            xp_awarded=xp_awarded,
+            scene_image_prompt=scene_image_prompt,
+            character_updates=character_updates
+            if isinstance(character_updates, dict)
+            else {},
+            calendar_update=calendar_update,
+        ):
+            empty_response_repair_count += 1
+            _zork_log(
+                "EMPTY PAYLOAD RETRY",
+                (
+                    f"narration={str(narration or '')[:220]!r}\n"
+                    f"state_keys={list((state_update or {}).keys()) if isinstance(state_update, dict) else []}\n"
+                    f"player_state_keys={list((player_state_update or {}).keys()) if isinstance(player_state_update, dict) else []}"
+                ),
+            )
+            _repair_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
+                "Return final JSON now (no tool_call), including:\n"
+                "- reasoning string grounded in evidence/context used\n"
+                "- narration with one concrete scene development\n"
+                '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
+                "- summary_update string (REQUIRED — one sentence of lasting change or current dramatic state)\n"
+                "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
+            )
+            _repair_response = await gpt.turbo_completion(
+                system_prompt,
+                _repair_prompt,
+                temperature=0.75,
+                max_tokens=2048,
+            )
+            if _repair_response:
+                _repair_response = cls._clean_response(_repair_response)
+                _repair_json = cls._extract_json(_repair_response)
+                if _repair_json:
+                    try:
+                        _repair_payload = cls._parse_json_lenient(
+                            _repair_json
+                        )
+                        scene_output_raw = _repair_payload.get(
+                            "scene_output"
+                        )
+                        _repair_narration = str(
+                            _repair_payload.get("narration") or ""
+                        ).strip()
+                        if not _repair_narration:
+                            _repair_narration = cls._scene_output_text_from_raw(
+                                scene_output_raw
+                            )
+                        if not _repair_narration:
+                            _repair_narration = (
+                                cls._fallback_narration_from_payload(
+                                    _repair_payload
+                                )
+                            )
+                        if _repair_narration:
+                            narration = _repair_narration
+                        reasoning = cls._sanitize_reasoning(
+                            _repair_payload.get("reasoning")
+                        )
+                        state_update = (
+                            _repair_payload.get("state_update", {}) or {}
+                        )
+                        summary_update = _repair_payload.get(
+                            "summary_update"
+                        )
+                        xp_awarded = (
+                            _repair_payload.get("xp_awarded", 0) or 0
+                        )
+                        player_state_update = (
+                            _repair_payload.get("player_state_update", {})
+                            or {}
+                        )
+                        story_progression = cls._normalize_story_progression(
+                            _repair_payload.get("story_progression")
+                        )
+                        turn_visibility = _repair_payload.get("turn_visibility")
+                        scene_image_prompt = _repair_payload.get(
+                            "scene_image_prompt"
+                        )
+                        character_updates = (
+                            _repair_payload.get("character_updates", {})
+                            or {}
+                        )
+                        give_item = _repair_payload.get("give_item")
+                        calendar_update = _repair_payload.get(
+                            "calendar_update"
+                        )
+                        _zork_log(
+                            "EMPTY PAYLOAD REPAIR RESPONSE",
+                            _repair_response[:1200],
+                        )
+                    except Exception:
+                        pass
+
+        # Clock drift retry
+        if (
+            cls._narration_has_explicit_clock_time(narration)
+            and not cls._action_requests_clock_time(action)
+        ):
+            _zork_log("CLOCK DRIFT RETRY", narration[:260])
+            _clock_retry_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
+                "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
+                'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
+                "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
+            )
+            _clock_retry_resp = await gpt.turbo_completion(
+                system_prompt,
+                _clock_retry_prompt,
+                temperature=0.75,
+                max_tokens=2048,
+            )
+            if _clock_retry_resp:
+                _clock_retry_resp = cls._clean_response(_clock_retry_resp)
+                _clock_retry_json = cls._extract_json(_clock_retry_resp)
+                if _clock_retry_json:
+                    try:
+                        _clock_payload = cls._parse_json_lenient(
+                            _clock_retry_json
+                        )
+                        scene_output_raw = _clock_payload.get(
+                            "scene_output"
+                        )
+                        _clock_narration = str(
+                            _clock_payload.get("narration") or ""
+                        ).strip()
+                        if not _clock_narration:
+                            _clock_narration = cls._scene_output_text_from_raw(
+                                scene_output_raw
+                            )
+                        if not _clock_narration:
+                            _clock_narration = cls._fallback_narration_from_payload(
+                                _clock_payload
+                            )
+                        if _clock_narration:
+                            narration = _clock_narration
+                        reasoning = cls._sanitize_reasoning(
+                            _clock_payload.get("reasoning")
+                        )
+                        state_update = _clock_payload.get("state_update", {}) or {}
+                        summary_update = _clock_payload.get("summary_update")
+                        xp_awarded = _clock_payload.get("xp_awarded", 0) or 0
+                        player_state_update = (
+                            _clock_payload.get("player_state_update", {}) or {}
+                        )
+                        story_progression = cls._normalize_story_progression(
+                            _clock_payload.get("story_progression")
+                        )
+                        turn_visibility = _clock_payload.get("turn_visibility")
+                        scene_image_prompt = _clock_payload.get("scene_image_prompt")
+                        character_updates = _clock_payload.get("character_updates", {}) or {}
+                        give_item = _clock_payload.get("give_item")
+                        calendar_update = _clock_payload.get("calendar_update")
+                        empty_response_repair_count += 1
+                    except Exception:
+                        pass
+
+        # Anti-echo retry
+        _anti_echo_retry, _anti_echo_reason = cls._anti_echo_retry_decision(
+            action,
+            narration,
+        )
+        if _anti_echo_retry:
+            _zork_log("ANTI-ECHO RETRY", _anti_echo_reason)
+            _anti_echo_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "OUTPUT_VALIDATION_FAILED: previous narration echoed/paraphrased player wording.\n"
+                "Do NOT restate player phrasing. NPC first line should add new information, a decision, "
+                "a demand, or a consequence. A direct question is valid only if the NPC truly still lacks enough to react.\n"
+                'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
+                "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
+            )
+            _anti_echo_resp = await gpt.turbo_completion(
+                system_prompt,
+                _anti_echo_prompt,
+                temperature=0.75,
+                max_tokens=2048,
+            )
+            if _anti_echo_resp:
+                _anti_echo_resp = cls._clean_response(_anti_echo_resp)
+                _anti_echo_json = cls._extract_json(_anti_echo_resp)
+                if _anti_echo_json:
+                    try:
+                        _anti_payload = cls._parse_json_lenient(
+                            _anti_echo_json
+                        )
+                        scene_output_raw = _anti_payload.get(
+                            "scene_output"
+                        )
+                        _anti_narration = str(
+                            _anti_payload.get("narration") or ""
+                        ).strip()
+                        if not _anti_narration:
+                            _anti_narration = cls._scene_output_text_from_raw(
+                                scene_output_raw
+                            )
+                        if not _anti_narration:
+                            _anti_narration = cls._fallback_narration_from_payload(
+                                _anti_payload
+                            )
+                        if _anti_narration:
+                            narration = _anti_narration
+                        reasoning = cls._sanitize_reasoning(
+                            _anti_payload.get("reasoning")
+                        )
+                        state_update = (
+                            _anti_payload.get("state_update", {}) or {}
+                        )
+                        summary_update = _anti_payload.get("summary_update")
+                        xp_awarded = _anti_payload.get("xp_awarded", 0) or 0
+                        player_state_update = (
+                            _anti_payload.get("player_state_update", {}) or {}
+                        )
+                        story_progression = cls._normalize_story_progression(
+                            _anti_payload.get("story_progression")
+                        )
+                        turn_visibility = _anti_payload.get("turn_visibility")
+                        scene_image_prompt = _anti_payload.get("scene_image_prompt")
+                        character_updates = _anti_payload.get("character_updates", {}) or {}
+                        give_item = _anti_payload.get("give_item")
+                        calendar_update = _anti_payload.get("calendar_update")
+                        anti_echo_retry_count += 1
+                    except Exception:
+                        pass
+
+        # --- Post-processing ---
+        state_update = cls._ensure_minimum_state_update_contract(
+            campaign_state,
+            state_update,
+        )
+        state_update, calendar_update = cls._extract_calendar_update_from_state_update(
+            state_update,
+            calendar_update,
+        )
+
+        # Normalize turn visibility
+        turn_visibility = cls._normalize_turn_visibility(
+            campaign,
+            SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+            turn_visibility,
+            is_private_context=is_dm,
+        )
+        turn_visibility = cls._promote_player_npc_slugs(
+            turn_visibility, campaign.id,
+        )
+        private_context_candidate = cls._derive_private_context_candidate(
+            campaign,
+            SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+            player_state,
+            action,
+        )
+        if private_context_candidate is not None:
+            turn_visibility = cls._apply_private_context_candidate(
+                turn_visibility,
+                private_context_candidate,
+            )
+        stored_player_action, private_phone_redacted = (
+            cls._redact_private_phone_command_lines(action)
+        )
+        if sms_activity_detected or private_phone_redacted:
+            turn_visibility = cls._force_private_visibility_for_phone_activity(
+                turn_visibility,
+                actor_slug=str(
+                    turn_visibility.get("actor_player_slug")
+                    or cls._player_slug_key(
+                        player_state.get("character_name")
+                    )
+                    or ""
+                ).strip(),
+                actor_user_id=user_id,
+            )
+        suppress_recent_context = bool(
+            sms_activity_detected or private_phone_redacted
+        )
+        ephemeral_notices: List[str] = []
+        if (
+            private_context_candidate is not None
+            and bool(private_context_candidate.get("warning"))
+        ):
+            ephemeral_notices.append(
+                "Warning: if you include the real whisper/private content in the same setup message, it may leak before the aside is fully established. Use one short setup turn first, then continue once the reply keeps it private."
+            )
+        cls._persist_private_context_state(
+            player_state,
+            turn_visibility,
+            action,
+            private_context_candidate,
+        )
+
+        _planning_tools_used = bool(
+            {"plot_plan", "chapter_plan", "consequence_log"}
+            & set(used_tool_names)
+        )
+        raw_narration = narration
+        if (
+            not _planning_tools_used
+            and cls._looks_like_major_narrative_beat(
+                narration=narration,
+                summary_update=summary_update,
+                state_update=state_update
+                if isinstance(state_update, dict)
+                else {},
+                character_updates=character_updates
+                if isinstance(character_updates, dict)
+                else {},
+                calendar_update=calendar_update,
+            )
+        ):
+            _planning_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "PLANNING_ENFORCEMENT:\n"
+                "A major beat occurred. Before ending the turn, return ONLY one planning tool call JSON:\n"
+                "- plot_plan OR consequence_log (chapter_plan optional in off-rails)\n"
+                "No narration. No extra keys.\n"
+            )
+            _planning_resp = await gpt.turbo_completion(
+                system_prompt,
+                _planning_prompt,
+                temperature=0.6,
+                max_tokens=512,
+            )
+            if _planning_resp:
+                _planning_resp = cls._clean_response(_planning_resp)
+                _planning_json = cls._extract_json(_planning_resp)
+                if _planning_json:
+                    try:
+                        _planning_payload = cls._parse_json_lenient(
+                            _planning_json
+                        )
+                        _planning_name = str(
+                            _planning_payload.get("tool_call") or ""
+                        ).strip()
+                        if _planning_name in {
+                            "plot_plan",
+                            "chapter_plan",
+                            "consequence_log",
+                        }:
+                            forced_planning_payload = _planning_payload
+                            _zork_log(
+                                "FORCED PLANNING TOOL",
+                                json.dumps(
+                                    forced_planning_payload,
+                                    ensure_ascii=True,
+                                ),
+                            )
+                    except Exception:
+                        pass
+
+        narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+        narration = cls._strip_inventory_from_narration(narration)
+        if sms_activity_detected or private_phone_redacted:
+            turn_visibility["aware_npc_slugs"] = []
+        else:
+            inferred_aware_npc_slugs = cls._infer_aware_npc_slugs(
+                campaign,
+                player_state,
+                turn_visibility,
+                narration_text=raw_narration,
+                summary_update=summary_update,
+                private_context_candidate=private_context_candidate,
+            )
+            if inferred_aware_npc_slugs:
+                turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
+        turn_visibility = cls._sanitize_turn_awareness_for_scene(
+            campaign,
+            player_state,
+            turn_visibility,
+        )
+        _resolved_turn_keys = cls._resolved_turn_visibility_keys(
+            turn_visibility,
+            scene_output_raw=scene_output_raw,
+            player_state_update=player_state_update,
+            fallback_location_key=cls._room_key_from_player_state(
+                player_state
+            ),
+        )
+        turn_visibility["location_key"] = _resolved_turn_keys.get(
+            "location_key"
+        )
+        turn_visibility["context_key"] = _resolved_turn_keys.get(
+            "context_key"
+        )
+
+        _zork_log(
+            f"TURN RESULT campaign={campaign.id}",
+            f"--- REASONING ---\n{reasoning}\n\n"
+            f"--- NARRATION ---\n{narration}\n\n"
+            f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
+            f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
+            f"--- STORY PROGRESSION ---\n{json.dumps(story_progression, indent=2)}\n\n"
+            f"--- TURN VISIBILITY ---\n{json.dumps(turn_visibility, indent=2)}\n\n"
+            f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
+            f"--- XP AWARDED ---\n{xp_awarded}\n"
+            f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
+        )
+
+        state_update, player_state_update = cls._rescue_misplaced_room_state(
+            state_update, player_state_update
+        )
+        state_update, player_state_update = cls._split_room_state(
+            state_update, player_state_update
+        )
+        player_state_update = cls._sync_game_time_to_player_state(
+            state_update, player_state_update
+        )
+        state_update = cls._scrub_inventory_from_state(state_update)
+
+        # --- Build and return TurnDelta ---
+        delta.narration = narration
+        delta.raw_narration = raw_narration
+        delta.scene_output = scene_output_raw
+        delta.scene_output_raw = scene_output_raw
+        delta.reasoning = reasoning
+        delta.state_update = state_update
+        delta.player_state_update = player_state_update
+        delta.character_updates = character_updates
+        delta.summary_update = summary_update
+        delta.calendar_update = calendar_update
+        delta.give_item = give_item
+        delta.xp_awarded = xp_awarded
+        delta.turn_visibility = turn_visibility
+        delta.story_progression = story_progression
+        delta.scene_image_prompt = scene_image_prompt
+        delta.ephemeral_notices = ephemeral_notices
+        delta.used_tool_names = used_tool_names
+        delta.forced_planning_payload = forced_planning_payload
+        delta.auto_forced_memory_search = auto_forced_memory_search
+        delta.empty_response_repair_count = empty_response_repair_count
+        delta.anti_echo_retry_count = anti_echo_retry_count
+        delta.sms_activity_detected = sms_activity_detected
+        delta.private_phone_redacted = private_phone_redacted
+        delta.stored_player_action = stored_player_action
+        delta.suppress_recent_context = suppress_recent_context
+
+        return delta
+
+    @classmethod
     async def play_action(
         cls,
         ctx,
@@ -16707,10 +21092,11 @@ class ZorkEmulator:
             if campaign_id is None:
                 return None
             should_clear_claim = True
-        lock = cls._get_lock(campaign_id)
+        conc = cls._get_concurrency(campaign_id)
 
         try:
-            async with lock:
+            # === Phase 1: PREFLIGHT (holds commit_lock — <100ms) ===
+            async with conc.commit_lock:
                 with app.app_context():
                     campaign = ZorkCampaign.query.get(campaign_id)
                     player = cls.get_or_create_player(
@@ -16732,3811 +21118,29 @@ class ZorkEmulator:
                     player.updated = db.func.now()
                     db.session.commit()
 
-                    # Defensive guard: if still in setup mode, skip gameplay.
-                    if cls.is_in_setup_mode(campaign):
-                        return "Campaign setup is still in progress. Please complete setup first."
-
                     player_state = cls.get_player_state(player)
-                    action_clean = action.strip().lower()
-                    time_skip_request = cls._extract_time_skip_request(action)
-                    if (
-                        getattr(ctx, "guild", None) is None
-                        and time_skip_request is not None
-                    ):
-                        return (
-                            "Time skips are disabled in private DMs. "
-                            "Use the main campaign thread or channel for shared time jumps."
-                        )
-
-                    # Intercepted commands that don't count as player actions
-                    # should not interrupt timers.
-                    _INTERCEPTED_COMMANDS = {
-                        "look", "l", "inventory", "inv", "i",
-                        "calendar", "cal", "events",
-                        "roster", "characters", "npcs",
-                    }
-                    _is_intercepted = action_clean in _INTERCEPTED_COMMANDS
-
-                    timer_interrupt_context = None
-                    if not _is_intercepted:
-                        pending = cls._pending_timers.get(campaign_id)
-                        can_interrupt = (
-                            pending is not None
-                            and pending.get("interruptible", True)
-                            and cls._timer_can_be_interrupted_by(pending, ctx.author.id)
-                        )
-                        if can_interrupt:
-                            cancelled_timer = cls.cancel_pending_timer(campaign_id)
-                            if cancelled_timer:
-                                cls.increment_player_stat(
-                                    player, cls.PLAYER_STATS_TIMERS_AVERTED_KEY
-                                )
-                                player.updated = db.func.now()
-                                db.session.commit()
-                                interrupt_action = cancelled_timer.get(
-                                    "interrupt_action"
-                                )
-                                if interrupt_action:
-                                    timer_interrupt_context = interrupt_action
-                                # Persist the interruption as a turn so it appears in RECENT_TURNS.
-                                event_desc = cancelled_timer.get(
-                                    "event", "an impending event"
-                                )
-                                interrupt_note = (
-                                    f"[TIMER INTERRUPTED] The player acted before the timed event fired. "
-                                    f'Averted event: "{event_desc}"'
-                                )
-                                if interrupt_action:
-                                    interrupt_note += (
-                                        f' Interruption context: "{interrupt_action}"'
-                                    )
-                                interrupt_state = cls.get_campaign_state(campaign)
-                                interrupt_turn_time = cls._extract_game_time_snapshot(
-                                    interrupt_state
-                                )
-                                timer_interrupt_turn = ZorkTurn(
-                                    campaign_id=campaign.id,
-                                    user_id=ctx.author.id,
-                                    kind="narrator",
-                                    content=interrupt_note,
-                                    channel_id=ctx.channel.id,
-                                    meta_json=cls._dump_json(
-                                        {
-                                            "game_time": interrupt_turn_time,
-                                            "visibility": cls._default_turn_visibility_meta(
-                                                campaign,
-                                                player,
-                                                getattr(ctx, "guild", None) is None,
-                                            ),
-                                        }
-                                    ),
-                                )
-                                db.session.add(timer_interrupt_turn)
-                                db.session.flush()
-                                cls._record_turn_game_time(
-                                    interrupt_state,
-                                    timer_interrupt_turn.id,
-                                    interrupt_turn_time,
-                                )
-                                campaign.state_json = cls._dump_json(interrupt_state)
-                                db.session.commit()
-                        # Non-interruptible timers or local timers from another player are left running.
-                    is_thread_channel = isinstance(ctx.channel, discord.Thread) or (
-                        getattr(ctx, "guild", None) is None
+                    preflight = await cls._play_action_preflight(
+                        ctx, action, campaign, player, player_state,
+                        command_prefix=command_prefix,
                     )
-
-                    has_character_name = bool(
-                        player_state.get("character_name", "").strip()
-                    )
-                    campaign_has_content = bool((campaign.summary or "").strip())
-                    other_players_exist = (
-                        ZorkPlayer.query.filter(
-                            ZorkPlayer.campaign_id == campaign.id,
-                            ZorkPlayer.user_id != ctx.author.id,
-                        ).count()
-                        > 0
-                    )
-                    needs_identity = campaign_has_content and not has_character_name
-                    is_new_player = not has_character_name and not campaign_has_content
-
-                    if needs_identity:
-                        return (
-                            "This campaign already has adventurers. "
-                            f"Set your identity first with `{command_prefix}zork identity <name>`. "
-                            "Then return to the adventure."
-                        )
-
-                    # Deterministic onboarding in non-thread channels: bypass LLM until explicit choice.
-                    onboarding_state = player_state.get("onboarding_state")
-                    party_status = player_state.get("party_status")
-                    if not is_thread_channel:
-                        if not party_status and not onboarding_state:
-                            player_state["onboarding_state"] = "await_party_choice"
-                            player.state_json = cls._dump_json(player_state)
-                            player.updated = db.func.now()
-                            db.session.commit()
-                            return (
-                                "Mission rejected until path is selected. Reply with exactly one option:\n"
-                                f"- `{cls.MAIN_PARTY_TOKEN}`\n"
-                                f"- `{cls.NEW_PATH_TOKEN}`"
-                            )
-
-                        if onboarding_state == "await_party_choice":
-                            if action_clean == cls.MAIN_PARTY_TOKEN:
-                                player_state["party_status"] = "main_party"
-                                player_state["onboarding_state"] = None
-                                player.state_json = cls._dump_json(player_state)
-                                player.updated = db.func.now()
-                                db.session.commit()
-                                return "Joined main party. Your next message will be treated as an in-world action."
-
-                            if action_clean == cls.NEW_PATH_TOKEN:
-                                player_state["onboarding_state"] = "await_campaign_name"
-                                player.state_json = cls._dump_json(player_state)
-                                player.updated = db.func.now()
-                                db.session.commit()
-                                options = cls._build_campaign_suggestion_text(
-                                    ctx.guild.id
-                                )
-                                return (
-                                    "Reply next with your campaign name (letters/numbers/spaces).\n"
-                                    f"{options}\n"
-                                    f"Hint: `{command_prefix}zork thread <name>` also creates your own path thread."
-                                )
-
-                            return (
-                                "Mission rejected. Reply with exactly one option:\n"
-                                f"- `{cls.MAIN_PARTY_TOKEN}`\n"
-                                f"- `{cls.NEW_PATH_TOKEN}`"
-                            )
-
-                        if onboarding_state == "await_campaign_name":
-                            campaign_name = cls._sanitize_campaign_name_text(action)
-                            if not campaign_name:
-                                return "Mission rejected. Reply with a campaign name using letters/numbers/spaces."
-                            if len(campaign_name) < 2:
-                                return "Mission rejected. Campaign name must be at least 2 characters."
-                            if not isinstance(ctx.channel, discord.TextChannel):
-                                return f"Could not create a new path thread here. Use `{command_prefix}zork thread {campaign_name}`."
-                            thread_name = f"zork-{campaign_name}"[:90]
-                            try:
-                                thread = await ctx.channel.create_thread(
-                                    name=thread_name,
-                                    type=discord.ChannelType.public_thread,
-                                    auto_archive_duration=1440,
-                                )
-                            except Exception as e:
-                                return f"Could not create path thread: {e}"
-
-                            thread_channel, _ = cls.enable_channel(
-                                ctx.guild.id, thread.id, ctx.author.id
-                            )
-                            thread_campaign, _, _ = cls.set_active_campaign(
-                                thread_channel,
-                                ctx.guild.id,
-                                campaign_name,
-                                ctx.author.id,
-                                enforce_activity_window=False,
-                            )
-                            thread_player = cls.get_or_create_player(
-                                thread_campaign.id,
-                                ctx.author.id,
-                                campaign=thread_campaign,
-                            )
-                            thread_state = cls.get_player_state(thread_player)
-                            thread_state = cls._copy_identity_fields(
-                                player_state, thread_state
-                            )
-                            thread_state["party_status"] = "new_path"
-                            thread_state["onboarding_state"] = None
-                            thread_player.state_json = cls._dump_json(thread_state)
-                            thread_player.updated = db.func.now()
-
-                            player_state["party_status"] = "new_path"
-                            player_state["onboarding_state"] = None
-                            player.state_json = cls._dump_json(player_state)
-                            player.updated = db.func.now()
-                            db.session.commit()
-                            return (
-                                f"Created your path thread: {thread.mention}\n"
-                                f"Campaign: `{thread_campaign.name}`\n"
-                                "Continue your adventure there."
-                            )
-
-                    if action_clean in ("look", "l") and (
-                        player_state.get("room_description")
-                        or player_state.get("room_summary")
-                    ):
-                        title = (
-                            player_state.get("room_title")
-                            or player_state.get("location")
-                            or "Unknown"
-                        )
-                        desc = (
-                            player_state.get("room_description")
-                            or player_state.get("room_summary")
-                            or ""
-                        )
-                        exits = player_state.get("exits")
-                        if exits and isinstance(exits, list):
-                            _el = [
-                                (e.get("direction") or e.get("name") or str(e))
-                                if isinstance(e, dict) else str(e)
-                                for e in exits
-                            ]
-                            exits_text = f"\nExits: {', '.join(_el)}"
-                        else:
-                            exits_text = ""
-                        narration = f"{title}\n{desc}{exits_text}"
-                        inventory_line = cls._format_inventory(player_state)
-                        if inventory_line:
-                            narration = f"{narration}\n\n{inventory_line}"
-                        narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        quick_state = cls.get_campaign_state(campaign)
-                        quick_time = cls._extract_game_time_snapshot(quick_state)
-                        quick_turn_meta = cls._dump_json(
-                            {
-                                "game_time": quick_time,
-                                "visibility": cls._default_turn_visibility_meta(
-                                    campaign,
-                                    player,
-                                    getattr(ctx, "guild", None) is None,
-                                ),
-                            }
-                        )
-                        look_player_turn = ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="player",
-                            content=action,
-                            channel_id=ctx.channel.id,
-                            meta_json=quick_turn_meta,
-                        )
-                        look_narrator_turn = ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="narrator",
-                            content=narration,
-                            channel_id=ctx.channel.id,
-                            meta_json=quick_turn_meta,
-                        )
-                        db.session.add(look_player_turn)
-                        db.session.add(look_narrator_turn)
-                        db.session.flush()
-                        cls._record_turn_game_time(quick_state, look_player_turn.id, quick_time)
-                        cls._record_turn_game_time(quick_state, look_narrator_turn.id, quick_time)
-                        campaign.state_json = cls._dump_json(quick_state)
-                        campaign.last_narration = narration
-                        campaign.updated = db.func.now()
-                        db.session.commit()
-                        return narration
-                    if action_clean in ("inventory", "inv", "i"):
-                        narration = (
-                            cls._format_inventory(player_state) or "Inventory: empty"
-                        )
-                        narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                        quick_state = cls.get_campaign_state(campaign)
-                        quick_time = cls._extract_game_time_snapshot(quick_state)
-                        quick_turn_meta = cls._dump_json(
-                            {
-                                "game_time": quick_time,
-                                "visibility": cls._default_turn_visibility_meta(
-                                    campaign,
-                                    player,
-                                    getattr(ctx, "guild", None) is None,
-                                ),
-                            }
-                        )
-                        inv_player_turn = ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="player",
-                            content=action,
-                            channel_id=ctx.channel.id,
-                            meta_json=quick_turn_meta,
-                        )
-                        inv_narrator_turn = ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="narrator",
-                            content=narration,
-                            channel_id=ctx.channel.id,
-                            meta_json=quick_turn_meta,
-                        )
-                        db.session.add(inv_player_turn)
-                        db.session.add(inv_narrator_turn)
-                        db.session.flush()
-                        cls._record_turn_game_time(quick_state, inv_player_turn.id, quick_time)
-                        cls._record_turn_game_time(quick_state, inv_narrator_turn.id, quick_time)
-                        campaign.state_json = cls._dump_json(quick_state)
-                        campaign.last_narration = narration
-                        campaign.updated = db.func.now()
-                        db.session.commit()
-                        return narration
-
-                    # --- Intercepted: calendar ---
-                    if action_clean in ("calendar", "cal", "events"):
-                        campaign_state = cls.get_campaign_state(campaign)
-                        game_time = campaign_state.get("game_time", {})
-                        calendar = cls._calendar_for_prompt(campaign_state)
-                        date_label = game_time.get(
-                            "date_label",
-                            f"Day {game_time.get('day', '?')}, {game_time.get('period', '?').title()}",
-                        )
-                        lines = [f"**Game Time:** {date_label}"]
-                        if calendar:
-                            lines.append("**Upcoming Events:**")
-                            for ev in calendar:
-                                days_remaining = int(ev.get("_days_until", ev.get("days_remaining", 0)))
-                                hours_remaining = int(
-                                    ev.get("_hours_until", ev.get("hours_remaining", days_remaining * 24))
-                                )
-                                fire_day = int(ev.get("fire_day", 1))
-                                fire_hour = max(
-                                    0, min(23, int(ev.get("fire_hour", 23)))
-                                )
-                                desc = ev.get("description", "")
-                                if hours_remaining < 0:
-                                    eta = f"overdue by {abs(hours_remaining)} hour(s)"
-                                elif hours_remaining == 0:
-                                    eta = "fires now"
-                                elif hours_remaining < 48:
-                                    eta = f"fires in {hours_remaining} hour(s)"
-                                else:
-                                    eta_days = (hours_remaining + 23) // 24
-                                    eta = f"fires in {eta_days} day(s)"
-                                lines.append(
-                                    (
-                                        f"- **{ev.get('name', 'Unknown')}** — "
-                                        f"Day {fire_day}, {fire_hour:02d}:00 ({eta})"
-                                    )
-                                    + (f" ({desc})" if desc else "")
-                                )
-                        else:
-                            lines.append("No upcoming events.")
-                        narration = "\n".join(lines)
-                        return narration
-
-                    # --- Intercepted: roster ---
-                    if action_clean in ("roster", "characters", "npcs"):
-                        characters = cls.get_campaign_characters(campaign)
-                        return cls.format_roster(characters)
-
-                    sms_activity_detected = False
-                    sms_inline_draft: Optional[Tuple[str, str]] = None
-                    is_ooc_action = bool(
-                        re.match(r"\s*\[OOC\b", action or "", re.IGNORECASE)
-                    )
-                    if not is_ooc_action:
-                        sms_intent = cls._extract_inline_sms_intent(action)
-                        if sms_intent is not None:
-                            sms_activity_detected = True
-                            sms_inline_draft = sms_intent
-                            sms_recipient, sms_message = sms_intent
-                            sms_sender = str(
-                                player_state.get("character_name")
-                                or f"Player {ctx.author.id}"
-                            ).strip()[:80]
-                            thread_key = (
-                                cls._sms_normalize_thread_key(sms_recipient)
-                                or sms_recipient
-                            )
-                            _zork_log(
-                                "SMS AUTO DRAFT",
-                                f"thread={thread_key!r} sender={sms_sender!r} recipient={sms_recipient!r}",
-                            )
-
-                    campaign_state = cls.get_campaign_state(campaign)
-                    turns = cls.get_recent_turns(campaign.id)
-                    turn_attachment_context = await cls._build_turn_attachment_context(
-                        ctx
-                    )
-                    party_snapshot = cls._build_party_snapshot_for_prompt(
-                        campaign, player, player_state
-                    )
-                    viewer_slug = cls._player_slug_key(
-                        player_state.get("character_name")
-                    )
-                    viewer_location_key = cls._room_key_from_player_state(
-                        player_state
-                    ).lower()
-                    stored_private_context = cls._active_private_context_from_state(
-                        player_state
-                    )
-                    if cls._action_leaves_private_context(action, stored_private_context):
-                        viewer_private_context = None
-                    else:
-                        viewer_private_context = cls._derive_private_context_candidate(
-                            campaign,
-                            player,
-                            player_state,
-                            action,
-                        ) or stored_private_context or cls._fallback_private_context_from_recent(
-                            turns,
-                            viewer_user_id=player.user_id,
-                            viewer_slug=viewer_slug,
-                            viewer_location_key=viewer_location_key,
-                        )
-                    provisional_private_context_key = str(
-                        (viewer_private_context or {}).get("context_key") or ""
-                    ).strip()
-                    recent_private_contexts = cls._recent_private_contexts_for_prompt(
-                        turns,
-                        viewer_user_id=player.user_id,
-                        viewer_slug=viewer_slug,
-                        active_context_key=provisional_private_context_key,
-                        limit=3,
-                    )
-                    if not viewer_private_context:
-                        viewer_private_context = cls._fallback_private_context_from_rows(
-                            recent_private_contexts,
-                            viewer_location_key=viewer_location_key,
-                        )
-                    viewer_private_context_key = str(
-                        (viewer_private_context or {}).get("context_key") or ""
-                    ).strip()
-                    turn_tail_extra_lines: List[str] = []
-                    if timer_interrupt_context:
-                        turn_tail_extra_lines.append(
-                            "TIMER_INTERRUPTED: The player acted before a timed event fired.\n"
-                            f'The interrupted event was: "{timer_interrupt_context}"\n'
-                            f'The player\'s action that interrupted it: "{action}"\n'
-                            "Incorporate the interruption naturally into your narration."
-                        )
-                    if time_skip_request is not None:
-                        skip_desc = str(
-                            time_skip_request.get("description") or ""
-                        ).strip()
-                        skip_minutes = cls._coerce_non_negative_int(
-                            time_skip_request.get("minutes", 60), default=60
-                        )
-                        turn_tail_extra_lines.append(
-                            "TIME_SKIP: The player requests a time skip. Fast-forward past "
-                            "any idle, repetitive, or low-stakes moments and jump ahead to "
-                            "the next meaningful story beat — a new encounter, discovery, "
-                            "twist, or decision point. Summarise skipped time in one brief "
-                            "sentence, then narrate the new moment in full.\n"
-                            f"- requested_skip_minutes={skip_minutes}\n"
-                            + (
-                                f"- requested_skip_description={skip_desc}\n"
-                                if skip_desc
-                                else ""
-                            )
-                        )
-                    if sms_inline_draft is not None:
-                        sms_recipient, sms_message = sms_inline_draft
-                        sms_sender = str(
-                            player_state.get("character_name")
-                            or f"Player {ctx.author.id}"
-                        ).strip()[:80]
-                        sms_thread = (
-                            cls._sms_normalize_thread_key(sms_recipient)
-                            or sms_recipient
-                        )
-                        turn_tail_extra_lines.append(
-                            "SMS_DRAFT: The player's action looks like an attempted outgoing text.\n"
-                            f"- thread='{sms_thread}'\n"
-                            f"- from='{sms_sender}' to='{sms_recipient}'\n"
-                            f"- message='{sms_message}'\n"
-                            "Do NOT assume it has been sent yet. If it really sends in this scene, call sms_write. "
-                            "If the send fails, is interrupted, is reconsidered, or never actually happens, do not call sms_write."
-                        )
-                    prompt_difficulty = cls.normalize_difficulty(
-                        campaign_state.get("difficulty", "normal")
-                    )
-                    # --- Heuristic preload: skip bootstrap LLM call ---
-                    current_prompt_stage = cls.PROMPT_STAGE_RESEARCH
-                    receiver_hints = cls._recent_turn_receiver_hints(
-                        campaign,
-                        viewer_user_id=player.user_id,
-                        party_snapshot=party_snapshot,
-                        player_state=player_state,
-                    )
-                    first_payload = {
-                        "tool_call": "recent_turns",
-                        "player_slugs": receiver_hints.get("player_slugs") or [],
-                        "npc_slugs": receiver_hints.get("npc_slugs") or [],
-                    }
-                    system_prompt, user_prompt = cls.build_prompt(
-                        campaign,
-                        player,
-                        action,
-                        turns,
-                        party_snapshot=party_snapshot,
-                        is_new_player=is_new_player,
-                        turn_attachment_context=turn_attachment_context,
-                        turn_visibility_default="public",
-                        tail_extra_lines=turn_tail_extra_lines,
-                        prompt_stage=current_prompt_stage,
-                        channel_id=getattr(ctx.channel, "id", None),
-                    )
-                    base_user_prompt = user_prompt
-                    turn_prompt_tail = cls._build_turn_prompt_tail(
-                        player,
-                        player_state,
-                        action,
-                        turn_attachment_context,
-                        cls._turn_stage_note(
-                            prompt_difficulty,
-                            current_prompt_stage,
-                            campaign=campaign,
-                            channel_id=getattr(ctx.channel, "id", None),
-                        ),
-                        extra_lines=turn_tail_extra_lines,
-                    )
-                    memory_lookup_enabled = (
-                        "memory_lookup_enabled: true" in user_prompt.lower()
-                    )
-                    gpt = cls._new_gpt(
-                        campaign=campaign,
-                        channel_id=getattr(ctx.channel, "id", None),
-                    )
-                    _zork_log(
-                        f"TURN START campaign={campaign.id}",
-                        f"heuristic preload: recent_turns with receivers={receiver_hints}\n"
-                        f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{user_prompt}",
-                    )
-                    auto_forced_memory_search = False
-                    recent_turns_loaded = False
-                    memory_recall_help_emitted = False
-                    empty_response_repair_count = 0
-                    anti_echo_retry_count = 0
-                    used_tool_names = set()
-                    seen_tool_signatures = set()
-                    forced_planning_payload = None
-
-                    # Support chained tool calls (e.g. memory_search -> memory_search -> narration).
-                    # The model can refine queries when the first search has no useful hits.
-                    tool_prompt_blocks: List[str] = []
-                    tool_augmented_prompt = user_prompt
-
-                    def _rebuild_tool_prompt() -> None:
-                        nonlocal tool_augmented_prompt
-                        tool_augmented_prompt = cls._recompose_prompt_with_tail(
-                            base_user_prompt,
-                            turn_prompt_tail,
-                            *tool_prompt_blocks,
-                        )
-
-                    def _append_tool_prompt(*blocks: object) -> None:
-                        nonlocal tool_augmented_prompt
-                        for block in blocks:
-                            text = str(block or "").strip()
-                            if text:
-                                tool_prompt_blocks.append(text)
-                        tool_prompt_blocks[:] = [
-                            block
-                            for block in tool_prompt_blocks
-                            if not str(block or "").strip().startswith("TOOL_BUDGET:")
-                        ]
-                        if current_prompt_stage != cls.PROMPT_STAGE_FINAL:
-                            tool_prompt_blocks.append(_tool_budget_note())
-                        _rebuild_tool_prompt()
-                        _zork_log(
-                            "TURN AUGMENTED PROMPT",
-                            f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{tool_augmented_prompt}",
-                        )
-
-                    def _tool_budget_note() -> str:
-                        remaining = max(0, max_tool_chain_steps - tool_chain_steps)
-                        if remaining <= 0:
-                            return f"TOOL_BUDGET: 0 call(s) remaining. Return final JSON now (no tool_call)."
-                        if remaining == 1:
-                            if current_prompt_stage == cls.PROMPT_STAGE_FINAL:
-                                return f"TOOL_BUDGET: 1 call(s) remaining. Return final JSON now (no tool_call)."
-                            return f"TOOL_BUDGET: 1 call(s) remaining. Return ready_to_write or final JSON now."
-                        return f"TOOL_BUDGET: {remaining} call(s) remaining."
-
-                    def _switch_prompt_stage(next_stage: str) -> None:
-                        nonlocal current_prompt_stage
-                        nonlocal system_prompt
-                        nonlocal user_prompt
-                        nonlocal base_user_prompt
-                        nonlocal turn_prompt_tail
-                        if next_stage == current_prompt_stage:
-                            return
-                        current_prompt_stage = next_stage
-                        system_prompt, user_prompt = cls.build_prompt(
-                            campaign,
-                            player,
-                            action,
-                            turns,
-                            party_snapshot=party_snapshot,
-                            is_new_player=is_new_player,
-                            turn_attachment_context=turn_attachment_context,
-                            turn_visibility_default="public",
-                            tail_extra_lines=turn_tail_extra_lines,
-                            prompt_stage=current_prompt_stage,
-                            channel_id=getattr(ctx.channel, "id", None),
-                        )
-                        base_user_prompt = user_prompt
-                        turn_prompt_tail = cls._build_turn_prompt_tail(
-                            player,
-                            player_state,
-                            action,
-                            turn_attachment_context,
-                            cls._turn_stage_note(
-                                prompt_difficulty,
-                                current_prompt_stage,
-                                campaign=campaign,
-                                channel_id=getattr(ctx.channel, "id", None),
-                            ),
-                            extra_lines=turn_tail_extra_lines,
-                        )
-                        _rebuild_tool_prompt()
-                    tool_chain_steps = 0
-                    max_tool_chain_steps = 6
-                    if (
-                        current_prompt_stage != cls.PROMPT_STAGE_BOOTSTRAP
-                        and not (first_payload and cls._is_tool_call(first_payload))
-                        and memory_lookup_enabled
-                        and cls._should_force_auto_memory_search(action)
-                    ):
-                        forced_queries = cls._derive_auto_memory_queries(
-                            action,
-                            player_state,
-                            party_snapshot,
-                            limit=4,
-                        )
-                        if forced_queries:
-                            first_payload = {
-                                "tool_call": "memory_search",
-                                "queries": forced_queries,
-                            }
-                            auto_forced_memory_search = True
-                            _zork_log(
-                                "FORCED MEMORY SEARCH",
-                                f"queries={forced_queries}",
-                            )
-                    while (
-                        first_payload
-                        and cls._is_tool_call(first_payload)
-                        and tool_chain_steps < max_tool_chain_steps
-                    ):
-                        tool_chain_steps += 1
-                        tool_name = str(first_payload.get("tool_call") or "").strip()
-                        if tool_name:
-                            used_tool_names.add(tool_name)
-                        tool_signature = cls._tool_call_signature(first_payload)
-                        if tool_signature and tool_signature in seen_tool_signatures:
-                            _zork_log(
-                                "TOOL DEDUP SKIP",
-                                f"tool={tool_name!r} payload={tool_signature}",
-                            )
-                            tool_result_block = (
-                                "TOOL_DEDUP_RESULT: duplicate tool_call payload already executed this turn. "
-                                "Skipped duplicate execution.\n"
-                                "Do NOT repeat identical tool calls. Use a distinct tool/payload or return final JSON (no tool_call)."
-                            )
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("TOOL DEDUP AUGMENTED RESPONSE", response)
-                            json_text_tc = cls._extract_json(response)
-                            if not json_text_tc:
-                                first_payload = None
-                                break
-                            try:
-                                first_payload = cls._parse_json_lenient(json_text_tc)
-                            except Exception:
-                                first_payload = None
-                                break
-                            continue
-                        if tool_signature:
-                            seen_tool_signatures.add(tool_signature)
-
-                        if (
-                            not memory_lookup_enabled
-                            and tool_name
-                            in {
-                                "memory_search",
-                                "memory_terms",
-                                "memory_turn",
-                                "memory_store",
-                            }
-                        ):
-                            tool_result_block = (
-                                "MEMORY_TOOLS_DISABLED: Long-term memory lookup is currently disabled for this turn "
-                                "(early campaign context is still within prompt budget). "
-                                "Do NOT call memory_* tools; continue with direct context or use non-memory tools."
-                            )
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("MEMORY TOOL DISABLED AUGMENTED RESPONSE", response)
-                            json_text_tc = cls._extract_json(response)
-                            if not json_text_tc:
-                                first_payload = None
-                                break
-                            try:
-                                first_payload = cls._parse_json_lenient(json_text_tc)
-                            except Exception:
-                                first_payload = None
-                                break
-                            continue
-
-                        if tool_name == "recent_turns":
-                            recent_turns_loaded = True
-                            raw_player_slugs = first_payload.get("player_slugs")
-                            if isinstance(raw_player_slugs, list):
-                                requested_player_slugs = {
-                                    cls._player_slug_key(item)
-                                    for item in raw_player_slugs
-                                    if cls._player_slug_key(item)
-                                }
-                            elif isinstance(raw_player_slugs, str):
-                                requested_player_slugs = {
-                                    cls._player_slug_key(raw_player_slugs)
-                                } if cls._player_slug_key(raw_player_slugs) else set()
-                            else:
-                                requested_player_slugs = set()
-                            raw_npc_slugs = first_payload.get("npc_slugs")
-                            if isinstance(raw_npc_slugs, list):
-                                requested_npc_slugs = {
-                                    str(item or "").strip()
-                                    for item in raw_npc_slugs
-                                    if str(item or "").strip()
-                                }
-                            elif isinstance(raw_npc_slugs, str):
-                                requested_npc_slugs = {
-                                    str(raw_npc_slugs).strip()
-                                } if str(raw_npc_slugs).strip() else set()
-                            else:
-                                requested_npc_slugs = set()
-                            try:
-                                recent_limit = max(
-                                    1,
-                                    min(
-                                        48,
-                                        int(first_payload.get("limit") or cls.MAX_RECENT_TURNS),
-                                    ),
-                                )
-                            except (TypeError, ValueError):
-                                recent_limit = cls.MAX_RECENT_TURNS
-                            recent_turns = cls.get_recent_turns(
-                                campaign.id,
-                                limit=recent_limit,
-                            )
-                            recent_text = cls._recent_turns_text_for_viewer(
-                                campaign,
-                                recent_turns,
-                                viewer_user_id=player.user_id,
-                                viewer_slug=viewer_slug,
-                                viewer_location_key=viewer_location_key,
-                                viewer_private_context_key=viewer_private_context_key,
-                                requested_player_slugs=requested_player_slugs,
-                                requested_npc_slugs=requested_npc_slugs,
-                            )
-                            recent_location_hint = cls._recent_turns_location_hint(
-                                recent_turns,
-                                viewer_user_id=player.user_id,
-                                viewer_slug=viewer_slug,
-                                viewer_location_key=viewer_location_key,
-                                viewer_private_context_key=viewer_private_context_key,
-                            )
-                            rt_meta = cls._compute_recent_turns_metadata(
-                                recent_turns,
-                                viewer_user_id=player.user_id,
-                                viewer_slug=viewer_slug,
-                            )
-                            rt_note_lines = [
-                                "RECENT_TURNS_NOTE: Immediate visible continuity for the acting player.",
-                                "Local continuity is room-scoped; older local turns from other rooms may be missing.",
-                            ]
-                            rt_note_lines.append(
-                                f"Loaded {rt_meta['turn_count']} turns spanning ~{rt_meta['time_span_minutes']} real minutes."
-                            )
-                            if rt_meta["active_speakers"]:
-                                rt_note_lines.append(
-                                    f"Active speakers: {', '.join(rt_meta['active_speakers'])}."
-                                )
-                            if rt_meta["active_listeners"]:
-                                listener_strs = [
-                                    f"{name}({count})" for name, count in rt_meta["active_listeners"]
-                                ]
-                                rt_note_lines.append(
-                                    f"Frequent listeners: {', '.join(listener_strs)}."
-                                )
-                            if rt_meta["private_turn_count"]:
-                                rt_note_lines.append(
-                                    f"{rt_meta['private_turn_count']} turn(s) contain private/limited exchanges."
-                                )
-                            if rt_meta["viewer_last_turn_ago"] is not None:
-                                rt_note_lines.append(
-                                    f"Viewer's last turn: {rt_meta['viewer_last_turn_ago']} turn(s) ago."
-                                )
-                            tool_result_block = (
-                                "RECENT_TURNS_LOADED: true\n"
-                                + "\n".join(rt_note_lines) + "\n"
-                                f"RECENT_TURNS_LOCATIONS: current={recent_location_hint.get('current_location_key')} "
-                                f"last_other={recent_location_hint.get('last_other_location_key')}\n"
-                                f"RECENT_TURNS_RECEIVERS: players={sorted(requested_player_slugs)} npcs={sorted(requested_npc_slugs)}\n"
-                                f"RECENT_TURNS:\n{recent_text}\n"
-                            )
-                            _switch_prompt_stage(cls.PROMPT_STAGE_RESEARCH)
-                            _zork_log("RECENT TURNS BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("RECENT TURNS AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "ready_to_write":
-                            _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
-                            tool_result_block = (
-                                "RESEARCH_COMPLETE: Context gathering is complete.\n"
-                                "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
-                                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update.\n"
-                                + cls.WRITING_CRAFT_PROMPT
-                            )
-                            _zork_log("READY TO WRITE", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("FINALIZATION RESPONSE", response)
-
-                        elif tool_name == "communication_rules":
-                            raw_keys = first_payload.get("keys") or []
-                            if isinstance(raw_keys, str):
-                                raw_keys = [raw_keys]
-                            requested_keys = [
-                                str(key or "").strip().upper()
-                                for key in raw_keys
-                                if str(key or "").strip()
-                            ][:8]
-                            requested_set = set(requested_keys)
-                            lines = [
-                                f"{rule_key}: {rule_text}"
-                                for rule_key, rule_text in cls.DEFAULT_GM_COMMUNICATION_RULES.items()
-                                if rule_key in requested_set
-                            ]
-                            if lines:
-                                tool_result_block = (
-                                    "COMMUNICATION_RULES_RESULT:\n"
-                                    + "\n".join(lines)
-                                )
-                            else:
-                                tool_result_block = (
-                                    "COMMUNICATION_RULES_RESULT: no matching keys found. "
-                                    f"Available keys: {', '.join(cls.COMMUNICATION_RULE_KEYS)}"
-                                )
-                            _zork_log("COMMUNICATION RULES BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("COMMUNICATION RULES AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "memory_search":
-                            # Support both "queries": [...] and legacy "query": "..."
-                            raw_queries = first_payload.get("queries") or []
-                            if not raw_queries:
-                                legacy = str(first_payload.get("query") or "").strip()
-                                if legacy:
-                                    raw_queries = [legacy]
-                            queries = [
-                                str(q).strip()
-                                for q in raw_queries
-                                if str(q).strip()
-                            ]
-                            try:
-                                source_before_lines = int(
-                                    first_payload.get("before_lines", 0)
-                                )
-                            except (TypeError, ValueError):
-                                source_before_lines = 0
-                            try:
-                                source_after_lines = int(
-                                    first_payload.get("after_lines", 0)
-                                )
-                            except (TypeError, ValueError):
-                                source_after_lines = 0
-                            source_before_lines = max(0, min(50, source_before_lines))
-                            source_after_lines = max(0, min(50, source_after_lines))
-                            category_scope = " ".join(
-                                str(first_payload.get("category") or "").strip().lower().split()
-                            )
-                            interaction_participant_slug = None
-                            awareness_npc_slug = None
-                            visibility_scope_filter = None
-                            structured_turn_scope = False
-                            if category_scope in {"interaction", "interactions"}:
-                                structured_turn_scope = True
-                            elif category_scope.startswith("interaction:"):
-                                structured_turn_scope = True
-                                interaction_participant_slug = cls._player_slug_key(
-                                    category_scope.split(":", 1)[1]
-                                )
-                            elif category_scope.startswith("awareness:"):
-                                structured_turn_scope = True
-                                awareness_npc_slug = str(
-                                    category_scope.split(":", 1)[1] or ""
-                                ).strip()
-                            elif category_scope.startswith("visibility:"):
-                                structured_turn_scope = True
-                                visibility_scope_filter = str(
-                                    category_scope.split(":", 1)[1] or ""
-                                ).strip().lower()
-                            source_docs = ZorkMemory.list_source_material_documents(
-                                campaign.id,
-                                limit=cls.SOURCE_MATERIAL_MAX_DOCS_IN_PROMPT,
-                            )
-                            has_source_material = bool(source_docs)
-                            source_total_chunks = 0
-                            for row in source_docs:
-                                try:
-                                    source_total_chunks += int(row.get("chunk_count") or 0)
-                                except (TypeError, ValueError):
-                                    continue
-                            source_scope = False
-                            source_scope_key = None
-                            if category_scope in (
-                                cls.SOURCE_MATERIAL_CATEGORY,
-                                "source-material",
-                            ):
-                                source_scope = True
-                            elif category_scope.startswith(
-                                f"{cls.SOURCE_MATERIAL_CATEGORY}:"
-                            ):
-                                source_scope = True
-                                source_scope_key = ZorkMemory._normalize_source_document_key(
-                                    category_scope.split(":", 1)[1]
-                                )
-                            roster_hints = (
-                                cls._record_memory_search_usage_and_hints(campaign, queries)
-                                if queries
-                                else []
-                            )
-                            recall_records: List[Dict[str, object]] = []
-                            if queries:
-                                _zork_log(
-                                    "MEMORY SEARCH",
-                                    f"queries={queries}\ncategory={category_scope or '(none)'}",
-                                )
-                                try:
-                                    backfilled = ZorkMemory.backfill_campaign(campaign.id)
-                                except Exception:
-                                    backfilled = 0
-                                if backfilled:
-                                    _zork_log(
-                                        "MEMORY BACKFILL",
-                                        f"campaign={campaign.id} refreshed_turns={backfilled}",
-                                    )
-                                seen_turn_ids = set()
-                                seen_source_hits = set()
-                                for query in queries:
-                                    logger.info(
-                                        "Zork memory search requested: campaign=%s query=%r",
-                                        campaign.id,
-                                        query,
-                                    )
-                                    results = ZorkMemory.search(
-                                        query,
-                                        campaign.id,
-                                        top_k=5,
-                                        viewer_user_id=player.user_id,
-                                        viewer_player_slug=cls._player_slug_key(
-                                            player_state.get("character_name")
-                                        ),
-                                        viewer_location_key=cls._room_key_from_player_state(
-                                            player_state
-                                        ),
-                                        participant_slug=interaction_participant_slug,
-                                        aware_npc_slug=awareness_npc_slug,
-                                        visibility_scope=visibility_scope_filter,
-                                    )
-                                    if results:
-                                        _zork_log(
-                                            f"MEMORY SCORES query={query!r}",
-                                            "\n".join(
-                                                "  turn="
-                                                f"{int(row.get('turn_id') or 0)} "
-                                                f"score={float(row.get('score') or 0.0):.3f} "
-                                                f"scope={str(row.get('visibility_scope') or 'public')} "
-                                                f"actor={str(row.get('actor_player_slug') or '-') or '-'} "
-                                                f"{str(row.get('content') or '')[:80]}"
-                                                for row in results
-                                            ),
-                                        )
-                                    # Keep only results above relevance threshold.
-                                    relevant = [
-                                        row
-                                        for row in results
-                                        if float(row.get("score") or 0.0) >= 0.35
-                                        and int(row.get("turn_id") or 0) not in seen_turn_ids
-                                    ]
-                                    # Sort chronologically so the model sees events in order.
-                                    relevant.sort(key=lambda row: int(row.get("turn_id") or 0))
-                                    query_records: List[Dict[str, object]] = []
-                                    for row in relevant:
-                                        turn_id = int(row.get("turn_id") or 0)
-                                        kind = str(row.get("kind") or "")
-                                        content = str(row.get("content") or "")
-                                        score = float(row.get("score") or 0.0)
-                                        actor_slug = str(row.get("actor_player_slug") or "").strip()
-                                        turn_scope = str(row.get("visibility_scope") or "public").strip()
-                                        location_key = str(row.get("location_key") or "").strip()
-                                        seen_turn_ids.add(turn_id)
-                                        meta_bits = [f"relevance {score:.2f}"]
-                                        if actor_slug:
-                                            meta_bits.append(f"actor {actor_slug}")
-                                        if turn_scope and turn_scope != "public":
-                                            meta_bits.append(f"visibility {turn_scope}")
-                                        if location_key:
-                                            meta_bits.append(f"location {location_key}")
-                                        query_records.append(
-                                            {
-                                                "kind": "memory_hit",
-                                                "query": query,
-                                                "memory_type": "turn",
-                                                "turn_id": turn_id,
-                                                "turn_kind": kind,
-                                                "relevance": round(score, 3),
-                                                "actor_player_slug": actor_slug or None,
-                                                "visibility_scope": turn_scope or "public",
-                                                "location_key": location_key or None,
-                                                "text": cls._memory_tool_text_value(
-                                                    content,
-                                                    max_chars=300,
-                                                ),
-                                            }
-                                        )
-                                    manual_records: List[Dict[str, object]] = []
-                                    if category_scope and not source_scope and not structured_turn_scope:
-                                        manual_hits = ZorkMemory.search_manual_memories(
-                                            query,
-                                            campaign.id,
-                                            category=category_scope,
-                                            top_k=5,
-                                        )
-                                        for mem_category, mem_content, mem_score in manual_hits:
-                                            if mem_score < 0.35:
-                                                continue
-                                            manual_records.append(
-                                                {
-                                                    "kind": "memory_hit",
-                                                    "query": query,
-                                                    "memory_type": "manual",
-                                                    "category": mem_category,
-                                                    "relevance": round(float(mem_score or 0.0), 3),
-                                                    "text": cls._memory_tool_text_value(
-                                                        mem_content,
-                                                        max_chars=300,
-                                                    ),
-                                                }
-                                            )
-                                    source_records: List[Dict[str, object]] = []
-                                    if has_source_material and (
-                                        source_scope or not category_scope
-                                    ):
-                                        source_hits = ZorkMemory.search_source_material(
-                                            query,
-                                            campaign.id,
-                                            document_key=source_scope_key,
-                                            top_k=10 if source_scope else 6,
-                                            before_lines=source_before_lines,
-                                            after_lines=source_after_lines,
-                                        )
-                                        for (
-                                            source_doc_key,
-                                            source_doc_label,
-                                            source_chunk_index,
-                                            source_chunk_text,
-                                            source_score,
-                                        ) in source_hits:
-                                            if source_score < 0.40:
-                                                continue
-                                            source_hit_key = (
-                                                str(source_doc_key or "").strip(),
-                                                int(source_chunk_index or 0),
-                                            )
-                                            if source_hit_key in seen_source_hits:
-                                                continue
-                                            seen_source_hits.add(source_hit_key)
-                                            source_text_lines = [
-                                                line.strip()
-                                                for line in str(source_chunk_text or "").splitlines()
-                                                if line.strip()
-                                            ]
-                                            source_text = (
-                                                "\n    ".join(source_text_lines)
-                                                if source_text_lines
-                                                else str(source_chunk_text or "").strip()
-                                            )
-                                            if len(source_text) > 4000:
-                                                source_text = (
-                                                    source_text[:4000]
-                                                    .rsplit(" ", 1)[0]
-                                                    .strip()
-                                                    + "..."
-                                                )
-                                            source_records.append(
-                                                {
-                                                    "kind": "memory_hit",
-                                                    "query": query,
-                                                    "memory_type": "source",
-                                                    "document_key": source_doc_key,
-                                                    "document_label": source_doc_label,
-                                                    "chunk_index": int(source_chunk_index or 0),
-                                                    "relevance": round(float(source_score or 0.0), 3),
-                                                    "text": cls._memory_tool_text_value(
-                                                        source_text,
-                                                        max_chars=4000,
-                                                    ),
-                                                }
-                                            )
-                                    if query_records or manual_records or source_records:
-                                        recall_records.append(
-                                            {
-                                                "kind": "memory_query_result",
-                                                "query": query,
-                                                "category": category_scope or None,
-                                                "hit_count": len(query_records)
-                                                + len(manual_records)
-                                                + len(source_records),
-                                            }
-                                        )
-                                        recall_records.extend(query_records)
-                                        recall_records.extend(manual_records)
-                                        recall_records.extend(source_records)
-                                    else:
-                                        recall_records.append(
-                                            {
-                                                "kind": "memory_query_result",
-                                                "query": query,
-                                                "category": category_scope or None,
-                                                "hit_count": 0,
-                                            }
-                                        )
-                            if recall_records:
-                                tool_result_block = (
-                                    "MEMORY_RECALL:\n"
-                                    + cls._memory_tool_jsonl(recall_records)
-                                )
-                            elif queries:
-                                if category_scope:
-                                    if source_scope:
-                                        source_scope_label = (
-                                            f"'{cls.SOURCE_MATERIAL_CATEGORY}:{source_scope_key}'"
-                                            if source_scope_key
-                                            else f"'{cls.SOURCE_MATERIAL_CATEGORY}'"
-                                        )
-                                        tool_result_block = (
-                                            "MEMORY_RECALL: No relevant memories found "
-                                            f"in source material category {source_scope_label}."
-                                        )
-                                    else:
-                                        tool_result_block = (
-                                            "MEMORY_RECALL: No relevant memories found "
-                                            f"(including manual category '{category_scope}')."
-                                        )
-                                else:
-                                    tool_result_block = "MEMORY_RECALL: No relevant memories found."
-                            else:
-                                tool_result_block = "MEMORY_RECALL: No valid search queries were provided."
-                            emit_full_memory_help = not memory_recall_help_emitted
-                            if has_source_material and emit_full_memory_help:
-                                source_index_lines = [
-                                    cls._memory_tool_jsonl(
-                                        [
-                                            {
-                                                "kind": "source_index_meta",
-                                                "document_count": len(source_docs),
-                                                "snippet_count": source_total_chunks,
-                                            }
-                                        ]
-                                    )
-                                ]
-                                for row in source_docs[:5]:
-                                    source_format = cls._source_material_format_heuristic(
-                                        str(row.get("sample_chunk") or "")
-                                    )
-                                    source_index_lines.append(
-                                        cls._memory_tool_jsonl(
-                                            [
-                                                {
-                                                    "kind": "source_index_entry",
-                                                    "document_key": row.get("document_key"),
-                                                    "document_label": row.get("document_label"),
-                                                    "format": source_format,
-                                                    "snippet_count": int(row.get("chunk_count") or 0),
-                                                }
-                                            ]
-                                        )
-                                    )
-                                tool_result_block = (
-                                    f"{tool_result_block}\n"
-                                    + "\n".join(source_index_lines)
-                                )
-                            if emit_full_memory_help:
-                                tool_result_block = (
-                                    f"{tool_result_block}"
-                                    "\nMEMORY_RECALL_NEXT_ACTIONS:\n"
-                                    "- To retrieve FULL text for a specific hit turn number:\n"
-                                    '  {"tool_call": "memory_turn", "turn_id": 1234}\n'
-                                    "- To discover curated memory categories/terms before narrowing search:\n"
-                                    '  {"tool_call": "memory_terms", "wildcard": "char:*"}\n'
-                                    "- To search inside one curated category after term discovery:\n"
-                                    '  {"tool_call": "memory_search", "category": "char:character-slug", "queries": ["keyword1", "keyword2"]}\n'
-                                    "- To search narrator memories for interactions involving a player slug:\n"
-                                    '  {"tool_call": "memory_search", "category": "interaction:player-slug", "queries": ["argument", "kiss", "deal"]}\n'
-                                    "- To search for turns noticed by a specific NPC slug:\n"
-                                    '  {"tool_call": "memory_search", "category": "awareness:npc-slug", "queries": ["overheard", "promise", "threat"]}\n'
-                                    "- To restrict narrator-memory recall by visibility scope:\n"
-                                    '  {"tool_call": "memory_search", "category": "visibility:private", "queries": ["secret meeting"]}\n'
-                                    "- To inspect off-scene SMS communications:\n"
-                                    '  {"tool_call": "sms_list", "wildcard": "*"}\n'
-                                    '  {"tool_call": "sms_read", "thread": "contact-slug", "limit": 20}\n'
-                                    "- To schedule a delayed incoming SMS (hidden until it arrives):\n"
-                                    '  {"tool_call": "sms_schedule", "thread": "contact-slug", "from": "NPC", "to": "Player", "message": "...", "delay_seconds": 120}\n'
-                                )
-                                if has_source_material:
-                                    tool_result_block = (
-                                        f"{tool_result_block}"
-                                        "- To query indexed source-canon snippets (faithful adaptation):\n"
-                                        '  {"tool_call": "memory_search", "category": "source", "queries": ["character", "location", "event"]}\n'
-                                        "- To scope one source document only:\n"
-                                        '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1", "keyword2"]}\n'
-                                        "- To request expanded source context windows (default before_lines/after_lines are 0):\n"
-                                        '  {"tool_call": "memory_search", "category": "source:document-key", "queries": ["keyword1"], "before_lines": 5, "after_lines": 5}\n'
-                                        "- To browse all keys in a rulebook-format source document (list before drilling in):\n"
-                                        '  {"tool_call": "source_browse", "document_key": "document-key"}\n'
-                                        "- To filter rulebook keys by wildcard:\n"
-                                        '  {"tool_call": "source_browse", "document_key": "document-key", "wildcard": "keyword*"}\n'
-                                    )
-                                memory_recall_help_emitted = True
-                            else:
-                                tool_result_block = (
-                                    f"{tool_result_block}\n"
-                                    "MEMORY_RECALL_NEXT_ACTIONS: Use memory_turn for one hit, refine memory_search, or return final JSON."
-                                )
-                            if roster_hints and emit_full_memory_help:
-                                hint_lines = []
-                                for hint in roster_hints[:6]:
-                                    term = str(hint.get("term") or hint.get("slug") or "").strip() or "unknown-term"
-                                    slug = str(hint.get("slug") or "").strip() or "character-slug"
-                                    try:
-                                        count = int(hint.get("count") or 0)
-                                    except (TypeError, ValueError):
-                                        count = 0
-                                    hint_lines.append(
-                                        "- You have searched for "
-                                        f"'{term}' {count} times and it is not in WORLD_CHARACTERS. "
-                                        "If this is stable/non-stale information and you confirm it, "
-                                        f"store it via character_updates using slug '{slug}'."
-                                    )
-                                if hint_lines:
-                                    tool_result_block = (
-                                        f"{tool_result_block}\n"
-                                        "MEMORY_RECALL_ROSTER_RECOMMENDATIONS:\n"
-                                        + "\n".join(hint_lines)
-                                    )
-                            _zork_log("MEMORY RECALL BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("AUGMENTED API RESPONSE", response)
-
-                        elif tool_name == "memory_turn":
-                            turn_id_raw = (
-                                first_payload.get("turn_id")
-                                or first_payload.get("id")
-                                or first_payload.get("turn")
-                            )
-                            try:
-                                turn_id = int(turn_id_raw)
-                            except (TypeError, ValueError):
-                                turn_id = 0
-                            if turn_id > 0:
-                                target_turn = ZorkTurn.query.filter_by(
-                                    campaign_id=campaign.id,
-                                    id=turn_id,
-                                ).first()
-                            else:
-                                target_turn = None
-                            if target_turn is None:
-                                tool_result_block = (
-                                    "MEMORY_TURN_RESULT:\n"
-                                    + cls._memory_tool_jsonl(
-                                        [
-                                            {
-                                                "kind": "memory_turn_result",
-                                                "status": "not_found",
-                                                "turn_id": turn_id or None,
-                                            }
-                                        ]
-                                    )
-                                )
-                            elif not cls._turn_visible_to_viewer(
-                                target_turn,
-                                player.user_id,
-                                cls._player_slug_key(player_state.get("character_name")),
-                                cls._room_key_from_player_state(player_state).lower(),
-                            ):
-                                tool_result_block = (
-                                    "MEMORY_TURN_RESULT:\n"
-                                    + cls._memory_tool_jsonl(
-                                        [
-                                            {
-                                                "kind": "memory_turn_result",
-                                                "status": "not_visible",
-                                                "turn_id": int(target_turn.id or 0) or None,
-                                            }
-                                        ]
-                                    )
-                                )
-                            else:
-                                full_text = (target_turn.content or "").strip()
-                                if not full_text:
-                                    full_text = "(empty turn content)"
-                                tool_result_block = (
-                                    "MEMORY_TURN_RESULT:\n"
-                                    + cls._memory_tool_jsonl(
-                                        [
-                                            {
-                                                "kind": "memory_turn_result",
-                                                "status": "ok",
-                                                "turn_id": int(target_turn.id or 0) or None,
-                                                "turn_kind": str(target_turn.kind or ""),
-                                                "user_id": int(target_turn.user_id or 0) or None,
-                                                "full_text": cls._memory_tool_text_value(
-                                                    full_text,
-                                                    max_chars=12000,
-                                                ),
-                                            }
-                                        ]
-                                    )
-                                )
-                            _zork_log("MEMORY TURN BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("MEMORY TURN AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "memory_terms":
-                            wildcard = str(
-                                first_payload.get("wildcard")
-                                or first_payload.get("query")
-                                or first_payload.get("term")
-                                or "%"
-                            ).strip()[:80]
-                            terms = ZorkMemory.list_manual_memory_terms(
-                                campaign.id,
-                                wildcard=wildcard or "%",
-                                limit=20,
-                            )
-                            if terms:
-                                records = []
-                                for row in terms:
-                                    records.append(
-                                        {
-                                            "kind": "memory_term",
-                                            "term": row.get("term"),
-                                            "category": row.get("category"),
-                                            "count": int(row.get("count") or 0),
-                                            "last_at": row.get("last_at"),
-                                        }
-                                    )
-                                tool_result_block = (
-                                    f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}):\n"
-                                    + cls._memory_tool_jsonl(records)
-                                )
-                            else:
-                                tool_result_block = (
-                                    f"MEMORY_TERMS_RESULT (wildcard={wildcard or '%'!r}): none"
-                                )
-                            _zork_log("MEMORY TERMS BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("MEMORY TERMS AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "memory_store":
-                            category = " ".join(
-                                str(first_payload.get("category") or "").strip().lower().split()
-                            )[:120]
-                            term = " ".join(
-                                str(first_payload.get("term") or "").strip().lower().split()
-                            )[:80]
-                            memory_text = str(
-                                first_payload.get("memory")
-                                or first_payload.get("content")
-                                or ""
-                            ).strip()[:1200]
-                            wildcard = str(
-                                first_payload.get("wildcard")
-                                or term
-                                or category
-                                or "%"
-                            ).strip()[:80]
-                            pre_terms = ZorkMemory.list_manual_memory_terms(
-                                campaign.id,
-                                wildcard=wildcard or "%",
-                                limit=20,
-                            )
-                            stored_ok = False
-                            store_reason = "missing_fields"
-                            if category and memory_text:
-                                stored_ok, store_reason = ZorkMemory.store_manual_memory(
-                                    campaign.id,
-                                    category=category,
-                                    term=term or category,
-                                    content=memory_text,
-                                )
-                            post_terms = ZorkMemory.list_manual_memory_terms(
-                                campaign.id,
-                                wildcard=wildcard or "%",
-                                limit=20,
-                            )
-                            term_lines = []
-                            for row in pre_terms[:15]:
-                                term_lines.append(
-                                    f"- term='{row.get('term')}' category='{row.get('category')}' count={row.get('count')}"
-                                )
-                            if not term_lines:
-                                term_lines.append("- none")
-                            status_text = (
-                                "stored"
-                                if stored_ok
-                                else f"skipped ({store_reason})"
-                            )
-                            tool_result_block = (
-                                "MEMORY_STORE_RESULT:\n"
-                                f"- requested_category: {category or '(missing)'}\n"
-                                f"- requested_term: {term or '(defaulted)'}\n"
-                                f"- pre_store_wildcard: {wildcard or '%'}\n"
-                                "- existing_terms_before:\n"
-                                + "\n".join(term_lines)
-                                + "\n"
-                                f"- store_status: {status_text}\n"
-                                f"- existing_terms_after_count: {len(post_terms)}"
-                            )
-                            _zork_log("MEMORY STORE BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("MEMORY STORE AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "source_browse":
-                            browse_doc_key = str(
-                                first_payload.get("document_key")
-                                or first_payload.get("document")
-                                or ""
-                            ).strip()[:120]
-                            browse_wildcard_raw = first_payload.get("wildcard")
-                            browse_wildcard = (
-                                str(browse_wildcard_raw).strip()[:120]
-                                if browse_wildcard_raw is not None
-                                else ""
-                            )
-                            browse_wildcard_specified = bool(browse_wildcard)
-                            browse_wildcard = browse_wildcard or "%"
-                            wildcard_meta = f"wildcard={browse_wildcard!r}"
-                            if not browse_wildcard_specified:
-                                wildcard_meta = "wildcard=(omitted)"
-                            browse_limit = 255
-                            try:
-                                browse_limit = max(1, min(255, int(first_payload.get("limit") or 255)))
-                            except (TypeError, ValueError):
-                                pass
-                            lines = ZorkMemory.browse_source_keys(
-                                campaign.id,
-                                document_key=browse_doc_key or None,
-                                wildcard=browse_wildcard,
-                                limit=browse_limit,
-                            )
-                            if lines:
-                                tool_result_block = (
-                                    f"SOURCE_BROWSE_RESULT "
-                                    f"(document_key={browse_doc_key or '*'!r}, "
-                                    f"{wildcard_meta}, "
-                                    f"showing {len(lines)}):\n"
-                                    + "\n".join(lines)
-                                )
-                            else:
-                                tool_result_block = (
-                                    f"SOURCE_BROWSE_RESULT "
-                                    f"(document_key={browse_doc_key or '*'!r}, "
-                                    f"{wildcard_meta}): no entries found"
-                                )
-                            _zork_log("SOURCE BROWSE BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("SOURCE BROWSE AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "name_generate":
-                            raw_origins = first_payload.get("origins") or []
-                            if isinstance(raw_origins, str):
-                                raw_origins = [raw_origins]
-                            origins = [
-                                str(o).strip().lower()
-                                for o in raw_origins
-                                if str(o or "").strip()
-                            ][:4]
-                            ng_gender = str(
-                                first_payload.get("gender") or "both"
-                            ).strip().lower()
-                            ng_count = 5
-                            try:
-                                ng_count = max(1, min(6, int(first_payload.get("count") or 5)))
-                            except (TypeError, ValueError):
-                                pass
-                            ng_context = str(
-                                first_payload.get("context") or ""
-                            ).strip()[:300]
-                            names = cls._fetch_random_names(
-                                origins=origins or None,
-                                gender=ng_gender,
-                                count=ng_count,
-                            )
-                            if names:
-                                tool_result_block = (
-                                    f"NAME_GENERATE_RESULT "
-                                    f"(origins={origins or 'any'}, "
-                                    f"gender={ng_gender}, "
-                                    f"count={len(names)}):\n"
-                                    + "\n".join(f"- {n}" for n in names)
-                                    + "\n\nEvaluate these against your character concept"
-                                )
-                                if ng_context:
-                                    tool_result_block += (
-                                        f" ({ng_context})"
-                                    )
-                                tool_result_block += (
-                                    ". Pick the best fit, or call name_generate again "
-                                    "with different origins/gender for more options."
-                                )
-                            else:
-                                tool_result_block = (
-                                    f"NAME_GENERATE_RESULT "
-                                    f"(origins={origins or 'any'}): "
-                                    "no names returned — try broader origins "
-                                    "or fewer filters."
-                                )
-                            _zork_log("NAME GENERATE BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("NAME GENERATE AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "plot_plan":
-                            campaign_state_plot = cls.get_campaign_state(campaign)
-                            latest_turn_id = 0
-                            if isinstance(turns, list):
-                                for turn in turns:
-                                    try:
-                                        latest_turn_id = max(
-                                            latest_turn_id, int(getattr(turn, "id", 0) or 0)
-                                        )
-                                    except (TypeError, ValueError):
-                                        continue
-                            plan_result = cls._apply_plot_plan_tool(
-                                campaign_state_plot,
-                                first_payload,
-                                current_turn=latest_turn_id,
-                            )
-                            campaign.state_json = cls._dump_json(campaign_state_plot)
-                            campaign.updated = db.func.now()
-                            active_plans = list(plan_result.get("active") or [])
-                            lines = [
-                                "PLOT_PLAN_RESULT:",
-                                f"- updated: {int(plan_result.get('updated', 0) or 0)}",
-                                f"- removed: {int(plan_result.get('removed', 0) or 0)}",
-                                f"- total_threads: {int(plan_result.get('total', 0) or 0)}",
-                                f"- active_threads: {len(active_plans)}",
-                            ]
-                            for row in active_plans[:8]:
-                                lines.append(
-                                    "- "
-                                    f"thread='{row.get('thread')}' target_turns={row.get('target_turns')} "
-                                    f"setup=\"{row.get('setup')}\" payoff=\"{row.get('intended_payoff')}\""
-                                )
-                            tool_result_block = "\n".join(lines)
-                            _zork_log("PLOT PLAN BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("PLOT PLAN AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "chapter_plan":
-                            campaign_state_chapter = cls.get_campaign_state(campaign)
-                            latest_turn_id = 0
-                            if isinstance(turns, list):
-                                for turn in turns:
-                                    try:
-                                        latest_turn_id = max(
-                                            latest_turn_id, int(getattr(turn, "id", 0) or 0)
-                                        )
-                                    except (TypeError, ValueError):
-                                        continue
-                            plan_result = cls._apply_chapter_plan_tool(
-                                campaign_state_chapter,
-                                first_payload,
-                                current_turn=latest_turn_id,
-                                on_rails=bool(campaign_state_chapter.get("on_rails", False)),
-                            )
-                            if not bool(plan_result.get("ignored")):
-                                campaign.state_json = cls._dump_json(campaign_state_chapter)
-                                campaign.updated = db.func.now()
-                            active_chapters = list(plan_result.get("active") or [])
-                            if bool(plan_result.get("ignored")):
-                                tool_result_block = (
-                                    "CHAPTER_PLAN_RESULT: ignored.\n"
-                                    f"- reason: {plan_result.get('reason')}"
-                                )
-                            else:
-                                lines = [
-                                    "CHAPTER_PLAN_RESULT:",
-                                    f"- updated: {int(plan_result.get('updated', 0) or 0)}",
-                                    f"- total_chapters: {int(plan_result.get('total', 0) or 0)}",
-                                    f"- active_chapters: {len(active_chapters)}",
-                                ]
-                                for row in active_chapters[:8]:
-                                    lines.append(
-                                        "- "
-                                        f"chapter='{row.get('slug')}' title='{row.get('title')}' "
-                                        f"current_scene='{row.get('current_scene')}'"
-                                    )
-                                tool_result_block = "\n".join(lines)
-                            _zork_log("CHAPTER PLAN BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("CHAPTER PLAN AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "consequence_log":
-                            campaign_state_cons = cls.get_campaign_state(campaign)
-                            latest_turn_id = 0
-                            if isinstance(turns, list):
-                                for turn in turns:
-                                    try:
-                                        latest_turn_id = max(
-                                            latest_turn_id,
-                                            int(getattr(turn, "id", 0) or 0),
-                                        )
-                                    except (TypeError, ValueError):
-                                        continue
-                            cons_result = cls._apply_consequence_log_tool(
-                                campaign_state_cons,
-                                first_payload,
-                                current_turn=latest_turn_id,
-                            )
-                            campaign.state_json = cls._dump_json(campaign_state_cons)
-                            campaign.updated = db.func.now()
-                            active_rows = list(cons_result.get("active") or [])
-                            lines = [
-                                "CONSEQUENCE_LOG_RESULT:",
-                                f"- added: {int(cons_result.get('added', 0) or 0)}",
-                                f"- updated: {int(cons_result.get('updated', 0) or 0)}",
-                                f"- resolved: {int(cons_result.get('resolved', 0) or 0)}",
-                                f"- removed: {int(cons_result.get('removed', 0) or 0)}",
-                                f"- total: {int(cons_result.get('total', 0) or 0)}",
-                                f"- active: {len(active_rows)}",
-                            ]
-                            for row in active_rows[:8]:
-                                expires = cls._coerce_non_negative_int(
-                                    row.get("expires_at_turn", 0), default=0
-                                )
-                                exp_text = (
-                                    f"expires@turn{expires}" if expires > 0 else "no-expiry"
-                                )
-                                lines.append(
-                                    "- "
-                                    f"id='{row.get('id')}' severity='{row.get('severity')}' {exp_text} "
-                                    f"consequence=\"{row.get('consequence')}\""
-                                )
-                            tool_result_block = "\n".join(lines)
-                            _zork_log("CONSEQUENCE LOG BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("CONSEQUENCE LOG AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "sms_list":
-                            sms_activity_detected = True
-                            wildcard = str(
-                                first_payload.get("wildcard")
-                                or first_payload.get("query")
-                                or "*"
-                            ).strip()[:80] or "*"
-                            campaign_state_sms = cls.get_campaign_state(campaign)
-                            threads = cls._sms_list_threads(
-                                campaign_state_sms, wildcard=wildcard, limit=20
-                            )
-                            if threads:
-                                lines = []
-                                for row in threads:
-                                    lines.append(
-                                        f"- thread='{row.get('thread')}' label='{row.get('label')}' "
-                                        f"count={row.get('count')} last_from='{row.get('last_from')}' "
-                                        f"last='Day {int(row.get('day', 0))} {int(row.get('hour', 0)):02d}:{int(row.get('minute', 0)):02d}' "
-                                        f"preview=\"{row.get('last_preview')}\""
-                                    )
-                                tool_result_block = (
-                                    f"SMS_LIST_RESULT (wildcard={wildcard!r}):\n"
-                                    + "\n".join(lines)
-                                )
-                            else:
-                                tool_result_block = (
-                                    f"SMS_LIST_RESULT (wildcard={wildcard!r}): none"
-                                )
-                            _zork_log("SMS LIST BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("SMS LIST AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "sms_read":
-                            sms_activity_detected = True
-                            thread = str(
-                                first_payload.get("thread")
-                                or first_payload.get("contact")
-                                or first_payload.get("conversation")
-                                or ""
-                            ).strip()[:80]
-                            raw_limit = first_payload.get("limit", 20)
-                            try:
-                                read_limit = int(raw_limit)
-                            except (TypeError, ValueError):
-                                read_limit = 20
-                            read_limit = max(1, min(40, read_limit))
-                            campaign_state_sms = cls.get_campaign_state(campaign)
-                            thread_key, thread_label, messages = cls._sms_read_thread(
-                                campaign_state_sms, thread=thread, limit=read_limit
-                            )
-                            thread_markers: Dict[str, int] = {}
-                            if messages:
-                                for msg in messages:
-                                    if not isinstance(msg, dict):
-                                        continue
-                                    msg_thread = cls._sms_normalize_thread_key(
-                                        msg.get("thread") or thread_key or thread
-                                    )
-                                    if not msg_thread:
-                                        continue
-                                    seq = cls._coerce_non_negative_int(
-                                        msg.get("seq", 0), default=0
-                                    )
-                                    turn_id = cls._coerce_non_negative_int(
-                                        msg.get("turn_id", 0), default=0
-                                    )
-                                    marker = seq if seq > 0 else turn_id
-                                    if marker <= 0:
-                                        continue
-                                    prev_marker = cls._coerce_non_negative_int(
-                                        thread_markers.get(msg_thread, 0), default=0
-                                    )
-                                    if marker > prev_marker:
-                                        thread_markers[msg_thread] = marker
-                            if thread_markers:
-                                read_changed = cls._sms_mark_threads_read(
-                                    campaign_state_sms,
-                                    actor_id=ctx.author.id,
-                                    player_state=player_state,
-                                    thread_markers=thread_markers,
-                                )
-                                if read_changed:
-                                    campaign.state_json = cls._dump_json(campaign_state_sms)
-                                    campaign.updated = db.func.now()
-                            if thread_key is None:
-                                tool_result_block = (
-                                    f"SMS_READ_RESULT: thread not found for query '{thread or '(empty)'}'."
-                                )
-                            elif not messages:
-                                tool_result_block = (
-                                    f"SMS_READ_RESULT: thread '{thread_label}' has no messages."
-                                )
-                            else:
-                                lines = []
-                                for msg in messages:
-                                    lines.append(
-                                        f"- [Day {int(msg.get('day', 0))} {int(msg.get('hour', 0)):02d}:{int(msg.get('minute', 0)):02d}] "
-                                        f"{msg.get('from')} -> {msg.get('to')}: {msg.get('message')}"
-                                    )
-                                tool_result_block = (
-                                    f"SMS_READ_RESULT (thread='{thread_key}', label='{thread_label}'):\n"
-                                    + "\n".join(lines)
-                                )
-                            _zork_log("SMS READ BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("SMS READ AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "sms_write":
-                            sms_activity_detected = True
-                            thread = str(
-                                first_payload.get("thread")
-                                or first_payload.get("contact")
-                                or first_payload.get("conversation")
-                                or ""
-                            ).strip()[:80]
-                            sender = str(
-                                first_payload.get("from")
-                                or first_payload.get("sender")
-                                or player_state.get("character_name")
-                                or f"Player {ctx.author.id}"
-                            ).strip()[:80]
-                            recipient = str(
-                                first_payload.get("to")
-                                or first_payload.get("recipient")
-                                or thread
-                            ).strip()[:80]
-                            message_text = str(
-                                first_payload.get("message")
-                                or first_payload.get("content")
-                                or first_payload.get("text")
-                                or ""
-                            ).strip()
-                            if not message_text:
-                                tool_result_block = (
-                                    "SMS_WRITE_RESULT: skipped (missing message text)."
-                                )
-                            else:
-                                campaign_state_sms = cls.get_campaign_state(campaign)
-                                game_time_sms = cls._extract_game_time_snapshot(
-                                    campaign_state_sms
-                                )
-                                thread_key, thread_label, entry = cls._sms_write(
-                                    campaign_state_sms,
-                                    thread=thread or recipient or sender,
-                                    sender=sender,
-                                    recipient=recipient,
-                                    message=message_text,
-                                    game_time=game_time_sms,
-                                    turn_id=0,
-                                )
-                                campaign.state_json = cls._dump_json(campaign_state_sms)
-                                campaign.updated = db.func.now()
-                                db.session.commit()
-                                tool_result_block = (
-                                    "SMS_WRITE_RESULT: stored.\n"
-                                    f"- thread='{thread_key}' label='{thread_label}'\n"
-                                    f"- at Day {int(entry.get('day', 0))} {int(entry.get('hour', 0)):02d}:{int(entry.get('minute', 0)):02d}\n"
-                                    f"- {entry.get('from')} -> {entry.get('to')}: {entry.get('message')}"
-                                )
-                            _zork_log("SMS WRITE BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("SMS WRITE AUGMENTED RESPONSE", response)
-
-                        elif tool_name == "sms_schedule":
-                            sms_activity_detected = True
-                            thread = str(
-                                first_payload.get("thread")
-                                or first_payload.get("contact")
-                                or first_payload.get("conversation")
-                                or ""
-                            ).strip()[:80]
-                            sender = str(
-                                first_payload.get("from")
-                                or first_payload.get("sender")
-                                or thread
-                            ).strip()[:80]
-                            recipient = str(
-                                first_payload.get("to")
-                                or first_payload.get("recipient")
-                                or player_state.get("character_name")
-                                or f"Player {ctx.author.id}"
-                            ).strip()[:80]
-                            message_text = str(
-                                first_payload.get("message")
-                                or first_payload.get("content")
-                                or first_payload.get("text")
-                                or ""
-                            ).strip()
-                            raw_delay_seconds = first_payload.get(
-                                "delay_seconds",
-                                first_payload.get("delay"),
-                            )
-                            raw_delay_minutes = first_payload.get("delay_minutes")
-                            if raw_delay_seconds is None and raw_delay_minutes is not None:
-                                try:
-                                    raw_delay_seconds = int(raw_delay_minutes) * 60
-                                except (TypeError, ValueError):
-                                    raw_delay_seconds = None
-                            try:
-                                delay_seconds = int(raw_delay_seconds)
-                            except (TypeError, ValueError):
-                                delay_seconds = 90
-                            _speed = cls.get_speed_multiplier(campaign)
-                            if _speed > 0:
-                                delay_seconds = int(delay_seconds / _speed)
-                            delay_seconds = max(15, min(86_400, delay_seconds))
-
-                            if not thread or not sender or not recipient or not message_text:
-                                tool_result_block = (
-                                    "SMS_SCHEDULE_RESULT: skipped (missing thread/from/to/message)."
-                                )
-                            else:
-                                cls._schedule_sms_delivery(
-                                    campaign_id=campaign.id,
-                                    delay_seconds=delay_seconds,
-                                    thread=thread,
-                                    sender=sender,
-                                    recipient=recipient,
-                                    message=message_text,
-                                )
-                                tool_result_block = (
-                                    "SMS_SCHEDULE_RESULT: scheduled.\n"
-                                    f"- thread='{thread}'\n"
-                                    f"- from='{sender}' to='{recipient}'\n"
-                                    f"- delay_seconds={delay_seconds}\n"
-                                    "- delivery_visibility=hidden_until_delivery\n"
-                                    "- interruptible=false\n"
-                                    "Do NOT narrate this delayed SMS as already received in the current scene."
-                                )
-                            _zork_log("SMS SCHEDULE BLOCK", tool_result_block)
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("SMS SCHEDULE AUGMENTED RESPONSE", response)
-
-                        elif (
-                            tool_name == "set_timer"
-                            and cls.is_timed_events_enabled(campaign)
-                        ):
-                            raw_delay = first_payload.get("delay_seconds", 60)
-                            try:
-                                delay_seconds = int(raw_delay)
-                            except (TypeError, ValueError):
-                                delay_seconds = 60
-                            _speed = cls.get_speed_multiplier(campaign)
-                            if _speed > 0:
-                                delay_seconds = int(delay_seconds / _speed)
-                            delay_seconds = max(15, min(300, delay_seconds))
-                            delay_seconds = cls._compress_realtime_timer_delay(
-                                delay_seconds
-                            )
-                            event_description = str(
-                                first_payload.get("event_description")
-                                or "Something happens."
-                            ).strip()[:500]
-                            interruptible = bool(
-                                first_payload.get(
-                                    "interruptible",
-                                    first_payload.get("set_timer_interruptible", True),
-                                )
-                            )
-                            interrupt_action = first_payload.get(
-                                "interrupt_action",
-                                first_payload.get("set_timer_interrupt_action"),
-                            )
-                            if isinstance(interrupt_action, str):
-                                interrupt_action = interrupt_action.strip()[:500] or None
-                            else:
-                                interrupt_action = None
-                            interrupt_scope = cls._normalize_timer_interrupt_scope(
-                                first_payload.get("interrupt_scope")
-                                or first_payload.get("set_timer_interrupt_scope")
-                                or "global"
-                            )
-
-                            cls.cancel_pending_timer(campaign.id)
-                            channel_id = ctx.channel.id
-                            cls._schedule_timer(
-                                campaign.id,
-                                channel_id,
-                                delay_seconds,
-                                event_description,
-                                interruptible=interruptible,
-                                interrupt_action=interrupt_action,
-                                interrupt_scope=interrupt_scope,
-                                interrupt_user_id=ctx.author.id,
-                            )
-                            timer_scheduled_delay = delay_seconds
-                            timer_scheduled_event = event_description
-                            timer_scheduled_interruptible = interruptible
-                            timer_scheduled_interrupt_scope = interrupt_scope
-                            logger.info(
-                                "Zork timer set: campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
-                                campaign.id,
-                                delay_seconds,
-                                event_description,
-                                interruptible,
-                                interrupt_scope,
-                            )
-                            tool_result_block = (
-                                "TIMER_SET (system confirmation): A timed event has been scheduled.\n"
-                                f'In {delay_seconds} seconds, if the player has not acted: "{event_description}".\n'
-                                "Now narrate the current scene. Hint at urgency narratively but do NOT include "
-                                "countdowns, timestamps, emoji clocks, or explicit seconds — the system adds its own countdown."
-                            )
-                            _zork_log(
-                                "TIMER TOOL CALL",
-                                (
-                                    f"delay={delay_seconds}s event={event_description!r} "
-                                    f"interruptible={interruptible} scope={interrupt_scope}"
-                                ),
-                            )
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-
-                        elif tool_name == "story_outline":
-                            chapter_slug = str(first_payload.get("chapter") or "").strip()
-                            _zork_log(
-                                "STORY OUTLINE TOOL CALL",
-                                f"chapter={chapter_slug!r}",
-                            )
-                            outline_result = ""
-                            campaign_state_so = cls.get_campaign_state(campaign)
-                            so = campaign_state_so.get("story_outline")
-                            if isinstance(so, dict):
-                                for ch in so.get("chapters", []):
-                                    if ch.get("slug") == chapter_slug:
-                                        outline_result = json.dumps(ch, indent=2)
-                                        break
-                            if not outline_result:
-                                outline_result = (
-                                    f"No chapter found with slug '{chapter_slug}'."
-                                )
-                            tool_result_block = (
-                                f"STORY_OUTLINE_RESULT (chapter={chapter_slug}):\n{outline_result}\n"
-                            )
-                            _append_tool_prompt(tool_result_block)
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                tool_augmented_prompt,
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if not response:
-                                response = "A hollow silence answers. Try again."
-                            else:
-                                response = cls._clean_response(response)
-                            _zork_log("STORY OUTLINE AUGMENTED RESPONSE", response)
-
-                        else:
-                            _zork_log(
-                                "UNKNOWN TOOL CALL",
-                                f"tool={tool_name!r} payload={json.dumps(first_payload, ensure_ascii=True)}",
-                            )
-                            break
-
-                        json_text_tc = cls._extract_json(response)
-                        if not json_text_tc:
-                            first_payload = None
-                            break
-                        try:
-                            first_payload = cls._parse_json_lenient(json_text_tc)
-                        except Exception:
-                            first_payload = None
-                            break
-                    # Hard-stop infinite tool loops.
-                    if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
-                        _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
-                        _append_tool_prompt(
-                            "TOOL_CHAIN_LIMIT_REACHED (0 remaining): Stop calling tools now. Return final narration/state JSON directly.\n"
-                            "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
-                        )
-                        response = await gpt.turbo_completion(
-                            system_prompt,
-                            tool_augmented_prompt,
-                            temperature=0.8,
-                            max_tokens=2048,
-                        )
-                        if not response:
-                            response = "A hollow silence answers. Try again."
-                        else:
-                            response = cls._clean_response(response)
-                        _zork_log("TOOL CHAIN LIMIT FINAL RESPONSE", response)
-                        json_text_tc = cls._extract_json(response)
-                        if json_text_tc:
-                            try:
-                                first_payload = cls._parse_json_lenient(json_text_tc)
-                            except Exception:
-                                first_payload = None
-
-                    # Last-resort guard: if we're still holding a bare tool_call payload,
-                    # force a final non-tool narration/state response so JSON tool payloads
-                    # never leak to players as fallback narration.
-                    if first_payload and cls._is_tool_call(first_payload):
-                        unresolved_tool = str(first_payload.get("tool_call") or "unknown")
-                        _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
-                        _append_tool_prompt(
-                            f"UNRESOLVED_TOOL_CALL: {unresolved_tool}\n"
-                            "Do NOT call any tools now. Return final narration/state JSON directly, including reasoning.\n"
-                            "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
-                        )
-                        response = await gpt.turbo_completion(
-                            system_prompt,
-                            tool_augmented_prompt,
-                            temperature=0.8,
-                            max_tokens=2048,
-                        )
-                        if not response:
-                            response = "A hollow silence answers. Try again."
-                        else:
-                            response = cls._clean_response(response)
-                        _zork_log("UNRESOLVED TOOL FINAL RESPONSE", response)
-                        json_text_tc = cls._extract_json(response)
-                        first_payload = None
-                        if json_text_tc:
-                            try:
-                                first_payload = cls._parse_json_lenient(json_text_tc)
-                            except Exception:
-                                first_payload = None
-
-                    # Fallback: LLM returned set_timer alongside narration.
-                    # _is_tool_call rejects that, but we still honour the timer.
-                    if (
-                        first_payload
-                        and isinstance(first_payload, dict)
-                        and str(first_payload.get("tool_call") or "").strip()
-                        == "set_timer"
-                        and "narration" in first_payload
-                        and cls.is_timed_events_enabled(campaign)
-                    ):
-                            raw_delay = first_payload.get("delay_seconds", 60)
-                            try:
-                                delay_seconds = int(raw_delay)
-                            except (TypeError, ValueError):
-                                delay_seconds = 60
-                            delay_seconds = max(30, min(300, delay_seconds))
-                            delay_seconds = cls._compress_realtime_timer_delay(
-                                delay_seconds
-                            )
-                            event_description = str(
-                                first_payload.get("event_description")
-                                or "Something happens."
-                            ).strip()[:500]
-                            interruptible = bool(
-                                first_payload.get(
-                                    "interruptible",
-                                    first_payload.get("set_timer_interruptible", True),
-                                )
-                            )
-                            interrupt_action = first_payload.get(
-                                "interrupt_action",
-                                first_payload.get("set_timer_interrupt_action"),
-                            )
-                            if isinstance(interrupt_action, str):
-                                interrupt_action = interrupt_action.strip()[:500] or None
-                            else:
-                                interrupt_action = None
-                            interrupt_scope = cls._normalize_timer_interrupt_scope(
-                                first_payload.get("interrupt_scope")
-                                or first_payload.get("set_timer_interrupt_scope")
-                                or "global"
-                            )
-
-                            cls.cancel_pending_timer(campaign.id)
-                            channel_id = ctx.channel.id
-                            cls._schedule_timer(
-                                campaign.id,
-                                channel_id,
-                                delay_seconds,
-                                event_description,
-                                interruptible=interruptible,
-                                interrupt_action=interrupt_action,
-                                interrupt_scope=interrupt_scope,
-                                interrupt_user_id=ctx.author.id,
-                            )
-                            timer_scheduled_delay = delay_seconds
-                            timer_scheduled_event = event_description
-                            timer_scheduled_interruptible = interruptible
-                            timer_scheduled_interrupt_scope = interrupt_scope
-                            logger.info(
-                                "Zork timer set (with narration): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
-                                campaign.id,
-                                delay_seconds,
-                                event_description,
-                                interruptible,
-                                interrupt_scope,
-                            )
-
-                    narration = response.strip()
-                    reasoning = None
-                    state_update = {}
-                    summary_update = None
-                    xp_awarded = 0
-                    player_state_update = {}
-                    story_progression = None
-                    turn_visibility = None
-                    scene_output_raw = None
-                    scene_image_prompt = None
-                    character_updates = {}
-                    give_item = None
-                    calendar_update = None
-                    timer_scheduled_delay = None
-                    timer_scheduled_event = None
-                    timer_scheduled_interruptible = True
-                    timer_scheduled_interrupt_scope = "global"
-
-                    json_text = cls._extract_json(response)
-                    if json_text:
-                        try:
-                            payload = cls._parse_json_lenient(json_text)
-                            scene_output_raw = payload.get("scene_output")
-                            narration_candidate = str(
-                                payload.get("narration") or ""
-                            ).strip()
-                            if not narration_candidate:
-                                narration_candidate = cls._scene_output_text_from_raw(
-                                    scene_output_raw
-                                )
-                            if not narration_candidate:
-                                narration_candidate = cls._fallback_narration_from_payload(
-                                    payload
-                                )
-                            if narration_candidate:
-                                narration = narration_candidate
-                            reasoning = cls._sanitize_reasoning(
-                                payload.get("reasoning")
-                            )
-                            state_update = payload.get("state_update", {}) or {}
-                            summary_update = payload.get("summary_update")
-                            xp_awarded = payload.get("xp_awarded", 0) or 0
-                            player_state_update = (
-                                payload.get("player_state_update", {}) or {}
-                            )
-                            story_progression = cls._normalize_story_progression(
-                                payload.get("story_progression")
-                            )
-                            turn_visibility = payload.get("turn_visibility")
-                            scene_image_prompt = payload.get("scene_image_prompt")
-                            character_updates = (
-                                payload.get("character_updates", {}) or {}
-                            )
-                            give_item = payload.get("give_item")
-                            calendar_update = payload.get("calendar_update")
-
-                            # Inline timed event fields.
-                            inline_timer_delay = payload.get("set_timer_delay")
-                            inline_timer_event = payload.get("set_timer_event")
-                            if (
-                                inline_timer_delay is not None
-                                and inline_timer_event
-                                and cls.is_timed_events_enabled(campaign)
-                            ):
-                                # Block new timer if one is already running.
-                                existing_timer = cls._pending_timers.get(campaign.id)
-                                if existing_timer is not None:
-                                    _zork_log(
-                                        f"TIMER REJECTED campaign={campaign.id}",
-                                        f"Existing timer still active — model tried to set a new one.\n"
-                                        f"Existing event: {existing_timer.get('event')!r}\n"
-                                        f"Rejected event: {str(inline_timer_event).strip()[:500]!r}",
-                                    )
-                                else:
-                                    try:
-                                        t_delay = int(inline_timer_delay)
-                                    except (TypeError, ValueError):
-                                        t_delay = 60
-                                    _speed = cls.get_speed_multiplier(campaign)
-                                    if _speed > 0:
-                                        t_delay = int(t_delay / _speed)
-                                    t_delay = max(15, min(300, t_delay))
-                                    t_delay = cls._compress_realtime_timer_delay(
-                                        t_delay
-                                    )
-                                    t_event = str(inline_timer_event).strip()[:500]
-                                    t_interruptible = bool(
-                                        payload.get("set_timer_interruptible", True)
-                                    )
-                                    t_interrupt_action = payload.get(
-                                        "set_timer_interrupt_action"
-                                    )
-                                    if isinstance(t_interrupt_action, str):
-                                        t_interrupt_action = (
-                                            t_interrupt_action.strip()[:500] or None
-                                        )
-                                    else:
-                                        t_interrupt_action = None
-                                    t_interrupt_scope = cls._normalize_timer_interrupt_scope(
-                                        payload.get("set_timer_interrupt_scope", "global")
-                                    )
-                                    cls._schedule_timer(
-                                        campaign.id,
-                                        ctx.channel.id,
-                                        t_delay,
-                                        t_event,
-                                        interruptible=t_interruptible,
-                                        interrupt_action=t_interrupt_action,
-                                        interrupt_scope=t_interrupt_scope,
-                                        interrupt_user_id=ctx.author.id,
-                                    )
-                                    timer_scheduled_delay = t_delay
-                                    timer_scheduled_event = t_event
-                                    timer_scheduled_interruptible = t_interruptible
-                                    timer_scheduled_interrupt_scope = t_interrupt_scope
-                                    _zork_log(
-                                        f"TIMER SET campaign={campaign.id}",
-                                        f"delay={t_delay}s event={t_event!r} "
-                                        f"interruptible={t_interruptible} "
-                                        f"scope={t_interrupt_scope}",
-                                    )
-                                    logger.info(
-                                        "Zork timer set (inline): campaign=%s delay=%ds event=%r interruptible=%s scope=%s",
-                                        campaign.id,
-                                        t_delay,
-                                        t_event,
-                                        t_interruptible,
-                                        t_interrupt_scope,
-                                    )
-                        except json.JSONDecodeError as e:
-                            logger.warning(
-                                f"Failed to parse Zork JSON response: {e} — retrying"
-                            )
-                            _zork_log(
-                                "JSON PARSE RETRY",
-                                f"error={e}\nresponse={response[:500]}",
-                            )
-                            response = await gpt.turbo_completion(
-                                system_prompt,
-                                user_prompt,
-                                temperature=0.7,
-                                max_tokens=2048,
-                            )
-                            if response:
-                                response = cls._clean_response(response)
-                                json_text = cls._extract_json(response)
-                                if json_text:
-                                    try:
-                                        payload = cls._parse_json_lenient(json_text)
-                                        scene_output_raw = payload.get("scene_output")
-                                        narration_candidate = str(
-                                            payload.get("narration") or ""
-                                        ).strip()
-                                        if not narration_candidate:
-                                            narration_candidate = cls._scene_output_text_from_raw(
-                                                scene_output_raw
-                                            )
-                                        if not narration_candidate:
-                                            narration_candidate = (
-                                                cls._fallback_narration_from_payload(
-                                                    payload
-                                                )
-                                            )
-                                        if narration_candidate:
-                                            narration = narration_candidate
-                                        reasoning = cls._sanitize_reasoning(
-                                            payload.get("reasoning")
-                                        )
-                                        state_update = (
-                                            payload.get("state_update", {}) or {}
-                                        )
-                                        summary_update = payload.get("summary_update")
-                                        xp_awarded = payload.get("xp_awarded", 0) or 0
-                                        player_state_update = (
-                                            payload.get("player_state_update", {}) or {}
-                                        )
-                                        story_progression = cls._normalize_story_progression(
-                                            payload.get("story_progression")
-                                        )
-                                        turn_visibility = payload.get("turn_visibility")
-                                        scene_image_prompt = payload.get(
-                                            "scene_image_prompt"
-                                        )
-                                        character_updates = (
-                                            payload.get("character_updates", {}) or {}
-                                        )
-                                        calendar_update = payload.get("calendar_update")
-                                    except Exception as e2:
-                                        logger.warning(
-                                            f"Retry also failed to parse JSON: {e2}"
-                                        )
-                        except Exception as e:
-                            logger.warning(f"Failed to parse Zork JSON response: {e}")
-
-                    # Safety: if narration still looks like raw JSON, something
-                    # went wrong during parsing.  Try to salvage the narration
-                    # key so raw JSON never leaks to Discord or stored turns.
-                    if narration.lstrip().startswith("{"):
-                        try:
-                            salvage = json.loads(cls._extract_json(narration) or "{}")
-                            if isinstance(salvage, dict) and salvage:
-                                scene_output_raw = salvage.get("scene_output")
-                                narration = str(salvage.get("narration", "")).strip()
-                                reasoning = cls._sanitize_reasoning(
-                                    salvage.get("reasoning")
-                                )
-                                if not narration:
-                                    narration = cls._scene_output_text_from_raw(
-                                        scene_output_raw
-                                    )
-                                if not narration:
-                                    narration = cls._fallback_narration_from_payload(
-                                        salvage
-                                    )
-                                if not narration:
-                                    narration = "The world shifts, but nothing clear emerges."
-                        except (json.JSONDecodeError, Exception):
-                            narration = "The world shifts, but nothing clear emerges."
-                    if not str(narration or "").strip():
-                        narration = cls._fallback_narration_from_payload(
-                            {
-                                "summary_update": summary_update,
-                                "state_update": state_update,
-                                "player_state_update": player_state_update,
-                                "character_updates": character_updates,
-                                "calendar_update": calendar_update,
-                            }
-                        ) or "The world shifts, but nothing clear emerges."
-
-                    # Guard: model sometimes returns chain-of-thought planning
-                    # text instead of in-character narration.  Detect and retry.
-                    if narration and cls._looks_like_reasoning(narration):
-                        _zork_log("REASONING LEAK RETRY", narration[:300])
-                        _retry_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "Your previous response was internal reasoning, NOT player-facing narration. "
-                            "Return the actual in-character narration and JSON state now. "
-                            "Include a concise reasoning field.\n"
-                        )
-                        _retry_resp = await gpt.turbo_completion(
-                            system_prompt, _retry_prompt, temperature=0.8, max_tokens=2048,
-                        )
-                        if _retry_resp:
-                            _retry_resp = cls._clean_response(_retry_resp)
-                            if not cls._looks_like_reasoning(_retry_resp):
-                                response = _retry_resp
-                                narration = response.strip()
-                                _rj = cls._extract_json(response)
-                                if _rj:
-                                    try:
-                                        _rp = cls._parse_json_lenient(_rj)
-                                        scene_output_raw = _rp.get("scene_output")
-                                        _rn = str(_rp.get("narration") or "").strip()
-                                        if not _rn:
-                                            _rn = cls._scene_output_text_from_raw(
-                                                scene_output_raw
-                                            )
-                                        if not _rn:
-                                            _rn = cls._fallback_narration_from_payload(_rp)
-                                        if _rn:
-                                            narration = _rn
-                                        reasoning = cls._sanitize_reasoning(
-                                            _rp.get("reasoning")
-                                        )
-                                        state_update = _rp.get("state_update", {}) or {}
-                                        summary_update = _rp.get("summary_update")
-                                        xp_awarded = _rp.get("xp_awarded", 0) or 0
-                                        player_state_update = _rp.get("player_state_update", {}) or {}
-                                        story_progression = cls._normalize_story_progression(
-                                            _rp.get("story_progression")
-                                        )
-                                        turn_visibility = _rp.get("turn_visibility")
-                                        scene_image_prompt = _rp.get("scene_image_prompt")
-                                        character_updates = _rp.get("character_updates", {}) or {}
-                                        give_item = _rp.get("give_item")
-                                        calendar_update = _rp.get("calendar_update")
-                                    except Exception:
-                                        pass
-
-                    if cls._is_emptyish_turn_payload(
-                        narration=narration,
-                        state_update=state_update
-                        if isinstance(state_update, dict)
-                        else {},
-                        player_state_update=player_state_update
-                        if isinstance(player_state_update, dict)
-                        else {},
-                        summary_update=summary_update,
-                        xp_awarded=xp_awarded,
-                        scene_image_prompt=scene_image_prompt,
-                        character_updates=character_updates
-                        if isinstance(character_updates, dict)
-                        else {},
-                        calendar_update=calendar_update,
-                    ):
-                        empty_response_repair_count += 1
-                        _zork_log(
-                            "EMPTY PAYLOAD RETRY",
-                            (
-                                f"narration={str(narration or '')[:220]!r}\n"
-                                f"state_keys={list((state_update or {}).keys()) if isinstance(state_update, dict) else []}\n"
-                                f"player_state_keys={list((player_state_update or {}).keys()) if isinstance(player_state_update, dict) else []}"
-                            ),
-                        )
-                        _repair_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
-                            "Return final JSON now (no tool_call), including:\n"
-                            "- reasoning string grounded in evidence/context used\n"
-                            "- narration with one concrete scene development\n"
-                            '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
-                            "- summary_update string (REQUIRED — one sentence of lasting change or current dramatic state)\n"
-                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
-                        )
-                        _repair_response = await gpt.turbo_completion(
-                            system_prompt,
-                            _repair_prompt,
-                            temperature=0.75,
-                            max_tokens=2048,
-                        )
-                        if _repair_response:
-                            _repair_response = cls._clean_response(_repair_response)
-                            _repair_json = cls._extract_json(_repair_response)
-                            if _repair_json:
-                                try:
-                                    _repair_payload = cls._parse_json_lenient(
-                                        _repair_json
-                                    )
-                                    scene_output_raw = _repair_payload.get(
-                                        "scene_output"
-                                    )
-                                    _repair_narration = str(
-                                        _repair_payload.get("narration") or ""
-                                    ).strip()
-                                    if not _repair_narration:
-                                        _repair_narration = cls._scene_output_text_from_raw(
-                                            scene_output_raw
-                                        )
-                                    if not _repair_narration:
-                                        _repair_narration = (
-                                            cls._fallback_narration_from_payload(
-                                                _repair_payload
-                                            )
-                                        )
-                                    if _repair_narration:
-                                        narration = _repair_narration
-                                    reasoning = cls._sanitize_reasoning(
-                                        _repair_payload.get("reasoning")
-                                    )
-                                    state_update = (
-                                        _repair_payload.get("state_update", {}) or {}
-                                    )
-                                    summary_update = _repair_payload.get(
-                                        "summary_update"
-                                    )
-                                    xp_awarded = (
-                                        _repair_payload.get("xp_awarded", 0) or 0
-                                    )
-                                    player_state_update = (
-                                        _repair_payload.get("player_state_update", {})
-                                        or {}
-                                    )
-                                    story_progression = cls._normalize_story_progression(
-                                        _repair_payload.get("story_progression")
-                                    )
-                                    turn_visibility = _repair_payload.get("turn_visibility")
-                                    scene_image_prompt = _repair_payload.get(
-                                        "scene_image_prompt"
-                                    )
-                                    character_updates = (
-                                        _repair_payload.get("character_updates", {})
-                                        or {}
-                                    )
-                                    give_item = _repair_payload.get("give_item")
-                                    calendar_update = _repair_payload.get(
-                                        "calendar_update"
-                                    )
-                                    _zork_log(
-                                        "EMPTY PAYLOAD REPAIR RESPONSE",
-                                        _repair_response[:1200],
-                                    )
-                                except Exception:
-                                    pass
-
-                    if (
-                        cls._narration_has_explicit_clock_time(narration)
-                        and not cls._action_requests_clock_time(action)
-                    ):
-                        _zork_log("CLOCK DRIFT RETRY", narration[:260])
-                        _clock_retry_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "OUTPUT_VALIDATION_FAILED: Do not invent explicit HH:MM clock stamps. "
-                            "Use canonical CURRENT_GAME_TIME only, or avoid exact times in narration.\n"
-                            'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
-                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
-                        )
-                        _clock_retry_resp = await gpt.turbo_completion(
-                            system_prompt,
-                            _clock_retry_prompt,
-                            temperature=0.75,
-                            max_tokens=2048,
-                        )
-                        if _clock_retry_resp:
-                            _clock_retry_resp = cls._clean_response(_clock_retry_resp)
-                            _clock_retry_json = cls._extract_json(_clock_retry_resp)
-                            if _clock_retry_json:
-                                try:
-                                    _clock_payload = cls._parse_json_lenient(
-                                        _clock_retry_json
-                                    )
-                                    scene_output_raw = _clock_payload.get(
-                                        "scene_output"
-                                    )
-                                    _clock_narration = str(
-                                        _clock_payload.get("narration") or ""
-                                    ).strip()
-                                    if not _clock_narration:
-                                        _clock_narration = cls._scene_output_text_from_raw(
-                                            scene_output_raw
-                                        )
-                                    if not _clock_narration:
-                                        _clock_narration = cls._fallback_narration_from_payload(
-                                            _clock_payload
-                                        )
-                                    if _clock_narration:
-                                        narration = _clock_narration
-                                    reasoning = cls._sanitize_reasoning(
-                                        _clock_payload.get("reasoning")
-                                    )
-                                    state_update = _clock_payload.get("state_update", {}) or {}
-                                    summary_update = _clock_payload.get("summary_update")
-                                    xp_awarded = _clock_payload.get("xp_awarded", 0) or 0
-                                    player_state_update = (
-                                        _clock_payload.get("player_state_update", {}) or {}
-                                    )
-                                    story_progression = cls._normalize_story_progression(
-                                        _clock_payload.get("story_progression")
-                                    )
-                                    turn_visibility = _clock_payload.get("turn_visibility")
-                                    scene_image_prompt = _clock_payload.get("scene_image_prompt")
-                                    character_updates = _clock_payload.get("character_updates", {}) or {}
-                                    give_item = _clock_payload.get("give_item")
-                                    calendar_update = _clock_payload.get("calendar_update")
-                                    empty_response_repair_count += 1
-                                except Exception:
-                                    pass
-
-                    _anti_echo_retry, _anti_echo_reason = cls._anti_echo_retry_decision(
-                        action,
-                        narration,
-                    )
-                    if _anti_echo_retry:
-                        _zork_log("ANTI-ECHO RETRY", _anti_echo_reason)
-                        _anti_echo_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "OUTPUT_VALIDATION_FAILED: previous narration echoed/paraphrased player wording.\n"
-                            "Do NOT restate player phrasing. NPC first line should add new information, a decision, "
-                            "a demand, or a consequence. A direct question is valid only if the NPC truly still lacks enough to react.\n"
-                            'Return final JSON (no tool_call) with reasoning and a state_update containing "game_time", "current_chapter", and "current_scene".\n'
-                            "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
-                        )
-                        _anti_echo_resp = await gpt.turbo_completion(
-                            system_prompt,
-                            _anti_echo_prompt,
-                            temperature=0.75,
-                            max_tokens=2048,
-                        )
-                        if _anti_echo_resp:
-                            _anti_echo_resp = cls._clean_response(_anti_echo_resp)
-                            _anti_echo_json = cls._extract_json(_anti_echo_resp)
-                            if _anti_echo_json:
-                                try:
-                                    _anti_payload = cls._parse_json_lenient(
-                                        _anti_echo_json
-                                    )
-                                    scene_output_raw = _anti_payload.get(
-                                        "scene_output"
-                                    )
-                                    _anti_narration = str(
-                                        _anti_payload.get("narration") or ""
-                                    ).strip()
-                                    if not _anti_narration:
-                                        _anti_narration = cls._scene_output_text_from_raw(
-                                            scene_output_raw
-                                        )
-                                    if not _anti_narration:
-                                        _anti_narration = cls._fallback_narration_from_payload(
-                                            _anti_payload
-                                        )
-                                    if _anti_narration:
-                                        narration = _anti_narration
-                                    reasoning = cls._sanitize_reasoning(
-                                        _anti_payload.get("reasoning")
-                                    )
-                                    state_update = (
-                                        _anti_payload.get("state_update", {}) or {}
-                                    )
-                                    summary_update = _anti_payload.get("summary_update")
-                                    xp_awarded = _anti_payload.get("xp_awarded", 0) or 0
-                                    player_state_update = (
-                                        _anti_payload.get("player_state_update", {}) or {}
-                                    )
-                                    story_progression = cls._normalize_story_progression(
-                                        _anti_payload.get("story_progression")
-                                    )
-                                    turn_visibility = _anti_payload.get("turn_visibility")
-                                    scene_image_prompt = _anti_payload.get("scene_image_prompt")
-                                    character_updates = _anti_payload.get("character_updates", {}) or {}
-                                    give_item = _anti_payload.get("give_item")
-                                    calendar_update = _anti_payload.get("calendar_update")
-                                    anti_echo_retry_count += 1
-                                except Exception:
-                                    pass
-
-                    state_update = cls._ensure_minimum_state_update_contract(
-                        campaign_state,
-                        state_update,
-                    )
-                    state_update, calendar_update = cls._extract_calendar_update_from_state_update(
-                        state_update,
-                        calendar_update,
-                    )
-
-                    turn_visibility = cls._normalize_turn_visibility(
-                        campaign,
-                        player,
-                        turn_visibility,
-                        is_private_context=(getattr(ctx, "guild", None) is None),
-                    )
-                    turn_visibility = cls._promote_player_npc_slugs(
-                        turn_visibility, campaign.id,
-                    )
-                    private_context_candidate = cls._derive_private_context_candidate(
-                        campaign,
-                        player,
-                        player_state,
-                        action,
-                    )
-                    if private_context_candidate is not None:
-                        turn_visibility = cls._apply_private_context_candidate(
-                            turn_visibility,
-                            private_context_candidate,
-                        )
-                    stored_player_action, private_phone_redacted = (
-                        cls._redact_private_phone_command_lines(action)
-                    )
-                    if sms_activity_detected or private_phone_redacted:
-                        turn_visibility = cls._force_private_visibility_for_phone_activity(
-                            turn_visibility,
-                            actor_slug=str(
-                                turn_visibility.get("actor_player_slug")
-                                or cls._player_slug_key(
-                                    player_state.get("character_name")
-                                )
-                                or ""
-                            ).strip(),
-                            actor_user_id=ctx.author.id,
-                        )
-                        _pre_counter_campaign_state = cls.get_campaign_state(campaign)
-                        cls._increment_auto_fix_counter(
-                            _pre_counter_campaign_state,
-                            "private_phone_redacted",
-                        )
-                    suppress_recent_context = bool(
-                        sms_activity_detected or private_phone_redacted
-                    )
-                    ephemeral_notices: List[str] = []
-                    if (
-                        private_context_candidate is not None
-                        and bool(private_context_candidate.get("warning"))
-                    ):
-                        ephemeral_notices.append(
-                            "Warning: if you include the real whisper/private content in the same setup message, it may leak before the aside is fully established. Use one short setup turn first, then continue once the reply keeps it private."
-                        )
-                    cls._persist_private_context_state(
-                        player_state,
-                        turn_visibility,
-                        action,
-                        private_context_candidate,
-                    )
-
-                    _planning_tools_used = bool(
-                        {"plot_plan", "chapter_plan", "consequence_log"}
-                        & set(used_tool_names)
-                    )
-                    if (
-                        not _planning_tools_used
-                        and cls._looks_like_major_narrative_beat(
-                            narration=narration,
-                            summary_update=summary_update,
-                            state_update=state_update
-                            if isinstance(state_update, dict)
-                            else {},
-                            character_updates=character_updates
-                            if isinstance(character_updates, dict)
-                            else {},
-                            calendar_update=calendar_update,
-                        )
-                    ):
-                        _planning_prompt = (
-                            f"{tool_augmented_prompt}\n"
-                            "PLANNING_ENFORCEMENT:\n"
-                            "A major beat occurred. Before ending the turn, return ONLY one planning tool call JSON:\n"
-                            "- plot_plan OR consequence_log (chapter_plan optional in off-rails)\n"
-                            "No narration. No extra keys.\n"
-                        )
-                        _planning_resp = await gpt.turbo_completion(
-                            system_prompt,
-                            _planning_prompt,
-                            temperature=0.6,
-                            max_tokens=512,
-                        )
-                        if _planning_resp:
-                            _planning_resp = cls._clean_response(_planning_resp)
-                            _planning_json = cls._extract_json(_planning_resp)
-                            if _planning_json:
-                                try:
-                                    _planning_payload = cls._parse_json_lenient(
-                                        _planning_json
-                                    )
-                                    _planning_name = str(
-                                        _planning_payload.get("tool_call") or ""
-                                    ).strip()
-                                    if _planning_name in {
-                                        "plot_plan",
-                                        "chapter_plan",
-                                        "consequence_log",
-                                    }:
-                                        forced_planning_payload = _planning_payload
-                                        _zork_log(
-                                            "FORCED PLANNING TOOL",
-                                            json.dumps(
-                                                forced_planning_payload,
-                                                ensure_ascii=True,
-                                            ),
-                                        )
-                                except Exception:
-                                    pass
-
-                    raw_narration = narration
-                    narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                    narration = cls._strip_inventory_from_narration(narration)
-                    if sms_activity_detected or private_phone_redacted:
-                        turn_visibility["aware_npc_slugs"] = []
-                    else:
-                        inferred_aware_npc_slugs = cls._infer_aware_npc_slugs(
-                            campaign,
-                            player_state,
-                            turn_visibility,
-                            narration_text=raw_narration,
-                            summary_update=summary_update,
-                            private_context_candidate=private_context_candidate,
-                        )
-                        if inferred_aware_npc_slugs:
-                            turn_visibility["aware_npc_slugs"] = inferred_aware_npc_slugs
-                    turn_visibility = cls._sanitize_turn_awareness_for_scene(
-                        campaign,
-                        player_state,
-                        turn_visibility,
-                    )
-                    _resolved_turn_keys = cls._resolved_turn_visibility_keys(
-                        turn_visibility,
-                        scene_output_raw=scene_output_raw,
-                        player_state_update=player_state_update,
-                        fallback_location_key=cls._room_key_from_player_state(
-                            player_state
-                        ),
-                    )
-                    turn_visibility["location_key"] = _resolved_turn_keys.get(
-                        "location_key"
-                    )
-                    turn_visibility["context_key"] = _resolved_turn_keys.get(
-                        "context_key"
-                    )
-
-                    _zork_log(
-                        f"TURN RESULT campaign={campaign.id}",
-                        f"--- REASONING ---\n{reasoning}\n\n"
-                        f"--- NARRATION ---\n{narration}\n\n"
-                        f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
-                        f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
-                        f"--- STORY PROGRESSION ---\n{json.dumps(story_progression, indent=2)}\n\n"
-                        f"--- TURN VISIBILITY ---\n{json.dumps(turn_visibility, indent=2)}\n\n"
-                        f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
-                        f"--- XP AWARDED ---\n{xp_awarded}\n"
-                        f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
-                    )
-
-                    state_update, player_state_update = cls._rescue_misplaced_room_state(
-                        state_update, player_state_update
-                    )
-                    state_update, player_state_update = cls._split_room_state(
-                        state_update, player_state_update
-                    )
-                    player_state_update = cls._sync_game_time_to_player_state(
-                        state_update, player_state_update
-                    )
-                    state_update = cls._scrub_inventory_from_state(state_update)
-                    existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
-                    resolution_context = (
-                        f"{action}\n{raw_narration}\n{summary_update or ''}"
-                    )
-                    campaign_state = cls.get_campaign_state(campaign)
-                    state_update = cls._guard_state_null_character_prunes(
-                        state_update,
-                        existing_chars_for_state_nulls,
-                        resolution_context=resolution_context,
-                        campaign_state=campaign_state,
-                    )
-                    state_null_character_updates = cls._character_updates_from_state_nulls(
-                        state_update,
-                        existing_chars_for_state_nulls,
-                    )
-                    if state_null_character_updates:
-                        merged_character_updates = dict(state_null_character_updates)
-                        if isinstance(character_updates, dict):
-                            merged_character_updates.update(character_updates)
-                        character_updates = merged_character_updates
-
-                    if isinstance(character_updates, dict) and character_updates:
-                        character_updates = cls._sanitize_character_removals(
-                            existing_chars_for_state_nulls,
-                            character_updates,
-                            resolution_context=resolution_context,
-                            campaign_state=campaign_state,
-                        )
-                    pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
-                    campaign_state = cls._apply_state_update(
-                        campaign_state, state_update
-                    )
-                    campaign_state = cls._ensure_game_time_progress(
-                        campaign_state,
-                        pre_turn_game_time,
-                        action_text=action,
-                        narration_text=raw_narration,
-                    )
-                    if isinstance(forced_planning_payload, dict):
-                        _planning_tool_name = str(
-                            forced_planning_payload.get("tool_call") or ""
-                        ).strip()
-                        _current_turn_hint = int(turns[-1].id) if turns else 0
-                        if _planning_tool_name == "plot_plan":
-                            _plan_result = cls._apply_plot_plan_tool(
-                                campaign_state,
-                                forced_planning_payload,
-                                current_turn=_current_turn_hint,
-                            )
-                            _zork_log(
-                                "FORCED PLOT PLAN APPLIED",
-                                json.dumps(_plan_result, ensure_ascii=True),
-                            )
-                            cls._increment_auto_fix_counter(
-                                campaign_state, "forced_planning_tool"
-                            )
-                        elif _planning_tool_name == "chapter_plan":
-                            _plan_result = cls._apply_chapter_plan_tool(
-                                campaign_state,
-                                forced_planning_payload,
-                                current_turn=_current_turn_hint,
-                                on_rails=bool(campaign_state.get("on_rails", False)),
-                            )
-                            _zork_log(
-                                "FORCED CHAPTER PLAN APPLIED",
-                                json.dumps(_plan_result, ensure_ascii=True),
-                            )
-                            cls._increment_auto_fix_counter(
-                                campaign_state, "forced_planning_tool"
-                            )
-                        elif _planning_tool_name == "consequence_log":
-                            _cons_result = cls._apply_consequence_log_tool(
-                                campaign_state,
-                                forced_planning_payload,
-                                current_turn=_current_turn_hint,
-                            )
-                            _zork_log(
-                                "FORCED CONSEQUENCE LOG APPLIED",
-                                json.dumps(_cons_result, ensure_ascii=True),
-                            )
-                            cls._increment_auto_fix_counter(
-                                campaign_state, "forced_planning_tool"
-                            )
-                    if auto_forced_memory_search:
-                        cls._increment_auto_fix_counter(
-                            campaign_state, "forced_memory_search"
-                        )
-                    if empty_response_repair_count > 0:
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "empty_response_repair_retry",
-                            amount=empty_response_repair_count,
-                        )
-                    if anti_echo_retry_count > 0:
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "anti_echo_retry",
-                            amount=anti_echo_retry_count,
-                        )
-                    campaign_state = cls._scrub_inventory_from_state(campaign_state)
-                    campaign.state_json = cls._dump_json(campaign_state)
-
-                    # Chapter/scene advancement precedence:
-                    # 1. explicit state_update.current_* from model
-                    # 2. model story_progression hint
-                    # 3. harness auto-advance fallback
-                    story_outline = campaign_state.get("story_outline")
-                    if isinstance(story_outline, dict):
-                        chapters = story_outline.get("chapters", [])
-                        old_ch = cls._coerce_non_negative_int(
-                            campaign_state.get("current_chapter", 0), default=0
-                        )
-                        if isinstance(chapters, list) and chapters:
-                            old_ch = min(old_ch, len(chapters) - 1)
-
-                        new_ch_raw = state_update.get("current_chapter")
-                        new_sc_raw = state_update.get("current_scene")
-
-                        new_ch = None
-                        if new_ch_raw is not None:
-                            new_ch = cls._coerce_non_negative_int(new_ch_raw, default=old_ch)
-                            if isinstance(chapters, list) and chapters:
-                                new_ch = min(new_ch, len(chapters) - 1)
-
-                        scene_ch_idx = new_ch if new_ch is not None else old_ch
-                        new_sc = None
-                        if new_sc_raw is not None:
-                            new_sc = cls._coerce_non_negative_int(new_sc_raw, default=0)
-                            if isinstance(chapters, list) and 0 <= scene_ch_idx < len(chapters):
-                                scene_list = chapters[scene_ch_idx].get("scenes", [])
-                                if isinstance(scene_list, list) and scene_list:
-                                    new_sc = min(new_sc, len(scene_list) - 1)
-                                else:
-                                    new_sc = 0
-
-                        if new_ch is not None and new_ch != old_ch:
-                            if isinstance(chapters, list) and 0 <= old_ch < len(chapters):
-                                chapters[old_ch]["completed"] = True
-                            campaign_state["current_chapter"] = new_ch
-                            if new_sc is None:
-                                # New chapter defaults to first scene unless model provided one.
-                                campaign_state["current_scene"] = 0
-
-                        if new_sc is not None:
-                            campaign_state["current_scene"] = new_sc
-                        # Remove from state_update so they don't pollute model state
-                        state_update.pop("current_chapter", None)
-                        state_update.pop("current_scene", None)
-                        campaign.state_json = cls._dump_json(campaign_state)
-
-                    story_progressed = cls._apply_story_progression_hint(
-                        campaign_state,
-                        story_progression,
-                        state_update if isinstance(state_update, dict) else {},
-                    )
-                    if story_progressed:
-                        _zork_log(
-                            "STORY PROGRESSION APPLIED",
-                            json.dumps(
-                                {
-                                    "current_chapter": campaign_state.get("current_chapter"),
-                                    "current_scene": campaign_state.get("current_scene"),
-                                    "story_progression": story_progression,
-                                },
-                                ensure_ascii=True,
-                            ),
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state, "story_progression_hint"
-                        )
-
-                    auto_story_advanced = False
-                    if not story_progressed:
-                        auto_story_advanced = cls._auto_advance_on_rails_story_context(
-                            campaign_state,
-                            action_text=action,
-                            narration=raw_narration,
-                            summary_update=summary_update,
-                            state_update=state_update if isinstance(state_update, dict) else {},
-                            player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
-                            character_updates=character_updates if isinstance(character_updates, dict) else {},
-                            calendar_update=calendar_update,
-                        )
-                    if auto_story_advanced:
-                        _zork_log(
-                            "AUTO STORY ADVANCE",
-                            json.dumps(
-                                {
-                                    "current_chapter": campaign_state.get("current_chapter"),
-                                    "current_scene": campaign_state.get("current_scene"),
-                                    "action": str(action or "")[:160],
-                                },
-                                ensure_ascii=True,
-                            ),
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state, "auto_story_advance"
-                        )
-
-                    _on_rails = bool(campaign_state.get("on_rails", False))
-                    if character_updates and isinstance(character_updates, dict):
-                        existing_chars = cls.get_campaign_characters(campaign)
-                        _pre_slugs = set(existing_chars.keys())
-                        existing_chars = cls._apply_character_updates(
-                            existing_chars,
-                            character_updates,
-                            on_rails=_on_rails,
-                            campaign_id=campaign.id,
-                        )
-                        campaign.characters_json = cls._dump_json(existing_chars)
-                        _zork_log(
-                            f"CHARACTER UPDATES campaign={campaign.id}",
-                            json.dumps(character_updates, indent=2),
-                        )
-                        # Auto-generate portraits for new characters with appearance.
-                        for _slug in character_updates:
-                            if _slug not in _pre_slugs and _slug in existing_chars:
-                                _char = existing_chars[_slug]
-                                _appearance = str(_char.get("appearance") or "").strip()
-                                if _appearance and not _char.get("image_url"):
-                                    _char_name = _char.get("name", _slug)
-                                    asyncio.ensure_future(
-                                        cls._enqueue_character_portrait(
-                                            ctx, campaign, _slug, _char_name, _appearance,
-                                        )
-                                    )
-
-                    if calendar_update and isinstance(calendar_update, dict):
-                        campaign_state = cls._apply_calendar_update(
-                            campaign_state,
-                            calendar_update,
-                            resolution_context=(
-                                f"{action}\n{raw_narration}\n{summary_update or ''}"
-                            ),
-                            actor_user_id=ctx.author.id,
-                        )
-                        campaign.state_json = cls._dump_json(campaign_state)
-
-                    _turn_is_public = (
-                        str((turn_visibility or {}).get("scope") or "").strip().lower()
-                        in {"public", "local"}
-                    )
-
-                    player_state = cls.get_player_state(player)
-                    _pre_update_inv = {
-                        e["name"].lower(): e["name"]
-                        for e in cls._get_inventory_rich(player_state)
-                    }
-                    player_state_update = cls._sanitize_player_state_update(
-                        player_state,
-                        player_state_update,
-                        action_text=action,
-                        narration_text=raw_narration,
-                    )
-                    player_state = cls._apply_state_update(
-                        player_state, player_state_update
-                    )
-                    turn_visibility = cls._sanitize_turn_awareness_for_scene(
-                        campaign,
-                        player_state,
-                        turn_visibility,
-                    )
-                    turn_visibility["location_key"] = (
-                        cls._room_key_from_player_state(player_state).strip() or None
-                    )
-                    player.state_json = cls._dump_json(player_state)
-                    cls._sync_main_party_room_state(
-                        campaign.id,
-                        player.user_id,
-                        player_state,
-                    )
-                    _active_char_sync_count = cls._sync_active_player_character_location(
-                        campaign,
-                        player_state=player_state,
-                    )
-                    _state_loc_sync_count = cls._auto_sync_companion_locations(
-                        campaign_state,
-                        player_state=player_state,
-                        narration_text=raw_narration,
-                    )
-                    _char_loc_sync_count = cls._auto_sync_character_locations(
-                        campaign,
-                        player_state=player_state,
-                        narration_text=raw_narration,
-                    )
-                    _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
-                        campaign, state_update
-                    )
-                    if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "location_auto_sync_active_character",
-                            amount=_active_char_sync_count,
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "location_auto_sync_state_entities",
-                            amount=_state_loc_sync_count,
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "location_auto_sync_world_characters",
-                            amount=_char_loc_sync_count,
-                        )
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "location_auto_sync_roster_overlay",
-                            amount=_roster_overlay_sync_count,
-                        )
-                        _zork_log(
-                            f"LOCATION AUTO-SYNC campaign={campaign.id}",
-                            (
-                                f"active_player_character={_active_char_sync_count} "
-                                f"state_entities={_state_loc_sync_count} "
-                                f"world_characters={_char_loc_sync_count} "
-                                f"roster_overlay={_roster_overlay_sync_count}"
-                            ),
-                        )
-                    _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
-                        campaign,
-                        campaign_state,
-                        skip_user_id=player.user_id,
-                    )
-                    if _player_entity_sync_count:
-                        cls._increment_auto_fix_counter(
-                            campaign_state,
-                            "location_auto_sync_other_players",
-                            amount=_player_entity_sync_count,
-                        )
-                        _zork_log(
-                            f"PLAYER ENTITY AUTO-SYNC campaign={campaign.id}",
-                            f"other_players={_player_entity_sync_count}",
-                        )
-                    campaign.state_json = cls._dump_json(campaign_state)
-
-                    # --- give_item: cross-player item transfer ---
-                    # Heuristic fallback: if model forgot give_item but removed
-                    # items + narration mentions giving to another player, infer it.
-                    if give_item is None:
-                        _cur_inv_names = {
-                            e["name"].lower()
-                            for e in cls._get_inventory_rich(player_state)
-                        }
-                        _removed = [
-                            _pre_update_inv[k]
-                            for k in _pre_update_inv
-                            if k not in _cur_inv_names
-                        ]
-                        if _removed:
-                            _give_re = re.compile(
-                                r"\b(?:give|hand|pass|toss|offer|slide)\b",
-                                re.IGNORECASE,
-                            )
-                            _refuse_re = re.compile(
-                                r"\b(?:doesn'?t take|does not take|refuse[sd]?|reject[sd]?|decline[sd]?"
-                                r"|push(?:es|ed)? (?:it |the \w+ )?(?:back|away)"
-                                r"|won'?t (?:take|accept)|shake[sd]? (?:his|her|their) head"
-                                r"|hands? it back|gives? it back|returns? (?:it|the))\b",
-                                re.IGNORECASE,
-                            )
-                            if (_give_re.search(action) or _give_re.search(raw_narration or "")) and not _refuse_re.search(raw_narration or ""):
-                                # Find first other-player mention in narration
-                                _mention_re = re.compile(r"<@!?(\d+)>")
-                                for _m in _mention_re.finditer(raw_narration or ""):
-                                    _target_uid = int(_m.group(1))
-                                    if _target_uid != player.user_id:
-                                        _inferred_item = _removed[0] if len(_removed) == 1 else None
-                                        if _inferred_item is None:
-                                            # Multiple items removed; try matching action text
-                                            _action_lower = action.lower()
-                                            for _ri in _removed:
-                                                if _ri.lower() in _action_lower:
-                                                    _inferred_item = _ri
-                                                    break
-                                        if _inferred_item:
-                                            give_item = {
-                                                "item": _inferred_item,
-                                                "to_discord_mention": f"<@{_target_uid}>",
-                                            }
-                                            logger.info(
-                                                "give_item inferred from action/narration: %s -> user %s",
-                                                _inferred_item, _target_uid,
-                                            )
-                                            break
-
-                    if isinstance(give_item, dict):
-                        gi_item_name = str(give_item.get("item") or "").strip()
-                        gi_mention = str(give_item.get("to_discord_mention") or "").strip()
-                        # Parse user id from mention format <@123456>
-                        gi_target_uid = None
-                        if gi_mention.startswith("<@") and gi_mention.endswith(">"):
-                            try:
-                                gi_target_uid = int(gi_mention.strip("<@!>"))
-                            except (ValueError, TypeError):
-                                pass
-                        if gi_item_name and gi_target_uid and gi_target_uid != player.user_id:
-                            # Check if item is still in giver's inventory or was
-                            # already removed by inventory_remove (pre-update had it).
-                            giver_inv = cls._get_inventory_rich(player_state)
-                            giver_has_now = any(
-                                e["name"].lower() == gi_item_name.lower() for e in giver_inv
-                            )
-                            giver_had_before = gi_item_name.lower() in _pre_update_inv
-                            if giver_has_now or giver_had_before:
-                                target_player = ZorkPlayer.query.filter_by(
-                                    campaign_id=campaign.id, user_id=gi_target_uid
-                                ).first()
-                                if target_player is not None:
-                                    # Remove from giver if still present
-                                    if giver_has_now:
-                                        player_state["inventory"] = cls._apply_inventory_delta(
-                                            giver_inv, [], [gi_item_name], origin_hint=""
-                                        )
-                                        player.state_json = cls._dump_json(player_state)
-                                    # Add to receiver
-                                    target_state = cls.get_player_state(target_player)
-                                    target_inv = cls._get_inventory_rich(target_state)
-                                    received_origin = f"Received from <@{player.user_id}>"
-                                    target_state["inventory"] = cls._apply_inventory_delta(
-                                        target_inv, [gi_item_name], [], origin_hint=received_origin
-                                    )
-                                    target_player.state_json = cls._dump_json(target_state)
-                                    target_player.updated = db.func.now()
-                                    logger.info(
-                                        "give_item: '%s' transferred from user %s to user %s (campaign %s)",
-                                        gi_item_name, player.user_id, gi_target_uid, campaign.id,
-                                    )
-                                else:
-                                    logger.warning(
-                                        "give_item: target user %s not found in campaign %s",
-                                        gi_target_uid, campaign.id,
-                                    )
-                            else:
-                                logger.warning(
-                                    "give_item: item '%s' not in giver's inventory", gi_item_name
-                                )
-
-                    if isinstance(xp_awarded, int) and xp_awarded > 0:
-                        player.xp += xp_awarded
-
-                    scene_output = cls._normalize_scene_output(
-                        campaign,
-                        scene_output_raw,
-                        fallback_narration=narration,
-                        turn_visibility=turn_visibility,
-                        fallback_location_key=cls._room_key_from_player_state(player_state),
-                        actor_user_id=ctx.author.id,
-                        actor_player_slug=str(
-                            turn_visibility.get("actor_player_slug") or ""
-                        ).strip(),
-                    )
-                    if sms_activity_detected or private_phone_redacted:
-                        scene_output = cls._scrub_scene_output_npc_awareness(
-                            scene_output
-                        )
-                    rendered_scene_output = cls._scene_output_rendered_text(
-                        scene_output
-                    )
-                    if rendered_scene_output:
-                        narration = rendered_scene_output
-                        raw_narration = rendered_scene_output
-                    if scene_output:
-                        _zork_log(
-                            f"SCENE OUTPUT campaign={campaign.id}",
-                            json.dumps(scene_output, indent=2, ensure_ascii=False),
-                        )
-
-                    if summary_update:
-                        summary_update = summary_update.strip()
-                        summary_update = cls._strip_inventory_mentions(summary_update)
-                        if not _turn_is_public:
-                            _zork_log(
-                                f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
-                                summary_update,
-                            )
-                        elif not cls._scene_output_is_summary_public_safe(scene_output):
-                            _zork_log(
-                                f"SUMMARY FILTERED (non-public beat) campaign={campaign.id}",
-                                summary_update,
-                            )
-                        elif cls._should_keep_summary_update(
-                            summary_update,
-                            state_update=state_update,
-                            player_state_update=player_state_update,
-                            character_updates=character_updates,
-                            calendar_update=calendar_update,
-                        ):
-                            campaign.summary = cls._append_summary(
-                                campaign.summary, summary_update
-                            )
-                        else:
-                            _zork_log(
-                                f"SUMMARY FILTERED campaign={campaign.id}",
-                                summary_update,
-                            )
-
-                    clean_narration = cls._strip_prompt_artifacts(
-                        cls._strip_ephemeral_context_lines(
-                            cls._strip_narration_footer(narration)
-                        )
-                    )
-                    persisted_narration = clean_narration
-                    display_narration = clean_narration
-
-                    post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
-                    calendar_event_notifications = cls._calendar_collect_fired_events(
-                        campaign.id,
-                        campaign_state,
-                        from_time=pre_turn_game_time,
-                        to_time=post_turn_game_time,
-                    )
-                    sms_notice = cls._sms_unread_hourly_notification(
-                        campaign_state,
-                        actor_id=ctx.author.id,
-                        player_state=player_state,
-                        game_time=post_turn_game_time,
-                    )
-                    if sms_notice:
-                        display_narration = f"{display_narration}\n\n{sms_notice}"
-                        cls._increment_auto_fix_counter(
-                            campaign_state, "sms_unread_notice"
-                        )
-                        sms_summary = cls._sms_unread_summary_for_player(
-                            campaign_state,
-                            actor_id=ctx.author.id,
-                            player_state=player_state,
-                        )
-                        thread_markers = (
-                            sms_summary.get("thread_markers")
-                            if isinstance(sms_summary, dict)
-                            else {}
-                        )
-                        if isinstance(thread_markers, dict) and thread_markers:
-                            read_changed = cls._sms_mark_threads_read(
-                                campaign_state,
-                                actor_id=ctx.author.id,
-                                player_state=player_state,
-                                thread_markers=thread_markers,
-                            )
-                            if read_changed:
-                                cls._increment_auto_fix_counter(
-                                    campaign_state, "sms_auto_mark_read"
-                                )
-
-                    if timer_scheduled_delay is not None:
-                        expiry_ts = int(time.time()) + timer_scheduled_delay
-                        event_hint = timer_scheduled_event or "Something happens"
-                        if timer_scheduled_interruptible:
-                            if timer_scheduled_interrupt_scope == "local":
-                                interrupt_hint = "acting player can prevent"
-                            else:
-                                interrupt_hint = "act to prevent!"
-                        else:
-                            interrupt_hint = "unavoidable"
-                        display_narration = (
-                            f"{display_narration}\n\n"
-                            f"\u23f0 <t:{expiry_ts}:R>: {event_hint} ({interrupt_hint})"
-                        )
-
-                    time_jump_notification = None
-                    if _turn_is_public and getattr(ctx, "guild", None) is not None:
-                        delta_minutes = max(
-                            0,
-                            cls._game_time_to_total_minutes(post_turn_game_time)
-                            - cls._game_time_to_total_minutes(pre_turn_game_time),
-                        )
-                        if delta_minutes >= cls.PRIVATE_DM_TIME_JUMP_NOTIFY_MINUTES:
-                            recipients = cls._recent_private_dm_notification_targets(
-                                campaign.id,
-                                exclude_user_id=ctx.author.id,
-                            )
-                            if recipients:
-                                time_jump_notification = {
-                                    "campaign_name": campaign.name,
-                                    "recipient_user_ids": recipients,
-                                    "from_time": pre_turn_game_time,
-                                    "to_time": post_turn_game_time,
-                                    "delta_minutes": delta_minutes,
-                                    "event_summary": cls._brief_event_summary(
-                                        action_text=action,
-                                        summary_update=summary_update,
-                                        narration_text=raw_narration,
-                                    ),
-                                }
-
-                    campaign.last_narration = persisted_narration
-                    campaign.updated = db.func.now()
-                    player.updated = db.func.now()
-                    cls._set_turn_ephemeral_notices(
-                        campaign.id,
-                        ctx.author.id,
-                        ephemeral_notices,
-                    )
-                    player_turn_meta = cls._dump_json(
-                        {
-                            "game_time": pre_turn_game_time,
-                            "visibility": turn_visibility,
-                            "location_key": cls._room_key_from_player_state(player_state),
-                            "context_key": turn_visibility.get("context_key"),
-                            "suppress_context": suppress_recent_context,
-                        }
-                    )
-                    narrator_turn_meta_payload = {
-                        "game_time": post_turn_game_time,
-                        "visibility": turn_visibility,
-                        "actor_player_slug": cls._player_slug_key(
-                            player_state.get("character_name")
-                        ),
-                        "location_key": cls._room_key_from_player_state(player_state),
-                        "context_key": turn_visibility.get("context_key"),
-                        "suppress_context": suppress_recent_context,
-                    }
-                    if reasoning:
-                        narrator_turn_meta_payload["reasoning"] = reasoning
-                    if summary_update:
-                        narrator_turn_meta_payload["summary_update"] = summary_update
-                    if scene_output:
-                        narrator_turn_meta_payload["scene_output"] = scene_output
-                        rendered_scene_text = cls._scene_output_rendered_text(
-                            scene_output
-                        )
-                        if rendered_scene_text:
-                            narrator_turn_meta_payload["scene_output_rendered"] = (
-                                rendered_scene_text
-                            )
-                        narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
-                            turn_id=None,
-                            game_time=post_turn_game_time,
-                            scene_output=scene_output,
-                            turn_visibility=turn_visibility,
-                        )
-                    narrator_turn_meta = cls._dump_json(narrator_turn_meta_payload)
-
-                    # Don't store OOC meta-messages in turn history.
-                    _is_ooc = bool(re.match(r"\s*\[OOC\b", action, re.IGNORECASE))
-                    player_turn = None
-                    if not _is_ooc and stored_player_action:
-                        player_turn = ZorkTurn(
-                            campaign_id=campaign.id,
-                            user_id=ctx.author.id,
-                            kind="player",
-                            content=stored_player_action,
-                            channel_id=ctx.channel.id,
-                            meta_json=player_turn_meta,
-                        )
-                        db.session.add(player_turn)
-                    narrator_turn = ZorkTurn(
-                        campaign_id=campaign.id,
-                        user_id=ctx.author.id,
-                        kind="narrator",
-                        content=persisted_narration,
-                        channel_id=ctx.channel.id,
-                        meta_json=narrator_turn_meta,
-                    )
-                    db.session.add(narrator_turn)
-                    db.session.flush()
-                    if scene_output:
-                        narrator_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
-                            turn_id=narrator_turn.id,
-                            game_time=post_turn_game_time,
-                            scene_output=scene_output,
-                            turn_visibility=turn_visibility,
-                        )
-                        narrator_turn.meta_json = cls._dump_json(
-                            narrator_turn_meta_payload
-                        )
-                    if player_turn is not None:
-                        cls._record_turn_game_time(
-                            campaign_state,
-                            player_turn.id,
-                            pre_turn_game_time,
-                        )
-                    cls._record_turn_game_time(
-                        campaign_state,
-                        narrator_turn.id,
-                        post_turn_game_time,
-                    )
-                    campaign.state_json = cls._dump_json(campaign_state)
-                    db.session.commit()
-
-                    cls._create_snapshot(narrator_turn, campaign)
-
-                    # Fire-and-forget: embed the narrator turn for memory search.
-                    try:
-                        if not suppress_recent_context:
-                            ZorkMemory.store_turn_embedding(
-                                narrator_turn.id,
-                                campaign.id,
-                                ctx.author.id,
-                                "narrator",
-                                persisted_narration,
-                                metadata=cls._turn_embedding_metadata(
-                                    visibility=turn_visibility,
-                                    actor_player_slug=player_state.get("character_name"),
-                                    location_key=cls._room_key_from_player_state(player_state),
-                                    channel_id=ctx.channel.id,
-                                ),
-                            )
-                    except Exception:
-                        logger.debug(
-                            "Zork memory embedding skipped for turn %s",
-                            narrator_turn.id,
-                            exc_info=True,
-                        )
-
-                    if isinstance(scene_image_prompt, str):
-                        refreshed_party_snapshot = cls._build_party_snapshot_for_prompt(
-                            campaign, player, player_state
-                        )
-                        cleaned_scene_prompt = cls._enrich_scene_image_prompt(
-                            scene_image_prompt,
-                            player_state=player_state,
-                            party_snapshot=refreshed_party_snapshot,
-                        )
-                        if cleaned_scene_prompt:
-                            await cls._enqueue_scene_image(
-                                ctx,
-                                cleaned_scene_prompt,
-                                campaign_id=campaign.id,
-                                room_key=cls._room_key_from_player_state(player_state),
-                            )
-
-                    if isinstance(time_jump_notification, dict):
-                        asyncio.ensure_future(
-                            cls._send_private_dm_time_jump_notifications(
-                                campaign_name=str(
-                                    time_jump_notification.get("campaign_name") or campaign.name
-                                ),
-                                recipient_user_ids=list(
-                                    time_jump_notification.get("recipient_user_ids") or []
-                                ),
-                                from_time=dict(
-                                    time_jump_notification.get("from_time") or {}
-                                ),
-                                to_time=dict(
-                                    time_jump_notification.get("to_time") or {}
-                                ),
-                                delta_minutes=int(
-                                    time_jump_notification.get("delta_minutes") or 0
-                                ),
-                                event_summary=str(
-                                    time_jump_notification.get("event_summary")
-                                    or "Shared time advanced."
-                                ),
-                            )
-                        )
-                    if calendar_event_notifications:
-                        asyncio.ensure_future(
-                            cls._send_calendar_event_notifications(
-                                campaign_id=campaign.id,
-                                campaign_name=campaign.name,
-                                notifications=calendar_event_notifications,
-                                preferred_channel_id=(
-                                    int(ctx.channel.id)
-                                    if getattr(ctx, "guild", None) is not None
-                                    else None
-                                ),
-                            )
-                        )
-
-                    return display_narration
+                    if isinstance(preflight, str):
+                        return preflight  # intercepted command / error / onboarding
+
+                    # Snapshot campaign state for Phase 2 (local copy)
+                    campaign_state_snapshot = dict(cls.get_campaign_state(campaign))
+                    conc.inflight_count += 1
+
+            # === Phase 2: LLM EXECUTION (NO lock held — 5-30s) ===
+            try:
+                delta = await cls._play_action_llm(preflight, campaign, campaign_state_snapshot)
+            finally:
+                conc.inflight_count -= 1
+
+            # === Phase 3: COMMIT (holds commit_lock — <100ms) ===
+            async with conc.commit_lock:
+                with app.app_context():
+                    campaign = ZorkCampaign.query.get(campaign_id)
+                    return await cls._play_action_commit(ctx, preflight, delta, campaign)
         finally:
             cls._pop_contextual_turn_log_scope(log_scope_token)
             if should_clear_claim:
@@ -20626,13 +21230,41 @@ class ZorkEmulator:
         app = AppConfig.get_flask()
         if app is None:
             return
+
+        # Variables that must survive across phases
         timed_narrator_turn_id = None
         calendar_event_notifications: List[Dict[str, object]] = []
         campaign_name_for_notifications = f"campaign-{campaign_id}"
         log_scope_token: Optional[str] = None
-        lock = cls._get_lock(campaign_id)
+        target_user_id: Optional[int] = None
+
+        # Phase 1 outputs needed by Phase 2
+        system_prompt: Optional[str] = None
+        user_prompt: Optional[str] = None
+        gpt = None
+        action: Optional[str] = None
+        active_player_user_id: Optional[int] = None
+        timer_is_private_context: bool = False
+        state_version: int = 0
+
+        # Phase 2 outputs needed by Phase 3
+        response: Optional[str] = None
+        narration: str = ""
+        reasoning = None
+        state_update: Dict[str, object] = {}
+        summary_update = None
+        xp_awarded: int = 0
+        player_state_update: Dict[str, object] = {}
+        turn_visibility = None
+        scene_output_raw = None
+        character_updates: Dict[str, object] = {}
+        calendar_update = None
+
+        conc = cls._get_concurrency(campaign_id)
+
         try:
-            async with lock:
+            # === Phase 1: PREFLIGHT (holds commit_lock — <100ms) ===
+            async with conc.commit_lock:
                 with app.app_context():
                     campaign = ZorkCampaign.query.get(campaign_id)
                     if campaign is None:
@@ -20670,6 +21302,8 @@ class ZorkEmulator:
                         )
                     if active_player is None:
                         return
+                    active_player_user_id = active_player.user_id
+                    target_user_id = active_player_user_id
                     timer_is_private_context = (
                         ZorkChannel.query.filter_by(channel_id=channel_id).first() is None
                     )
@@ -20705,12 +21339,21 @@ class ZorkEmulator:
                     )
 
                     gpt = cls._new_gpt(campaign=campaign, channel_id=channel_id)
-                    response = await gpt.turbo_completion(
-                        system_prompt, user_prompt, temperature=0.8, max_tokens=2048
-                    )
-                    if not response:
-                        return
-                    response = cls._clean_response(response)
+
+                    # Snapshot state version for optimistic concurrency
+                    campaign_state = cls.get_campaign_state(campaign)
+                    state_version = campaign_state.get("_state_version", 0)
+
+                    conc.inflight_count += 1
+
+            # === Phase 2: LLM EXECUTION (NO lock held — 5-30s) ===
+            try:
+                response = await gpt.turbo_completion(
+                    system_prompt, user_prompt, temperature=0.8, max_tokens=2048
+                )
+                if not response:
+                    return
+                response = cls._clean_response(response)
 
                 narration = response.strip()
                 reasoning = None
@@ -20833,364 +21476,398 @@ class ZorkEmulator:
                             "calendar_update": calendar_update,
                         }
                     ) or "The world shifts, but nothing clear emerges."
-                turn_visibility = cls._normalize_turn_visibility(
-                    campaign,
-                    active_player,
-                    turn_visibility,
-                    is_private_context=timer_is_private_context,
-                )
-                turn_visibility = cls._promote_player_npc_slugs(
-                    turn_visibility, campaign.id,
-                )
-                _resolved_turn_keys = cls._resolved_turn_visibility_keys(
-                    turn_visibility,
-                    scene_output_raw=scene_output_raw,
-                    player_state_update=player_state_update,
-                    fallback_location_key=cls._room_key_from_player_state(
-                        active_player_state
-                    ),
-                )
-                turn_visibility["location_key"] = _resolved_turn_keys.get("location_key")
-                turn_visibility["context_key"] = _resolved_turn_keys.get("context_key")
-                if (
-                    " ".join(str(narration or "").lower().split())
-                    == "the world shifts, but nothing clear emerges."
-                ):
-                    _zork_log(
-                        f"TIMED EVENT GENERIC FALLBACK campaign={campaign_id}",
-                        f"event={event_description!r} active_user_id={active_player.user_id}",
+            finally:
+                conc.inflight_count -= 1
+
+            # === Phase 3: COMMIT (holds commit_lock — <100ms) ===
+            async with conc.commit_lock:
+                with app.app_context():
+                    # Re-read authoritative state from DB
+                    campaign = ZorkCampaign.query.get(campaign_id)
+                    if campaign is None:
+                        return
+                    active_player = ZorkPlayer.query.filter_by(
+                        campaign_id=campaign_id,
+                        user_id=active_player_user_id,
+                    ).first()
+                    if active_player is None:
+                        return
+
+                    # Re-read campaign state and check version
+                    campaign_state = cls.get_campaign_state(campaign)
+                    current_version = campaign_state.get("_state_version", 0)
+                    if current_version != state_version:
+                        _zork_log(
+                            f"STATE VERSION CHANGED (timed event) campaign={campaign_id}",
+                            f"preflight_version={state_version} current_version={current_version}",
+                        )
+
+                    turn_visibility = cls._normalize_turn_visibility(
+                        campaign,
+                        active_player,
+                        turn_visibility,
+                        is_private_context=timer_is_private_context,
                     )
-                    narration = str(event_description or "Something happens.").strip()
+                    turn_visibility = cls._promote_player_npc_slugs(
+                        turn_visibility, campaign.id,
+                    )
 
-                narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
-                narration = cls._strip_inventory_from_narration(narration)
+                    # Get player state early for fallback location key
+                    player_state = cls.get_player_state(active_player)
 
-                state_update, player_state_update = cls._rescue_misplaced_room_state(
-                    state_update, player_state_update
-                )
-                state_update, player_state_update = cls._split_room_state(
-                    state_update, player_state_update
-                )
-                player_state_update = cls._sync_game_time_to_player_state(
-                    state_update, player_state_update
-                )
-                state_update = cls._scrub_inventory_from_state(state_update)
-                existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
-                resolution_context = (
-                    f"{action}\n{narration}\n{summary_update or ''}"
-                )
-                campaign_state = cls.get_campaign_state(campaign)
-                state_update = cls._guard_state_null_character_prunes(
-                    state_update,
-                    existing_chars_for_state_nulls,
-                    resolution_context=resolution_context,
-                    campaign_state=campaign_state,
-                )
-                state_null_character_updates = cls._character_updates_from_state_nulls(
-                    state_update,
-                    existing_chars_for_state_nulls,
-                )
-                if state_null_character_updates:
-                    merged_character_updates = dict(state_null_character_updates)
-                    if isinstance(character_updates, dict):
-                        merged_character_updates.update(character_updates)
-                    character_updates = merged_character_updates
+                    _resolved_turn_keys = cls._resolved_turn_visibility_keys(
+                        turn_visibility,
+                        scene_output_raw=scene_output_raw,
+                        player_state_update=player_state_update,
+                        fallback_location_key=cls._room_key_from_player_state(
+                            player_state
+                        ),
+                    )
+                    turn_visibility["location_key"] = _resolved_turn_keys.get("location_key")
+                    turn_visibility["context_key"] = _resolved_turn_keys.get("context_key")
+                    if (
+                        " ".join(str(narration or "").lower().split())
+                        == "the world shifts, but nothing clear emerges."
+                    ):
+                        _zork_log(
+                            f"TIMED EVENT GENERIC FALLBACK campaign={campaign_id}",
+                            f"event={event_description!r} active_user_id={active_player.user_id}",
+                        )
+                        narration = str(event_description or "Something happens.").strip()
 
-                if isinstance(character_updates, dict) and character_updates:
-                    character_updates = cls._sanitize_character_removals(
+                    narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
+                    narration = cls._strip_inventory_from_narration(narration)
+
+                    state_update, player_state_update = cls._rescue_misplaced_room_state(
+                        state_update, player_state_update
+                    )
+                    state_update, player_state_update = cls._split_room_state(
+                        state_update, player_state_update
+                    )
+                    player_state_update = cls._sync_game_time_to_player_state(
+                        state_update, player_state_update
+                    )
+                    state_update = cls._scrub_inventory_from_state(state_update)
+                    existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
+                    resolution_context = (
+                        f"{action}\n{narration}\n{summary_update or ''}"
+                    )
+                    state_update = cls._guard_state_null_character_prunes(
+                        state_update,
                         existing_chars_for_state_nulls,
-                        character_updates,
                         resolution_context=resolution_context,
                         campaign_state=campaign_state,
                     )
-                state_update, calendar_update = cls._extract_calendar_update_from_state_update(
-                    state_update,
-                    calendar_update,
-                )
-                pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
-                campaign_state = cls._apply_state_update(campaign_state, state_update)
-                campaign_state = cls._ensure_game_time_progress(
-                    campaign_state,
-                    pre_turn_game_time,
-                    action_text=action,
-                    narration_text=narration,
-                )
-                campaign_state = cls._scrub_inventory_from_state(campaign_state)
-                campaign.state_json = cls._dump_json(campaign_state)
+                    state_null_character_updates = cls._character_updates_from_state_nulls(
+                        state_update,
+                        existing_chars_for_state_nulls,
+                    )
+                    if state_null_character_updates:
+                        merged_character_updates = dict(state_null_character_updates)
+                        if isinstance(character_updates, dict):
+                            merged_character_updates.update(character_updates)
+                        character_updates = merged_character_updates
 
-                _on_rails = bool(campaign_state.get("on_rails", False))
-                if character_updates and isinstance(character_updates, dict):
-                    existing_chars = cls.get_campaign_characters(campaign)
-                    _pre_slugs = set(existing_chars.keys())
-                    existing_chars = cls._apply_character_updates(
-                        existing_chars,
-                        character_updates,
-                        on_rails=_on_rails,
-                        campaign_id=campaign.id,
-                    )
-                    campaign.characters_json = cls._dump_json(existing_chars)
-                    _zork_log(
-                        f"CHARACTER UPDATES (timed event) campaign={campaign.id}",
-                        json.dumps(character_updates, indent=2),
-                    )
-                    # Auto-generate portraits for new characters with appearance.
-                    _channel_obj = await DiscordBot.get_instance().find_channel(channel_id) if DiscordBot.get_instance() else None
-                    if _channel_obj is not None:
-                        _synth_ctx = cls._build_synthetic_generation_context(
-                            _channel_obj, active_player.user_id
+                    if isinstance(character_updates, dict) and character_updates:
+                        character_updates = cls._sanitize_character_removals(
+                            existing_chars_for_state_nulls,
+                            character_updates,
+                            resolution_context=resolution_context,
+                            campaign_state=campaign_state,
                         )
-                        for _slug in character_updates:
-                            if _slug not in _pre_slugs and _slug in existing_chars:
-                                _char = existing_chars[_slug]
-                                _appearance = str(_char.get("appearance") or "").strip()
-                                if _appearance and not _char.get("image_url"):
-                                    _char_name = _char.get("name", _slug)
-                                    asyncio.ensure_future(
-                                        cls._enqueue_character_portrait(
-                                            _synth_ctx, campaign, _slug, _char_name, _appearance,
-                                        )
-                                    )
-
-                if calendar_update and isinstance(calendar_update, dict):
-                    campaign_state = cls._apply_calendar_update(
-                        campaign_state,
+                    state_update, calendar_update = cls._extract_calendar_update_from_state_update(
+                        state_update,
                         calendar_update,
-                        resolution_context=resolution_context,
-                        actor_user_id=active_player.user_id,
                     )
+                    pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+
+                    # Merge state update with conflict resolution (instead of _apply_state_update)
+                    campaign_state = cls._merge_state_update_with_conflict_resolution(
+                        campaign_state, state_update
+                    )
+                    campaign_state = cls._ensure_game_time_progress(
+                        campaign_state,
+                        pre_turn_game_time,
+                        action_text=action,
+                        narration_text=narration,
+                    )
+                    campaign_state = cls._scrub_inventory_from_state(campaign_state)
                     campaign.state_json = cls._dump_json(campaign_state)
 
-                _turn_is_public = (
-                    str((turn_visibility or {}).get("scope") or "").strip().lower()
-                    in {"public", "local"}
-                )
-
-                if summary_update:
-                    summary_update = summary_update.strip()
-                    summary_update = cls._strip_inventory_mentions(summary_update)
-                    if not _turn_is_public:
+                    _on_rails = bool(campaign_state.get("on_rails", False))
+                    if character_updates and isinstance(character_updates, dict):
+                        existing_chars = cls.get_campaign_characters(campaign)
+                        _pre_slugs = set(existing_chars.keys())
+                        existing_chars = cls._apply_character_updates(
+                            existing_chars,
+                            character_updates,
+                            on_rails=_on_rails,
+                            campaign_id=campaign.id,
+                        )
+                        campaign.characters_json = cls._dump_json(existing_chars)
                         _zork_log(
-                            f"SUMMARY FILTERED (non-public timed event) campaign={campaign.id}",
+                            f"CHARACTER UPDATES (timed event) campaign={campaign.id}",
+                            json.dumps(character_updates, indent=2),
+                        )
+                        # Auto-generate portraits for new characters with appearance.
+                        _channel_obj = await DiscordBot.get_instance().find_channel(channel_id) if DiscordBot.get_instance() else None
+                        if _channel_obj is not None:
+                            _synth_ctx = cls._build_synthetic_generation_context(
+                                _channel_obj, active_player.user_id
+                            )
+                            for _slug in character_updates:
+                                if _slug not in _pre_slugs and _slug in existing_chars:
+                                    _char = existing_chars[_slug]
+                                    _appearance = str(_char.get("appearance") or "").strip()
+                                    if _appearance and not _char.get("image_url"):
+                                        _char_name = _char.get("name", _slug)
+                                        asyncio.ensure_future(
+                                            cls._enqueue_character_portrait(
+                                                _synth_ctx, campaign, _slug, _char_name, _appearance,
+                                            )
+                                        )
+
+                    if calendar_update and isinstance(calendar_update, dict):
+                        campaign_state = cls._apply_calendar_update(
+                            campaign_state,
+                            calendar_update,
+                            resolution_context=resolution_context,
+                            actor_user_id=active_player.user_id,
+                        )
+                        campaign.state_json = cls._dump_json(campaign_state)
+
+                    _turn_is_public = (
+                        str((turn_visibility or {}).get("scope") or "").strip().lower()
+                        in {"public", "local"}
+                    )
+
+                    if summary_update:
+                        summary_update = summary_update.strip()
+                        summary_update = cls._strip_inventory_mentions(summary_update)
+                        if not _turn_is_public:
+                            _zork_log(
+                                f"SUMMARY FILTERED (non-public timed event) campaign={campaign.id}",
+                                summary_update,
+                            )
+                        elif not cls._scene_output_is_summary_public_safe(scene_output_raw):
+                            _zork_log(
+                                f"SUMMARY FILTERED (non-public beat timed event) campaign={campaign.id}",
+                                summary_update,
+                            )
+                        elif cls._should_keep_summary_update(
                             summary_update,
-                        )
-                    elif not cls._scene_output_is_summary_public_safe(scene_output):
-                        _zork_log(
-                            f"SUMMARY FILTERED (non-public beat timed event) campaign={campaign.id}",
-                            summary_update,
-                        )
-                    elif cls._should_keep_summary_update(
-                        summary_update,
-                        state_update=state_update,
-                        player_state_update=player_state_update,
-                        character_updates=character_updates,
-                        calendar_update=calendar_update,
-                    ):
-                        campaign.summary = cls._append_summary(
-                            campaign.summary, summary_update
-                        )
-                    else:
-                        _zork_log(
-                            f"SUMMARY FILTERED (timed event) campaign={campaign.id}",
-                            summary_update,
-                        )
+                            state_update=state_update,
+                            player_state_update=player_state_update,
+                            character_updates=character_updates,
+                            calendar_update=calendar_update,
+                        ):
+                            campaign.summary = cls._append_summary(
+                                campaign.summary, summary_update
+                            )
+                        else:
+                            _zork_log(
+                                f"SUMMARY FILTERED (timed event) campaign={campaign.id}",
+                                summary_update,
+                            )
 
-                player_state = cls.get_player_state(active_player)
-                player_state_update = cls._sanitize_player_state_update(
-                    player_state,
-                    player_state_update,
-                    action_text=action,
-                    narration_text=narration,
-                )
-                player_state = cls._apply_state_update(
-                    player_state, player_state_update
-                )
-                turn_visibility = cls._sanitize_turn_awareness_for_scene(
-                    campaign,
-                    player_state,
-                    turn_visibility,
-                )
-                turn_visibility["location_key"] = (
-                    cls._room_key_from_player_state(player_state).strip() or None
-                )
-                active_player.state_json = cls._dump_json(player_state)
-                cls._sync_main_party_room_state(
-                    campaign.id,
-                    active_player.user_id,
-                    player_state,
-                )
-                _active_char_sync_count = cls._sync_active_player_character_location(
-                    campaign,
-                    player_state=player_state,
-                )
-                _state_loc_sync_count = cls._auto_sync_companion_locations(
-                    campaign_state,
-                    player_state=player_state,
-                    narration_text=narration,
-                )
-                _char_loc_sync_count = cls._auto_sync_character_locations(
-                    campaign,
-                    player_state=player_state,
-                    narration_text=narration,
-                )
-                _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
-                    campaign, state_update
-                )
-                if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
-                    cls._increment_auto_fix_counter(
-                        campaign_state,
-                        "location_auto_sync_active_character",
-                        amount=_active_char_sync_count,
+                    player_state_update = cls._sanitize_player_state_update(
+                        player_state,
+                        player_state_update,
+                        action_text=action,
+                        narration_text=narration,
                     )
-                    cls._increment_auto_fix_counter(
-                        campaign_state,
-                        "location_auto_sync_state_entities",
-                        amount=_state_loc_sync_count,
+                    player_state = cls._apply_state_update(
+                        player_state, player_state_update
                     )
-                    cls._increment_auto_fix_counter(
-                        campaign_state,
-                        "location_auto_sync_world_characters",
-                        amount=_char_loc_sync_count,
+                    turn_visibility = cls._sanitize_turn_awareness_for_scene(
+                        campaign,
+                        player_state,
+                        turn_visibility,
                     )
-                    cls._increment_auto_fix_counter(
-                        campaign_state,
-                        "location_auto_sync_roster_overlay",
-                        amount=_roster_overlay_sync_count,
+                    turn_visibility["location_key"] = (
+                        cls._room_key_from_player_state(player_state).strip() or None
                     )
-                    _zork_log(
-                        f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
-                        (
-                            f"active_player_character={_active_char_sync_count} "
-                            f"state_entities={_state_loc_sync_count} "
-                            f"world_characters={_char_loc_sync_count} "
-                            f"roster_overlay={_roster_overlay_sync_count}"
-                        ),
-                    )
-                _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
-                    campaign,
-                    campaign_state,
-                    skip_user_id=active_player.user_id,
-                )
-                if _player_entity_sync_count:
-                    cls._increment_auto_fix_counter(
-                        campaign_state,
-                        "location_auto_sync_other_players",
-                        amount=_player_entity_sync_count,
-                    )
-                    _zork_log(
-                        f"PLAYER ENTITY AUTO-SYNC (timed event) campaign={campaign.id}",
-                        f"other_players={_player_entity_sync_count}",
-                    )
-                campaign.state_json = cls._dump_json(campaign_state)
-
-                if isinstance(xp_awarded, int) and xp_awarded > 0:
-                    active_player.xp += xp_awarded
-
-                scene_output = cls._normalize_scene_output(
-                    campaign,
-                    scene_output_raw,
-                    fallback_narration=narration,
-                    turn_visibility=turn_visibility,
-                    fallback_location_key=cls._room_key_from_player_state(player_state),
-                    actor_user_id=active_player.user_id,
-                    actor_player_slug=str(
-                        turn_visibility.get("actor_player_slug") or ""
-                    ).strip(),
-                )
-                rendered_scene_output = cls._scene_output_rendered_text(scene_output)
-                if rendered_scene_output:
-                    narration = rendered_scene_output
-                if scene_output:
-                    _zork_log(
-                        f"TIMED EVENT SCENE OUTPUT campaign={campaign.id}",
-                        json.dumps(scene_output, indent=2, ensure_ascii=False),
-                    )
-
-                narration = cls._strip_narration_footer(narration)
-                post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
-                calendar_event_notifications = cls._calendar_collect_fired_events(
-                    campaign.id,
-                    campaign_state,
-                    from_time=pre_turn_game_time,
-                    to_time=post_turn_game_time,
-                )
-                campaign.last_narration = narration
-                campaign.updated = db.func.now()
-                active_player.updated = db.func.now()
-                timed_turn_meta_payload = {
-                    "game_time": post_turn_game_time,
-                    "visibility": turn_visibility,
-                    "actor_player_slug": cls._player_slug_key(
-                        player_state.get("character_name")
-                    ),
-                    "location_key": cls._room_key_from_player_state(player_state),
-                }
-                if reasoning:
-                    timed_turn_meta_payload["reasoning"] = reasoning
-                if summary_update:
-                    timed_turn_meta_payload["summary_update"] = summary_update
-                if scene_output:
-                    timed_turn_meta_payload["scene_output"] = scene_output
-                    rendered_scene_text = cls._scene_output_rendered_text(scene_output)
-                    if rendered_scene_text:
-                        timed_turn_meta_payload["scene_output_rendered"] = (
-                            rendered_scene_text
-                        )
-                    timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
-                        turn_id=None,
-                        game_time=post_turn_game_time,
-                        scene_output=scene_output,
-                        turn_visibility=turn_visibility,
-                    )
-
-                narrator_turn = ZorkTurn(
-                    campaign_id=campaign.id,
-                    user_id=None,
-                    kind="narrator",
-                    content=f"[TIMED EVENT] {narration}",
-                    channel_id=channel_id,
-                    meta_json=cls._dump_json(timed_turn_meta_payload),
-                )
-                db.session.add(narrator_turn)
-                db.session.flush()
-                if scene_output:
-                    timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
-                        turn_id=narrator_turn.id,
-                        game_time=post_turn_game_time,
-                        scene_output=scene_output,
-                        turn_visibility=turn_visibility,
-                    )
-                    narrator_turn.meta_json = cls._dump_json(timed_turn_meta_payload)
-                cls._record_turn_game_time(
-                    campaign_state,
-                    narrator_turn.id,
-                    cls._extract_game_time_snapshot(campaign_state),
-                )
-                campaign.state_json = cls._dump_json(campaign_state)
-                db.session.commit()
-
-                cls._create_snapshot(narrator_turn, campaign)
-                try:
-                    ZorkMemory.store_turn_embedding(
-                        narrator_turn.id,
+                    active_player.state_json = cls._dump_json(player_state)
+                    cls._sync_main_party_room_state(
                         campaign.id,
                         active_player.user_id,
-                        "narrator",
-                        narration,
-                        metadata=cls._turn_embedding_metadata(
-                            visibility=turn_visibility,
-                            actor_player_slug=player_state.get("character_name"),
-                            location_key=cls._room_key_from_player_state(player_state),
-                            channel_id=channel_id,
-                        ),
+                        player_state,
                     )
-                except Exception:
-                    logger.debug(
-                        "Zork memory embedding skipped for timed turn %s",
-                        narrator_turn.id,
-                        exc_info=True,
+                    _active_char_sync_count = cls._sync_active_player_character_location(
+                        campaign,
+                        player_state=player_state,
                     )
+                    _state_loc_sync_count = cls._auto_sync_companion_locations(
+                        campaign_state,
+                        player_state=player_state,
+                        narration_text=narration,
+                    )
+                    _char_loc_sync_count = cls._auto_sync_character_locations(
+                        campaign,
+                        player_state=player_state,
+                        narration_text=narration,
+                    )
+                    _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
+                        campaign, state_update
+                    )
+                    if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_active_character",
+                            amount=_active_char_sync_count,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_state_entities",
+                            amount=_state_loc_sync_count,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_world_characters",
+                            amount=_char_loc_sync_count,
+                        )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_roster_overlay",
+                            amount=_roster_overlay_sync_count,
+                        )
+                        _zork_log(
+                            f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
+                            (
+                                f"active_player_character={_active_char_sync_count} "
+                                f"state_entities={_state_loc_sync_count} "
+                                f"world_characters={_char_loc_sync_count} "
+                                f"roster_overlay={_roster_overlay_sync_count}"
+                            ),
+                        )
+                    _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
+                        campaign,
+                        campaign_state,
+                        skip_user_id=active_player.user_id,
+                    )
+                    if _player_entity_sync_count:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_other_players",
+                            amount=_player_entity_sync_count,
+                        )
+                        _zork_log(
+                            f"PLAYER ENTITY AUTO-SYNC (timed event) campaign={campaign.id}",
+                            f"other_players={_player_entity_sync_count}",
+                        )
 
-                    target_user_id = active_player.user_id
+                    # Increment state version before commit
+                    campaign_state["_state_version"] = campaign_state.get("_state_version", 0) + 1
+                    campaign.state_json = cls._dump_json(campaign_state)
+
+                    if isinstance(xp_awarded, int) and xp_awarded > 0:
+                        active_player.xp += xp_awarded
+
+                    scene_output = cls._normalize_scene_output(
+                        campaign,
+                        scene_output_raw,
+                        fallback_narration=narration,
+                        turn_visibility=turn_visibility,
+                        fallback_location_key=cls._room_key_from_player_state(player_state),
+                        actor_user_id=active_player.user_id,
+                        actor_player_slug=str(
+                            turn_visibility.get("actor_player_slug") or ""
+                        ).strip(),
+                    )
+                    rendered_scene_output = cls._scene_output_rendered_text(scene_output)
+                    if rendered_scene_output:
+                        narration = rendered_scene_output
+                    if scene_output:
+                        _zork_log(
+                            f"TIMED EVENT SCENE OUTPUT campaign={campaign.id}",
+                            json.dumps(scene_output, indent=2, ensure_ascii=False),
+                        )
+
+                    narration = cls._strip_narration_footer(narration)
+                    post_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
+                    calendar_event_notifications = cls._calendar_collect_fired_events(
+                        campaign.id,
+                        campaign_state,
+                        from_time=pre_turn_game_time,
+                        to_time=post_turn_game_time,
+                    )
+                    campaign.last_narration = narration
+                    campaign.updated = db.func.now()
+                    active_player.updated = db.func.now()
+                    timed_turn_meta_payload = {
+                        "game_time": post_turn_game_time,
+                        "visibility": turn_visibility,
+                        "actor_player_slug": cls._player_slug_key(
+                            player_state.get("character_name")
+                        ),
+                        "location_key": cls._room_key_from_player_state(player_state),
+                    }
+                    if reasoning:
+                        timed_turn_meta_payload["reasoning"] = reasoning
+                    if summary_update:
+                        timed_turn_meta_payload["summary_update"] = summary_update
+                    if scene_output:
+                        timed_turn_meta_payload["scene_output"] = scene_output
+                        rendered_scene_text = cls._scene_output_rendered_text(scene_output)
+                        if rendered_scene_text:
+                            timed_turn_meta_payload["scene_output_rendered"] = (
+                                rendered_scene_text
+                            )
+                        timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                            turn_id=None,
+                            game_time=post_turn_game_time,
+                            scene_output=scene_output,
+                            turn_visibility=turn_visibility,
+                        )
+
+                    narrator_turn = ZorkTurn(
+                        campaign_id=campaign.id,
+                        user_id=None,
+                        kind="narrator",
+                        content=f"[TIMED EVENT] {narration}",
+                        channel_id=channel_id,
+                        meta_json=cls._dump_json(timed_turn_meta_payload),
+                    )
+                    db.session.add(narrator_turn)
+                    db.session.flush()
+                    if scene_output:
+                        timed_turn_meta_payload["scene_output_jsonl"] = cls._scene_output_jsonl(
+                            turn_id=narrator_turn.id,
+                            game_time=post_turn_game_time,
+                            scene_output=scene_output,
+                            turn_visibility=turn_visibility,
+                        )
+                        narrator_turn.meta_json = cls._dump_json(timed_turn_meta_payload)
+                    cls._record_turn_game_time(
+                        campaign_state,
+                        narrator_turn.id,
+                        cls._extract_game_time_snapshot(campaign_state),
+                    )
+                    campaign.state_json = cls._dump_json(campaign_state)
+                    db.session.commit()
+
+                    cls._create_snapshot(narrator_turn, campaign)
+                    try:
+                        ZorkMemory.store_turn_embedding(
+                            narrator_turn.id,
+                            campaign.id,
+                            active_player.user_id,
+                            "narrator",
+                            narration,
+                            metadata=cls._turn_embedding_metadata(
+                                visibility=turn_visibility,
+                                actor_player_slug=player_state.get("character_name"),
+                                location_key=cls._room_key_from_player_state(player_state),
+                                channel_id=channel_id,
+                            ),
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Zork memory embedding skipped for timed turn %s",
+                            narrator_turn.id,
+                            exc_info=True,
+                        )
+
                     timed_narrator_turn_id = narrator_turn.id
         finally:
             cls._pop_contextual_turn_log_scope(log_scope_token)
