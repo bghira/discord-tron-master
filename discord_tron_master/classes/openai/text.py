@@ -208,23 +208,25 @@ class GPT:
             return None
         return raw_model
 
-    def _send_zai_request_streaming(self, message_log):
+    def _send_zai_request_streaming(self, message_log, *, thinking_enabled: bool = True):
         client = OpenAI(
             api_key=config.get_openai_api_key(),
             base_url="https://api.z.ai/api/coding/paas/v4",
         )
-        return client.chat.completions.create(
-            model=self._ZAI_MODEL,
-            messages=message_log,
-            max_completion_tokens=self.max_tokens,
-            temperature=self.temperature,
-            stream=True,
-            extra_body={
+        request_kwargs = {
+            "model": self._ZAI_MODEL,
+            "messages": message_log,
+            "max_completion_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "stream": True,
+        }
+        if thinking_enabled:
+            request_kwargs["extra_body"] = {
                 "thinking": {
                     "type": "enabled",
                 },
-            },
-        )
+            }
+        return client.chat.completions.create(**request_kwargs)
 
     def _consume_zai_stream(self, stream):
         """Consume a ZAI streaming response. Returns content text.
@@ -638,6 +640,7 @@ class GPT:
         raise ValueError(f"Unsupported GPT backend: {backend}")
 
     async def turbo_completion(self, role, prompt, **kwargs):
+        thinking_enabled = kwargs.pop("thinking_enabled", True)
         if kwargs:
             self.set_values(**kwargs)
 
@@ -656,7 +659,9 @@ class GPT:
                 ]
                 try:
                     stream = await asyncio.to_thread(
-                        self._send_zai_request_streaming, message_log
+                        self._send_zai_request_streaming,
+                        message_log,
+                        thinking_enabled=bool(thinking_enabled),
                     )
                     content = await asyncio.to_thread(
                         self._consume_zai_stream, stream

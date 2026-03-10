@@ -18536,6 +18536,47 @@ class ZorkEmulator:
                 f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n--- USER PROMPT ---\n{tool_augmented_prompt}",
             )
 
+        async def _turn_model_call(
+            prompt_text: str,
+            *,
+            thinking_enabled: bool,
+            temperature: float = 0.8,
+            max_tokens: int = 2048,
+        ):
+            return await gpt.turbo_completion(
+                system_prompt,
+                prompt_text,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                thinking_enabled=thinking_enabled,
+            )
+
+        _raw_turbo_completion = gpt.turbo_completion
+        first_research_completion_pending = True
+
+        async def _stage_aware_turbo_completion(role, prompt, **kwargs):
+            nonlocal first_research_completion_pending
+            explicit_thinking = kwargs.pop("thinking_enabled", None)
+            if current_prompt_stage == cls.PROMPT_STAGE_RESEARCH:
+                if first_research_completion_pending:
+                    first_research_completion_pending = False
+                    if explicit_thinking is None:
+                        explicit_thinking = True
+            elif current_prompt_stage == cls.PROMPT_STAGE_FINAL:
+                if explicit_thinking is None:
+                    explicit_thinking = True
+            else:
+                if explicit_thinking is None:
+                    explicit_thinking = False
+            return await _raw_turbo_completion(
+                role,
+                prompt,
+                thinking_enabled=bool(explicit_thinking),
+                **kwargs,
+            )
+
+        gpt.turbo_completion = _stage_aware_turbo_completion
+
         def _tool_budget_note() -> str:
             remaining = max(0, max_tool_chain_steps - tool_chain_steps)
             if remaining <= 0:
@@ -18641,11 +18682,9 @@ class ZorkEmulator:
                     "Do NOT repeat identical tool calls. Use a distinct tool/payload or return final JSON (no tool_call)."
                 )
                 _append_tool_prompt(tool_result_block)
-                response = await gpt.turbo_completion(
-                    system_prompt,
+                response = await _turn_model_call(
                     tool_augmented_prompt,
-                    temperature=0.8,
-                    max_tokens=2048,
+                    thinking_enabled=False,
                 )
                 if not response:
                     response = "A hollow silence answers. Try again."
@@ -18681,11 +18720,9 @@ class ZorkEmulator:
                     "Do NOT call memory_* tools; continue with direct context or use non-memory tools."
                 )
                 _append_tool_prompt(tool_result_block)
-                response = await gpt.turbo_completion(
-                    system_prompt,
+                response = await _turn_model_call(
                     tool_augmented_prompt,
-                    temperature=0.8,
-                    max_tokens=2048,
+                    thinking_enabled=False,
                 )
                 if not response:
                     response = "A hollow silence answers. Try again."
@@ -18804,11 +18841,9 @@ class ZorkEmulator:
                 _switch_prompt_stage(cls.PROMPT_STAGE_RESEARCH)
                 _zork_log("RECENT TURNS BLOCK", tool_result_block)
                 _append_tool_prompt(tool_result_block)
-                response = await gpt.turbo_completion(
-                    system_prompt,
+                response = await _turn_model_call(
                     tool_augmented_prompt,
-                    temperature=0.8,
-                    max_tokens=2048,
+                    thinking_enabled=True,
                 )
                 if not response:
                     response = "A hollow silence answers. Try again."
@@ -18826,11 +18861,9 @@ class ZorkEmulator:
                 )
                 _zork_log("READY TO WRITE", tool_result_block)
                 _append_tool_prompt(tool_result_block)
-                response = await gpt.turbo_completion(
-                    system_prompt,
+                response = await _turn_model_call(
                     tool_augmented_prompt,
-                    temperature=0.8,
-                    max_tokens=2048,
+                    thinking_enabled=True,
                 )
                 if not response:
                     response = "A hollow silence answers. Try again."
@@ -18865,11 +18898,9 @@ class ZorkEmulator:
                     )
                 _zork_log("COMMUNICATION RULES BLOCK", tool_result_block)
                 _append_tool_prompt(tool_result_block)
-                response = await gpt.turbo_completion(
-                    system_prompt,
+                response = await _turn_model_call(
                     tool_augmented_prompt,
-                    temperature=0.8,
-                    max_tokens=2048,
+                    thinking_enabled=False,
                 )
                 if not response:
                     response = "A hollow silence answers. Try again."
