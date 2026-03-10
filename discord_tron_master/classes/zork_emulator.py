@@ -118,13 +118,7 @@ class ZorkEmulator:
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 10
     MAX_CHARACTERS_CHARS = 8000
-    IMMUTABLE_CHARACTER_FIELDS = {
-        "name",
-        "personality",
-        "background",
-        "appearance",
-        "speech_style",
-    }
+    IMMUTABLE_CHARACTER_FIELDS: set = set()  # slug is the dict key, not a field
     MAX_CHARACTERS_IN_PROMPT = 20
     ATTENTION_WINDOW_SECONDS = 600
     MIN_TURN_ADVANCE_MINUTES = 1
@@ -531,6 +525,10 @@ class ZorkEmulator:
         "relationships is a map keyed by other character slug/name, e.g. "
         "{\"deshawn\": {\"status\": \"partner\", \"knows_about\": [\"pregnancy\"], \"doesnt_know\": [\"blood-test-result\"], \"dynamic\": \"protective-but-autonomous\"}}. "
         "Use it to track disclosures, secrets, and dynamic shifts.\n"
+        "Examples:\n"
+        "  Create NPC: {\"character_updates\": {\"wren\": {\"name\": \"Wren\", \"personality\": \"Guarded, observant, dry.\", \"background\": \"Former hotel manager pulled into the expedition.\", \"appearance\": \"Lean woman in a weather-stained blazer, dark braid, sharp eyes, practical shoes, realistic style.\", \"speech_style\": \"Short sentences. Dry humor. Avoids sentiment.\", \"location\": \"jekyll-castle-east-annex-laboratory\", \"current_status\": \"Watching the doorway.\", \"allegiance\": \"self\", \"relationship\": \"wary ally\"}}}\n"
+        "  Update NPC location/status: {\"character_updates\": {\"wren\": {\"location\": \"jekyll-castle-east-annex-laboratory\", \"current_status\": \"Processing that the castle trip was unnecessary.\"}}}\n"
+        "  Remove NPC from roster: {\"character_updates\": {\"wren\": null}}\n"
         "To remove a character from the roster, use character_updates ONLY: set that character slug to null "
         "or set it to {'remove': true}. "
         "NEVER use state_update.<character_slug>=null for roster removal. "
@@ -599,6 +597,7 @@ class ZorkEmulator:
         "- CRITICAL — STATE/NARRATION CONSISTENCY: whenever narration moves or repositions a named entity, "
         "you MUST update structured state in the same turn (state_update.<entity>.location and/or "
         "character_updates.<slug>.location). Narrative movement without matching state updates is invalid.\n"
+        "  Example: if Dr. Helena Marsh crosses into Room 14, write {\"character_updates\": {\"dr-helena-marsh\": {\"location\": \"dr-jekyll-castle-room-14\", \"current_status\": \"At the threshold, watching.\"}}}.\n"
         "- If a companion/pet that BELONGS TO the acting player is described as following them (e.g. at your heels, beside you, travelling with you), "
         "update that entity's location to the player's current location in structured state immediately. "
         "Location-anchored animals (bar cats, tavern pets, stabled horses, etc.) maintain their own fixed positions per WORLD_CHARACTERS "
@@ -640,9 +639,8 @@ class ZorkEmulator:
         "  * local: default for ordinary in-room action when a concrete location_key/room is present. Players in the same room should retain the turn in prompt context, but it should not enter global/worldwide recap.\n"
         "  * limited: only the acting player plus the listed player_slugs should retain the turn in prompt context.\n"
         "  * Phone/text/SMS activity is private by default to the acting player. If they text or message someone off-scene, use private or limited unless they explicitly show or read it aloud to others.\n"
-        "  * Intimacy or sexual activity is NOT automatically private. If it happens openly in the same room, it is usually local unless the player explicitly hides it, whispers it, takes it off-scene, or the scene is already inside an established private thread.\n"
-        "  * When a player starts a whisper, pull-aside, or private word, move that exchange into private or limited context immediately and keep it there until they clearly rejoin the room or a different conversation.\n"
-        "  * Do not dump the contents of a brand-new whisper into public/local narration before privacy is established. First establish the aside, then continue the private exchange on later turns.\n"
+        "  * Intimacy or sexual activity is NOT automatically private. If it happens openly in the same room, it is usually local unless the player takes it off-scene or the scene is already inside an established private thread.\n"
+        "  * Private context is managed by the harness via explicit player commands (slash commands or reactions). Do NOT auto-detect whispers or asides from narration — only honour TURN_VISIBILITY_DEFAULT and ACTIVE_PRIVATE_CONTEXT as provided.\n"
         "  * npc_slugs are for overheard/noticed NPC awareness only. They help continuity but do not expose the turn to other players by themselves.\n"
         "  * If TURN_VISIBILITY_DEFAULT is local, keep routine room-level interaction local unless it clearly becomes public.\n"
         "  * If TURN_VISIBILITY_DEFAULT is private and nothing in the scene clearly makes the action public, keep it private or limited.\n"
@@ -833,7 +831,7 @@ class ZorkEmulator:
         "For additional context around a hit, set before_lines/after_lines\n"
         "(defaults: 0/0; keep ranges small, e.g. 3-8).\n"
         "\nRECENT TURN CONTINUITY:\n"
-        "- If you need to know what just happened in the room or active whisper/private exchange, call recent_turns first.\n"
+        "- If you need to know what just happened in the room or active private context, call recent_turns first.\n"
         "- recent_turns is the authoritative immediate continuity tool; memory_search is for deeper or older recall.\n"
         "\nRULEBOOK BROWSING — source_browse tool:\n"
         "Rulebook-format documents are key-snippet indexes. Use source_browse to list entries before drilling into specifics.\n"
@@ -8939,6 +8937,26 @@ class ZorkEmulator:
         return True
 
     @classmethod
+    def _sync_game_time_to_player_state(
+        cls,
+        state_update: Dict[str, object],
+        player_state_update: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Copy game_time from state_update into player_state_update.
+
+        The model places game_time in state_update (campaign-wide), but the
+        player card is built from player_state which is only populated via
+        player_state_update.  Without this bridge the player card's game_time
+        goes stale.
+        """
+        if not isinstance(state_update, dict) or not isinstance(player_state_update, dict):
+            return player_state_update
+        gt = state_update.get("game_time")
+        if isinstance(gt, dict) and gt:
+            player_state_update.setdefault("game_time", gt)
+        return player_state_update
+
+    @classmethod
     def _split_room_state(
         cls,
         state_update: Dict[str, object],
@@ -10009,42 +10027,15 @@ class ZorkEmulator:
             f"player-{getattr(actor, 'user_id', '')}" if actor is not None else ""
         )
         location_key = cls._room_key_from_player_state(player_state)
-        if active_context and not cls._is_private_engagement_setup_action(action):
+        # Continue an already-active private context (managed by explicit
+        # player commands — slash commands or reactions).
+        if active_context:
             carried = dict(active_context)
             carried["engagement"] = "continue"
             return carried
-        if not cls._is_private_engagement_setup_action(action):
-            return None
-        target = cls._resolve_private_context_target(campaign, actor, action)
-        if target and target.get("kind") == "player":
-            target_slug = str(target.get("target_slug") or "").strip()
-            scope = "limited"
-            context_key = cls._private_context_key(
-                "limited",
-                location_key or "room",
-                actor_slug,
-                target_slug,
-            )
-        else:
-            target_slug = str((target or {}).get("target_slug") or "").strip()
-            scope = "private"
-            context_key = cls._private_context_key(
-                "private",
-                location_key or "room",
-                actor_slug,
-                target_slug or "aside",
-            )
-        target_name = str((target or {}).get("target_name") or "").strip()
-        return {
-            "scope": scope,
-            "context_key": context_key,
-            "location_key": location_key or None,
-            "target_name": target_name or None,
-            "target_slug": target_slug or None,
-            "target_user_id": (target or {}).get("target_user_id"),
-            "engagement": "start",
-            "warning": cls._private_setup_warning_needed(action),
-        }
+        # New private contexts are only started via explicit player commands
+        # (slash command / reaction), not auto-detected from narration text.
+        return None
 
     @classmethod
     def _apply_private_context_candidate(
@@ -10313,10 +10304,10 @@ class ZorkEmulator:
         if recent_labels:
             return (
                 f"Private context: none active. Recent threads: {', '.join(recent_labels)}. "
-                "Whisper, pull someone aside, ask for a private word, or use phone/text actions to start or resume one."
+                "Use a slash command or reaction to start or resume a private thread, or use phone/text actions."
             )
         return (
-            "Private context: none. To start one, whisper, pull someone aside, ask for a private word, "
+            "Private context: none. To start one, use a slash command or reaction, "
             "or use phone/text actions."
         )
 
@@ -11105,6 +11096,53 @@ class ZorkEmulator:
             changed += 1
         if changed:
             campaign.characters_json = cls._dump_json(characters)
+        return changed
+
+    @classmethod
+    def _sync_npc_locations_from_state_to_roster(
+        cls,
+        campaign: ZorkCampaign,
+        state_update: Dict[str, object],
+    ) -> int:
+        """Propagate NPC location data from state_update overlay into characters_json.
+
+        When the model puts NPC mutable fields (especially ``location`` and
+        ``current_status``) inside ``state_update.<slug>`` instead of
+        ``character_updates.<slug>``, the campaign_state overlay gets updated
+        but the persistent roster (``characters_json``) stays stale.  This
+        method detects those cases and patches the roster so both stores agree.
+        """
+        if not isinstance(state_update, dict):
+            return 0
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict) or not characters:
+            return 0
+        overlay_mutable = {"location", "current_status", "allegiance"}
+        changed = 0
+        for slug, overlay in state_update.items():
+            if not isinstance(overlay, dict):
+                continue
+            if slug not in characters:
+                continue
+            entry = characters[slug]
+            if not isinstance(entry, dict):
+                continue
+            for field in overlay_mutable:
+                if field not in overlay:
+                    continue
+                new_val = overlay[field]
+                if new_val is None:
+                    continue
+                old_val = entry.get(field)
+                if old_val != new_val:
+                    entry[field] = new_val
+                    changed += 1
+        if changed:
+            campaign.characters_json = cls._dump_json(characters)
+            _zork_log(
+                "NPC ROSTER SYNC FROM STATE_UPDATE",
+                f"Patched {changed} field(s) in characters_json from state_update overlay",
+            )
         return changed
 
     @classmethod
@@ -19564,6 +19602,9 @@ class ZorkEmulator:
                     state_update, player_state_update = cls._split_room_state(
                         state_update, player_state_update
                     )
+                    player_state_update = cls._sync_game_time_to_player_state(
+                        state_update, player_state_update
+                    )
                     state_update = cls._scrub_inventory_from_state(state_update)
                     existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
                     resolution_context = (
@@ -19850,7 +19891,10 @@ class ZorkEmulator:
                         player_state=player_state,
                         narration_text=raw_narration,
                     )
-                    if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                    _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
+                        campaign, state_update
+                    )
+                    if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
                         cls._increment_auto_fix_counter(
                             campaign_state,
                             "location_auto_sync_active_character",
@@ -19866,12 +19910,18 @@ class ZorkEmulator:
                             "location_auto_sync_world_characters",
                             amount=_char_loc_sync_count,
                         )
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "location_auto_sync_roster_overlay",
+                            amount=_roster_overlay_sync_count,
+                        )
                         _zork_log(
                             f"LOCATION AUTO-SYNC campaign={campaign.id}",
                             (
                                 f"active_player_character={_active_char_sync_count} "
                                 f"state_entities={_state_loc_sync_count} "
-                                f"world_characters={_char_loc_sync_count}"
+                                f"world_characters={_char_loc_sync_count} "
+                                f"roster_overlay={_roster_overlay_sync_count}"
                             ),
                         )
                     _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
@@ -20642,6 +20692,9 @@ class ZorkEmulator:
                 state_update, player_state_update = cls._split_room_state(
                     state_update, player_state_update
                 )
+                player_state_update = cls._sync_game_time_to_player_state(
+                    state_update, player_state_update
+                )
                 state_update = cls._scrub_inventory_from_state(state_update)
                 existing_chars_for_state_nulls = cls.get_campaign_characters(campaign)
                 resolution_context = (
@@ -20800,7 +20853,10 @@ class ZorkEmulator:
                     player_state=player_state,
                     narration_text=narration,
                 )
-                if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count:
+                _roster_overlay_sync_count = cls._sync_npc_locations_from_state_to_roster(
+                    campaign, state_update
+                )
+                if _active_char_sync_count or _state_loc_sync_count or _char_loc_sync_count or _roster_overlay_sync_count:
                     cls._increment_auto_fix_counter(
                         campaign_state,
                         "location_auto_sync_active_character",
@@ -20816,12 +20872,18 @@ class ZorkEmulator:
                         "location_auto_sync_world_characters",
                         amount=_char_loc_sync_count,
                     )
+                    cls._increment_auto_fix_counter(
+                        campaign_state,
+                        "location_auto_sync_roster_overlay",
+                        amount=_roster_overlay_sync_count,
+                    )
                     _zork_log(
                         f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
                         (
                             f"active_player_character={_active_char_sync_count} "
                             f"state_entities={_state_loc_sync_count} "
-                            f"world_characters={_char_loc_sync_count}"
+                            f"world_characters={_char_loc_sync_count} "
+                            f"roster_overlay={_roster_overlay_sync_count}"
                         ),
                     )
                 _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
