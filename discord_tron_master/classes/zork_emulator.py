@@ -3081,10 +3081,14 @@ class ZorkEmulator:
         if scope in {"", "public"}:
             return True
         if scope == "local":
-            turn_location_key = str(
-                visibility.get("location_key") or meta.get("location_key") or ""
-            ).strip().lower()
-            if viewer_location_key and turn_location_key and viewer_location_key == turn_location_key:
+            turn_location_keys = {
+                k for k in (
+                    cls._normalize_location_key(visibility.get("location_key")),
+                    cls._normalize_location_key(meta.get("location_key")),
+                ) if k
+            }
+            viewer_loc_norm = cls._normalize_location_key(viewer_location_key)
+            if viewer_loc_norm and turn_location_keys and viewer_loc_norm in turn_location_keys:
                 return True
         if viewer_user_id in user_ids:
             return True
@@ -3206,7 +3210,7 @@ class ZorkEmulator:
             "a hollow silence answers",
             "the world shifts, but nothing clear emerges",
         )
-        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        viewer_location_key_norm = cls._normalize_location_key(viewer_location_key)
         registry = cls._campaign_player_registry(campaign.id)
         player_names: Dict[int, str] = {}
         for raw_user_id, info in registry.get("by_user_id", {}).items():
@@ -3230,16 +3234,19 @@ class ZorkEmulator:
                 turn_context_key = str(
                     visibility.get("context_key") or meta.get("context_key") or ""
                 ).strip()
-                turn_location_key = str(
-                    visibility.get("location_key") or meta.get("location_key") or ""
-                ).strip().lower()
+                turn_location_keys = {
+                    k for k in (
+                        cls._normalize_location_key(visibility.get("location_key")),
+                        cls._normalize_location_key(meta.get("location_key")),
+                    ) if k
+                }
                 if scope in {"", "public"}:
                     visible = True
                 elif scope == "local":
                     visible = bool(
                         viewer_location_key_norm
-                        and turn_location_key
-                        and viewer_location_key_norm == turn_location_key
+                        and turn_location_keys
+                        and viewer_location_key_norm in turn_location_keys
                     )
                 elif scope in {"private", "limited"} and turn_context_key:
                     visible = cls._turn_visible_to_viewer(
@@ -3333,6 +3340,7 @@ class ZorkEmulator:
         viewer_private_context_key: str,
     ) -> Dict[str, str]:
         current_location = str(viewer_location_key or "").strip().lower() or "unknown-room"
+        current_location_norm = cls._normalize_location_key(current_location)
         last_other_location = ""
         for turn in reversed(turns):
             if not cls._turn_visible_to_viewer(
@@ -3352,7 +3360,7 @@ class ZorkEmulator:
                 turn_location = str(meta.get("location_key") or "").strip().lower()
             if not turn_location:
                 continue
-            if turn_location != current_location:
+            if cls._normalize_location_key(turn_location) != current_location_norm:
                 last_other_location = turn_location
                 break
         return {
@@ -3838,23 +3846,30 @@ class ZorkEmulator:
             header["day"] = cls._coerce_non_negative_int(entry.get("day", 1), default=1) or 1
             header["hour"] = min(23, max(0, cls._coerce_non_negative_int(entry.get("hour", 0), default=0)))
             header["minute"] = min(59, max(0, cls._coerce_non_negative_int(entry.get("minute", 0), default=0)))
-        visibility = cls._safe_turn_meta(turn).get("visibility")
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
         if isinstance(visibility, dict):
             header["visibility"] = str(visibility.get("scope") or "").strip().lower() or None
         lines = [json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
-        fallback_location_key = str(scene_output.get("location_key") or "").strip().lower()
+        meta_location_key_norm = cls._normalize_location_key(meta.get("location_key"))
+        fallback_location_key = cls._normalize_location_key(
+            scene_output.get("location_key")
+        )
         fallback_context_key = str(scene_output.get("context_key") or "").strip()
         viewer_slug_key = cls._player_slug_key(viewer_slug)
-        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        viewer_location_key_norm = cls._normalize_location_key(viewer_location_key)
         viewer_private_context_key_norm = str(viewer_private_context_key or "").strip()
         for index, beat in enumerate(beats):
             if not isinstance(beat, dict):
                 continue
             beat_visibility = str(beat.get("visibility") or "local").strip().lower() or "local"
-            beat_location_key = (
-                str(beat.get("location_key") or "").strip().lower()
-                or fallback_location_key
-            )
+            beat_location_keys = {
+                k for k in (
+                    cls._normalize_location_key(beat.get("location_key")),
+                    fallback_location_key,
+                    meta_location_key_norm,
+                ) if k
+            }
             beat_context_key = (
                 str(beat.get("context_key") or "").strip()
                 or fallback_context_key
@@ -3878,8 +3893,8 @@ class ZorkEmulator:
             elif beat_visibility == "local":
                 beat_visible = bool(
                     viewer_location_key_norm
-                    and beat_location_key
-                    and viewer_location_key_norm == beat_location_key
+                    and beat_location_keys
+                    and viewer_location_key_norm in beat_location_keys
                 )
             elif beat_visibility in {"private", "limited"}:
                 beat_visible = (
@@ -9240,11 +9255,25 @@ class ZorkEmulator:
         text = re.sub(r"\s+", " ", text)
         return text
 
+    @staticmethod
+    def _normalize_location_key(value: object) -> str:
+        """Collapse a location key to a canonical alphanumeric form.
+
+        Both human-readable names (``"Nothing's Edge Approach"``) and
+        slug-style keys (``"nothing-edge-approach"``) normalise to the
+        same string (``"nothingsedgeapproach"``), so they compare equal
+        regardless of which format was used at storage time.
+        """
+        if value is None:
+            return ""
+        text = re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
+        return text
+
     @classmethod
     def _room_key_from_player_state(cls, player_state: Dict[str, object]) -> str:
         if not isinstance(player_state, dict):
             return "unknown-room"
-        for key in ("room_id", "location", "room_title", "room_summary"):
+        for key in ("location_key", "room_id", "location", "room_title", "room_summary"):
             raw = player_state.get(key)
             normalized = cls._normalize_match_text(raw)
             if normalized:
@@ -10841,7 +10870,7 @@ class ZorkEmulator:
         viewer_location_key: str,
         limit: int = 6,
     ) -> Optional[Dict[str, object]]:
-        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        viewer_location_key_norm = cls._normalize_location_key(viewer_location_key)
         if not viewer_location_key_norm:
             return None
         recent_contexts = cls._recent_private_contexts_for_prompt(
@@ -10854,7 +10883,7 @@ class ZorkEmulator:
         for row in recent_contexts:
             if not isinstance(row, dict):
                 continue
-            row_location_key = str(row.get("location_key") or "").strip().lower()
+            row_location_key = cls._normalize_location_key(row.get("location_key"))
             if row_location_key != viewer_location_key_norm:
                 continue
             scope = str(row.get("scope") or "").strip().lower()
@@ -10879,13 +10908,13 @@ class ZorkEmulator:
         *,
         viewer_location_key: str,
     ) -> Optional[Dict[str, object]]:
-        viewer_location_key_norm = str(viewer_location_key or "").strip().lower()
+        viewer_location_key_norm = cls._normalize_location_key(viewer_location_key)
         if not viewer_location_key_norm:
             return None
         for row in list(recent_contexts or []):
             if not isinstance(row, dict):
                 continue
-            row_location_key = str(row.get("location_key") or "").strip().lower()
+            row_location_key = cls._normalize_location_key(row.get("location_key"))
             if row_location_key != viewer_location_key_norm:
                 continue
             scope = str(row.get("scope") or "").strip().lower()
