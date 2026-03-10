@@ -222,6 +222,11 @@ class PreflightContext:
     channel_id: int = 0
     command_prefix: str = "!"
 
+    # Player snapshot fields (read-only during Phase 2)
+    player_attributes_json: Optional[str] = None
+    player_level: int = 1
+    player_xp: int = 0
+
     # Campaign / player ORM references (read-only during Phase 2)
     campaign_name: str = ""
     campaign_summary: Optional[str] = None
@@ -8174,53 +8179,12 @@ class ZorkEmulator:
             f"Campaign source corpus now has {total_chunk_count} snippet(s) across {len(docs)} document(s)."
         )
 
-        # Generate recursive summary digest for rulebook material.
         if source_format == cls.SOURCE_MATERIAL_FORMAT_RULEBOOK:
-            try:
-                digest_progress_msg = None
-                if progress_channel is not None:
-                    try:
-                        digest_progress_msg = await progress_channel.send(
-                            f"Generating narrative digest for `{resolved_label}`..."
-                        )
-                    except Exception:
-                        digest_progress_msg = None
-
-                digest = await cls._summarise_long_text(
-                    raw_text,
-                    ctx_message=message,
-                    channel=progress_channel,
-                    campaign=campaign,
-                    summary_instructions=(
-                        "This is source material for a text-adventure campaign. "
-                        "Produce a comprehensive narrative digest preserving all characters, "
-                        "locations, plot arcs, factions, key events, world rules, and "
-                        "relationships. Maintain chronological order where applicable. "
-                        "Be detailed and concrete — this digest will be used to ground "
-                        "the campaign world."
-                    ),
-                    show_progress=bool(progress_channel is not None),
-                    allow_single_chunk_passthrough=False,
-                    progress_label="Generating source material digest",
-                )
-                if digest and digest.strip():
-                    await asyncio.to_thread(
-                        ZorkMemory.store_source_material_digest,
-                        campaign.id,
-                        document_key,
-                        digest.strip(),
-                    )
-                    result_msg += " Narrative digest generated."
-
-                if digest_progress_msg is not None:
-                    try:
-                        await digest_progress_msg.delete()
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(
-                    f"Source material digest generation failed for campaign {campaign.id}: {e}"
-                )
+            await asyncio.to_thread(
+                ZorkMemory.delete_source_material_digest,
+                campaign.id,
+                document_key,
+            )
 
         if status_msg is not None:
             try:
@@ -8439,13 +8403,22 @@ class ZorkEmulator:
                 }
             )
         communication_key = cls.communication_rulebook_document_key()
+        rulebook_document_keys = {
+            str(doc.get("document_key") or "").strip()
+            for doc in compact_docs
+            if str(doc.get("format") or "").strip().lower()
+            == cls.SOURCE_MATERIAL_FORMAT_RULEBOOK
+        }
         digests = {
             str(doc_key): digest_text
             for doc_key, digest_text in (
                 ZorkMemory.get_all_source_material_digests(campaign_id) or {}
             ).items()
-            if ZorkMemory._normalize_source_document_key(str(doc_key or ""))
-            != communication_key
+            if (
+                ZorkMemory._normalize_source_document_key(str(doc_key or ""))
+                != communication_key
+                and str(doc_key or "").strip() not in rulebook_document_keys
+            )
         }
         return {
             "available": bool(compact_docs),
@@ -17527,6 +17500,9 @@ class ZorkEmulator:
             is_dm=is_dm,
             channel_id=getattr(ctx.channel, "id", 0),
             command_prefix=command_prefix,
+            player_attributes_json=player.attributes_json,
+            player_level=player.level,
+            player_xp=player.xp,
             campaign_name=campaign.name or "",
             campaign_summary=campaign.summary,
             on_rails=bool(campaign_state.get("on_rails")),
@@ -18537,6 +18513,9 @@ class ZorkEmulator:
         state_version = preflight.state_version
         player_state = dict(preflight.player_state)
         user_id = preflight.user_id
+        player_attributes_json = preflight.player_attributes_json
+        player_level = preflight.player_level
+        player_xp = preflight.player_xp
 
         # --- Initialize TurnDelta ---
         delta = TurnDelta()
@@ -18603,9 +18582,16 @@ class ZorkEmulator:
             if next_stage == current_prompt_stage:
                 return
             current_prompt_stage = next_stage
+            _player_ns = SimpleNamespace(
+                user_id=user_id,
+                state_json=cls._dump_json(player_state),
+                attributes_json=player_attributes_json,
+                level=player_level,
+                xp=player_xp,
+            )
             system_prompt, user_prompt = cls.build_prompt(
                 campaign,
-                SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+                _player_ns,
                 action,
                 turns,
                 party_snapshot=party_snapshot,
@@ -18618,7 +18604,7 @@ class ZorkEmulator:
             )
             base_user_prompt = user_prompt
             turn_prompt_tail = cls._build_turn_prompt_tail(
-                SimpleNamespace(user_id=user_id, state_json=cls._dump_json(player_state)),
+                _player_ns,
                 player_state,
                 action,
                 turn_attachment_context,
@@ -21359,6 +21345,7 @@ class ZorkEmulator:
 
             # === Phase 2: LLM EXECUTION (NO lock held — 5-30s) ===
             try:
+              with app.app_context():
                 response = await gpt.turbo_completion(
                     system_prompt, user_prompt, temperature=0.8, max_tokens=2048
                 )

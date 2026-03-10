@@ -1285,6 +1285,34 @@ class ZorkMemory:
             return {}
 
     @classmethod
+    def delete_source_material_digest(
+        cls,
+        campaign_id: int,
+        document_key: str,
+    ) -> bool:
+        try:
+            key = cls._normalize_source_document_key(document_key)
+            if not key:
+                return False
+            conn = cls._get_conn()
+            conn.execute(
+                """
+                DELETE FROM source_material_digests
+                WHERE campaign_id = ? AND document_key = ?
+                """,
+                (campaign_id, key),
+            )
+            conn.commit()
+            return True
+        except Exception:
+            logger.exception(
+                "Zork memory: delete digest failed for campaign %s key %s",
+                campaign_id,
+                document_key,
+            )
+            return False
+
+    @classmethod
     def search_source_material(
         cls,
         query: str,
