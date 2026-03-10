@@ -502,7 +502,7 @@ class ZorkEmulator:
         "If nothing durable happened, write a single sentence noting the scene's current dramatic state. "
         "This is the ONLY mechanism that keeps WORLD_SUMMARY current — omitting it causes context drift.)\n"
         "- xp_awarded: integer (0-10)\n"
-        "- player_state_update: object (optional, player state patches)\n"
+        "- player_state_update: object (optional; PLAYER-SPECIFIC state patches — room/location, inventory, hp, conditions, party_status. This is a TOP-LEVEL response key, sibling to state_update, NOT a sub-key of state_update. Room fields (room_title, room_description, room_summary, exits, location) go HERE, not inside state_update or character_updates. character_updates is for NPCs only.)\n"
         '- story_progression: object (optional; on-rails intent hint only. Keys: "advance" (bool), "target" ("hold"|"next-scene"|"next-chapter"), "reason" (short string). Use this when a subplot beat or scene outcome should push the main outlined story forward and you are not setting explicit state_update.current_chapter/current_scene.)\n'
         '- turn_visibility: object (optional; who should get this turn in future prompt context. Keys: "scope" ("public"|"private"|"limited"|"local"), "player_slugs" (array of stable player slugs from PARTY_SNAPSHOT/CURRENTLY_ATTENTIVE_PLAYERS), "npc_slugs" (array of WORLD_CHARACTERS slugs who overheard/noticed), and optional "reason". This changes prompt visibility only; it does NOT change shared world state.)\n'
         "- scene_image_prompt: string (optional; include whenever the visible scene changes in a meaningful way: entering a room, newly visible characters/objects, reveals, or strong visual shifts)\n"
@@ -591,6 +591,9 @@ class ZorkEmulator:
         "location, room_title, room_summary, room_description, and exits in player_state_update. "
         "ACTIVE_PLAYER_LOCATION reflects the CURRENT stored state — if it is stale/wrong, your response MUST correct it. "
         "Narration alone does NOT move the player; only player_state_update changes their actual location.\n"
+        "- WARNING — COMMON ERROR: Do NOT nest player room/location fields inside state_update (e.g. state_update.character_update). Room fields MUST go in the TOP-LEVEL player_state_update key.\n"
+        "  WRONG:   {\"state_update\": {\"character_update\": {\"room_title\": \"...\"}}} \n"
+        "  CORRECT: {\"player_state_update\": {\"room_title\": \"...\", \"location\": \"...\"}}\n"
         "- Use player_state_update.exits as a short list of exits if applicable.\n"
         "- Use player_state_update for inventory, hp, or conditions.\n"
         "- CRITICAL — STATE/NARRATION CONSISTENCY: whenever narration moves or repositions a named entity, "
@@ -8948,6 +8951,56 @@ class ZorkEmulator:
         for key in cls.ROOM_STATE_KEYS:
             if key in state_update and key not in player_state_update:
                 player_state_update[key] = state_update.pop(key)
+        return state_update, player_state_update
+
+    @classmethod
+    def _rescue_misplaced_room_state(
+        cls,
+        state_update: Dict[str, object],
+        player_state_update: Dict[str, object],
+    ) -> Tuple[Dict[str, object], Dict[str, object]]:
+        """Move room/location keys out of nested state_update dicts into player_state_update.
+
+        The model sometimes nests player room data inside state_update
+        (e.g. state_update.character_update.room_title) instead of using the
+        top-level player_state_update key.  This method scans every value in
+        state_update that is itself a dict and, when it finds 2+ ROOM_STATE_KEYS,
+        moves those keys into player_state_update (only if player_state_update
+        doesn't already contain room data).  The 2-key minimum prevents false
+        positives from an NPC that merely has a ``location`` field.
+        """
+        if not isinstance(state_update, dict):
+            return state_update, player_state_update
+        if not isinstance(player_state_update, dict):
+            player_state_update = {}
+
+        # If player_state_update already has room data, don't overwrite it.
+        existing_room_keys = cls.ROOM_STATE_KEYS & set(player_state_update)
+        if len(existing_room_keys) >= 2:
+            return state_update, player_state_update
+
+        keys_to_remove = []
+        for key, value in state_update.items():
+            if not isinstance(value, dict):
+                continue
+            nested_room_keys = cls.ROOM_STATE_KEYS & set(value)
+            if len(nested_room_keys) < 2:
+                continue
+            # Found misplaced room data — move it.
+            for rk in nested_room_keys:
+                player_state_update[rk] = value.pop(rk)
+            _zork_log(
+                "RESCUED MISPLACED ROOM STATE",
+                f"Moved {sorted(nested_room_keys)} from state_update.{key} "
+                f"into player_state_update",
+            )
+            # If the nested dict is now empty, mark for cleanup.
+            if not value:
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del state_update[key]
+
         return state_update, player_state_update
 
     @classmethod
@@ -19505,6 +19558,9 @@ class ZorkEmulator:
                         f"--- SCENE IMAGE PROMPT ---\n{scene_image_prompt}\n",
                     )
 
+                    state_update, player_state_update = cls._rescue_misplaced_room_state(
+                        state_update, player_state_update
+                    )
                     state_update, player_state_update = cls._split_room_state(
                         state_update, player_state_update
                     )
@@ -20580,6 +20636,9 @@ class ZorkEmulator:
                 narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
                 narration = cls._strip_inventory_from_narration(narration)
 
+                state_update, player_state_update = cls._rescue_misplaced_room_state(
+                    state_update, player_state_update
+                )
                 state_update, player_state_update = cls._split_room_state(
                     state_update, player_state_update
                 )
