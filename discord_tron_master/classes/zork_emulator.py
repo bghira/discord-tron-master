@@ -730,7 +730,7 @@ class ZorkEmulator:
         "- character_updates: see CHARACTER UPDATES section\n"
         "- calendar_update: see CALENDAR system\n"
         "- give_item: Keys: item (exact name from acting player's inventory), to_discord_mention (string). "
-        "Only when both players are in the same room per PARTY_SNAPSHOT. One item per turn. "
+        "Only when both players have same_scene=true in PARTY_SNAPSHOT. One item per turn. "
         "Do NOT also use inventory_remove — give_item handles both sides automatically.\n"
         "- set_timer_delay / set_timer_event / set_timer_interruptible / set_timer_interrupt_action / set_timer_interrupt_scope: "
         "see TIMED EVENTS SYSTEM\n\n"
@@ -860,11 +860,14 @@ class ZorkEmulator:
         "- Players may deflect, joke, or drift from emotional beats without penalty.\n"
         "- Unresolved confrontations may stay unresolved. Don't force a second emotional pass in the same scene.\n"
         "Other player characters:\n"
+        "- PARTY_SNAPSHOT includes ALL campaign players with their current location. "
+        "Each entry has same_scene (bool) indicating whether they share the acting player's location.\n"
         "- CAMPAIGN_PLAYERS are real humans. WORLD_CHARACTERS is NPC-only.\n"
         "- NEVER write another player character's dialogue, actions, decisions, emotional reactions, "
         "facial expressions, movement, or plot advancement.\n"
-        "- MAY reference: static presence ('X is here'), or consequence of an action they already "
+        "- MAY reference: static presence ('X is here' for same_scene=true), or consequence of an action they already "
         "performed in loaded RECENT_TURNS (acknowledging what they did, not inventing new behavior).\n"
+        "- For same_scene=false players, you may note their known whereabouts but not narrate their actions.\n"
         "- Mention format in narration: <@discord_id> (Character Name) — pings the player in Discord.\n"
         "New player setup:\n"
         "- If IS_NEW_PLAYER is true and PLAYER_CARD.state.character_name is empty, generate a fitting name:\n"
@@ -9587,10 +9590,8 @@ class ZorkEmulator:
         )
         for entry in players:
             state = cls.get_player_state(entry)
-            if entry.user_id != actor.user_id and not cls._same_scene(
-                actor_state, state
-            ):
-                continue
+            is_actor = entry.user_id == actor.user_id
+            same_scene = is_actor or cls._same_scene(actor_state, state)
             fallback_name = f"Adventurer-{str(entry.user_id)[-4:]}"
             display_name = str(state.get("character_name") or fallback_name).strip()
             player_slug = cls._player_slug_key(display_name) or f"player-{entry.user_id}"
@@ -9601,7 +9602,7 @@ class ZorkEmulator:
             attributes = cls.get_player_attributes(entry)
             attribute_cues = cls._build_attribute_cues(attributes)
             visible_items = []
-            if entry.user_id == actor.user_id:
+            if is_actor:
                 visible_items = cls._normalize_inventory_items(state.get("inventory"))[
                     :3
                 ]
@@ -9611,7 +9612,8 @@ class ZorkEmulator:
                     "discord_mention": f"<@{entry.user_id}>",
                     "name": display_name,
                     "player_slug": player_slug,
-                    "is_actor": entry.user_id == actor.user_id,
+                    "is_actor": is_actor,
+                    "same_scene": same_scene,
                     "level": entry.level,
                     "persona": persona,
                     "attribute_cues": attribute_cues,
