@@ -208,7 +208,7 @@ class GPT:
             return None
         return raw_model
 
-    def _send_zai_request(self, message_log):
+    def _send_zai_request_streaming(self, message_log):
         client = OpenAI(
             api_key=config.get_openai_api_key(),
             base_url="https://api.z.ai/api/coding/paas/v4",
@@ -218,12 +218,56 @@ class GPT:
             messages=message_log,
             max_completion_tokens=self.max_tokens,
             temperature=self.temperature,
+            stream=True,
             extra_body={
                 "thinking": {
                     "type": "enabled",
                 },
             },
         )
+
+    def _consume_zai_stream(self, stream):
+        """Consume a ZAI streaming response. Returns content text.
+
+        Detects tool_call JSON early and stops reading once the JSON
+        object closes, avoiding wasted time on trailing tokens.
+        """
+        chunks = []
+        brace_depth = 0
+        in_json = False
+        found_tool_call = False
+
+        try:
+            for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta is None:
+                    continue
+                text = delta.content
+                if not text:
+                    continue
+                chunks.append(text)
+
+                # Track JSON brace depth for early exit on tool calls
+                for ch in text:
+                    if ch == '{':
+                        if not in_json:
+                            in_json = True
+                        brace_depth += 1
+                    elif ch == '}':
+                        brace_depth -= 1
+                        if in_json and brace_depth == 0:
+                            # Complete JSON object received
+                            so_far = "".join(chunks)
+                            if '"tool_call"' in so_far and '"narration"' not in so_far:
+                                found_tool_call = True
+
+                if found_tool_call:
+                    stream.close()
+                    break
+        except Exception as e:
+            logger.warning(f"Error during ZAI stream consumption: {e}")
+
+        return "".join(chunks) or None
 
     @classmethod
     def _build_cli_prompt(cls, role: str, prompt: str) -> str:
@@ -611,18 +655,16 @@ class GPT:
                     {"role": "user", "content": effective_prompt},
                 ]
                 try:
-                    response = await asyncio.to_thread(
-                        self._send_zai_request, message_log
+                    stream = await asyncio.to_thread(
+                        self._send_zai_request_streaming, message_log
+                    )
+                    content = await asyncio.to_thread(
+                        self._consume_zai_stream, stream
                     )
                 except Exception as e:
                     logger.error(f"Error sending request to ZAI: {e}")
                     return None
-                if response is None:
-                    return None
-                for choice in response.choices:
-                    if "text" in choice:
-                        return choice.text
-                return response.choices[0].message.content
+                return content or None
 
             try:
                 return await asyncio.to_thread(
