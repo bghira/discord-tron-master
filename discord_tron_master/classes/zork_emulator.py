@@ -320,6 +320,16 @@ class ZorkEmulator:
         "if that NPC plausibly knows in this scene (direct evidence, prior established knowledge, or in-scene disclosure). "
         "Do not leak off-screen NPC communications into current NPC dialogue unless continuity clearly supports it.]"
     )
+    WRITING_CRAFT_PROMPT = (
+        "WRITING_CRAFT:\n"
+        "- Anticipate what the player needs to know right now. Answer their implicit questions before they ask.\n"
+        "- Ground every sentence in the concrete: sensory detail, specific objects, named places. Abstract summary is not narration.\n"
+        "- Simple, not simplistic. Accessible prose that trusts the reader's intelligence. Never over-explain.\n"
+        "- Every paragraph earns its place. Cut anything that doesn't move the scene, reveal character, or build atmosphere.\n"
+        "- Prefer the precise word over the approximate one. One vivid verb beats three limp adjectives.\n"
+        "- Structure matters: vary sentence length and rhythm. A short sentence after a long one lands harder.\n"
+        "- Style is the differentiator. Don't just describe what happens — make how you describe it unmistakable.\n"
+    )
     PROMPT_STAGE_BOOTSTRAP = "bootstrap"  # Deprecated: kept for logging/audit only; bootstrap LLM call eliminated.
     PROMPT_STAGE_RESEARCH = "research"
     PROMPT_STAGE_FINAL = "final"
@@ -17000,7 +17010,8 @@ class ZorkEmulator:
                             tool_result_block = (
                                 "RESEARCH_COMPLETE: Context gathering is complete.\n"
                                 "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
-                                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update."
+                                "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update.\n"
+                                + cls.WRITING_CRAFT_PROMPT
                             )
                             _zork_log("READY TO WRITE", tool_result_block)
                             _append_tool_prompt(tool_result_block)
