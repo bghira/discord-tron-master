@@ -254,6 +254,7 @@ class TurnDelta:
 
     state_update: Dict[str, Any] = dataclasses.field(default_factory=dict)
     player_state_update: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    co_located_player_slugs: List[str] = dataclasses.field(default_factory=list)
     character_updates: Dict[str, Any] = dataclasses.field(default_factory=dict)
     summary_update: Optional[str] = None
     calendar_update: Optional[Dict[str, Any]] = None
@@ -723,6 +724,8 @@ class ZorkEmulator:
         "Optional keys:\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: see PLAYER STATE section\n"
+        "- co_located_player_slugs: optional array of exact PARTY_SNAPSHOT player_slugs for OTHER CAMPAIGN_PLAYERS who remain physically with the acting player after this turn. "
+        "Use only for room/location sync; it does NOT authorize new dialogue, actions, or decisions for them.\n"
         '- story_progression: Keys: advance (bool), target ("hold"|"next-scene"|"next-chapter"), reason (string). '
         "Use when a subplot beat should push the outlined story forward without explicit state_update scene change.\n"
         "- turn_visibility: see VISIBILITY section\n"
@@ -758,6 +761,9 @@ class ZorkEmulator:
         "room_description: Full description. Update on location change only.\n"
         "room_summary: One-line summary for future context.\n"
         "ACTIVE_PLAYER_LOCATION reflects the CURRENT stored state — if it is stale/wrong, your response MUST correct it.\n"
+        "MULTI-PLAYER LOCATION SYNC: if another real player character from PARTY_SNAPSHOT is still physically with the acting player after this turn, "
+        "include their exact PARTY_SNAPSHOT slug in co_located_player_slugs. The harness will mirror the acting player's room fields to them without inventing new behavior.\n"
+        'Example: {"player_state_update":{"location":"side-room-b","room_title":"Side Room B","room_summary":"Private side room off Fellowship Hall.","room_description":"A narrow side room with a low lamp and one upholstered bench.","exits":["Fellowship Hall"]},"co_located_player_slugs":["dawn-session-singer"]}\n'
         "Inventory: Use inventory_add / inventory_remove arrays only. NEVER output a full inventory list. "
         "NEVER list, enumerate, or summarize inventory in narration — not inline, not at the end, not as a parenthetical. "
         "Respect each item's origin field. Never contradict or reinvent it.\n"
@@ -11134,6 +11140,77 @@ class ZorkEmulator:
                 synced += 1
         return synced
 
+    @classmethod
+    def _normalize_co_located_player_slugs(
+        cls,
+        raw_value: object,
+        *,
+        actor_slug: str = "",
+    ) -> List[str]:
+        if not isinstance(raw_value, list):
+            return []
+        actor_slug_key = cls._player_slug_key(actor_slug)
+        out: List[str] = []
+        seen: set[str] = set()
+        for item in raw_value:
+            slug = cls._player_slug_key(item)
+            if not slug or slug == actor_slug_key or slug in seen:
+                continue
+            seen.add(slug)
+            out.append(slug)
+        return out
+
+    @classmethod
+    def _sync_marked_co_located_players(
+        cls,
+        campaign_id: int,
+        source_user_id: int,
+        source_state: Dict[str, object],
+        player_slugs: List[str],
+    ) -> int:
+        if not isinstance(source_state, dict) or not isinstance(player_slugs, list):
+            return 0
+        slug_set = {
+            cls._player_slug_key(item)
+            for item in player_slugs
+            if cls._player_slug_key(item)
+        }
+        if not slug_set:
+            return 0
+        has_room_context = any(
+            source_state.get(key)
+            for key in ("room_id", "location", "room_title", "room_summary", "room_description")
+        )
+        if not has_room_context:
+            return 0
+        changed = 0
+        targets = (
+            ZorkPlayer.query.filter(
+                ZorkPlayer.campaign_id == campaign_id,
+                ZorkPlayer.user_id != source_user_id,
+            )
+            .all()
+        )
+        for target in targets:
+            target_state = cls.get_player_state(target)
+            target_slug = cls._player_slug_key(target_state.get("character_name"))
+            fallback_slug = cls._player_slug_key(f"player-{getattr(target, 'user_id', '')}")
+            if target_slug not in slug_set and fallback_slug not in slug_set:
+                continue
+            before = dict(target_state)
+            for key in cls.ROOM_STATE_KEYS:
+                src_val = source_state.get(key)
+                if src_val is None:
+                    target_state.pop(key, None)
+                else:
+                    target_state[key] = src_val
+            if target_state == before:
+                continue
+            target.state_json = cls._dump_json(target_state)
+            target.updated = db.func.now()
+            changed += 1
+        return changed
+
     @staticmethod
     def _entity_name_candidates_for_sync(
         state_key: object, entity_state: Dict[str, object]
@@ -17973,6 +18050,12 @@ class ZorkEmulator:
             campaign_state,
             skip_user_id=player.user_id,
         )
+        _co_located_player_sync_count = cls._sync_marked_co_located_players(
+            campaign.id,
+            player.user_id,
+            player_state,
+            delta.co_located_player_slugs,
+        )
         if _player_entity_sync_count:
             cls._increment_auto_fix_counter(
                 campaign_state,
@@ -17982,6 +18065,16 @@ class ZorkEmulator:
             _zork_log(
                 f"PLAYER ENTITY AUTO-SYNC campaign={campaign.id}",
                 f"other_players={_player_entity_sync_count}",
+            )
+        if _co_located_player_sync_count:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "location_auto_sync_co_located_players",
+                amount=_co_located_player_sync_count,
+            )
+            _zork_log(
+                f"CO-LOCATED PLAYER AUTO-SYNC campaign={campaign.id}",
+                f"other_players={_co_located_player_sync_count}",
             )
         campaign.state_json = cls._dump_json(campaign_state)
 
@@ -20364,6 +20457,7 @@ class ZorkEmulator:
         summary_update = None
         xp_awarded = 0
         player_state_update: Dict[str, Any] = {}
+        co_located_player_slugs: List[str] = []
         story_progression = None
         turn_visibility = None
         scene_output_raw = None
@@ -20398,6 +20492,10 @@ class ZorkEmulator:
                 xp_awarded = payload.get("xp_awarded", 0) or 0
                 player_state_update = (
                     payload.get("player_state_update", {}) or {}
+                )
+                co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                    payload.get("co_located_player_slugs"),
+                    actor_slug=player_state.get("character_name"),
                 )
                 story_progression = cls._normalize_story_progression(
                     payload.get("story_progression")
@@ -20514,6 +20612,10 @@ class ZorkEmulator:
                             player_state_update = (
                                 payload.get("player_state_update", {}) or {}
                             )
+                            co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                                payload.get("co_located_player_slugs"),
+                                actor_slug=player_state.get("character_name"),
+                            )
                             story_progression = cls._normalize_story_progression(
                                 payload.get("story_progression")
                             )
@@ -20603,6 +20705,10 @@ class ZorkEmulator:
                             summary_update = _rp.get("summary_update")
                             xp_awarded = _rp.get("xp_awarded", 0) or 0
                             player_state_update = _rp.get("player_state_update", {}) or {}
+                            co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                                _rp.get("co_located_player_slugs"),
+                                actor_slug=player_state.get("character_name"),
+                            )
                             story_progression = cls._normalize_story_progression(
                                 _rp.get("story_progression")
                             )
@@ -20698,6 +20804,10 @@ class ZorkEmulator:
                             _repair_payload.get("player_state_update", {})
                             or {}
                         )
+                        co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                            _repair_payload.get("co_located_player_slugs"),
+                            actor_slug=player_state.get("character_name"),
+                        )
                         story_progression = cls._normalize_story_progression(
                             _repair_payload.get("story_progression")
                         )
@@ -20772,6 +20882,10 @@ class ZorkEmulator:
                         player_state_update = (
                             _clock_payload.get("player_state_update", {}) or {}
                         )
+                        co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                            _clock_payload.get("co_located_player_slugs"),
+                            actor_slug=player_state.get("character_name"),
+                        )
                         story_progression = cls._normalize_story_progression(
                             _clock_payload.get("story_progression")
                         )
@@ -20839,6 +20953,10 @@ class ZorkEmulator:
                         xp_awarded = _anti_payload.get("xp_awarded", 0) or 0
                         player_state_update = (
                             _anti_payload.get("player_state_update", {}) or {}
+                        )
+                        co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                            _anti_payload.get("co_located_player_slugs"),
+                            actor_slug=player_state.get("character_name"),
                         )
                         story_progression = cls._normalize_story_progression(
                             _anti_payload.get("story_progression")
@@ -20963,6 +21081,7 @@ class ZorkEmulator:
             f"--- NARRATION ---\n{narration}\n\n"
             f"--- STATE UPDATE ---\n{json.dumps(state_update, indent=2)}\n\n"
             f"--- PLAYER STATE UPDATE ---\n{json.dumps(player_state_update, indent=2)}\n\n"
+            f"--- CO-LOCATED PLAYER SLUGS ---\n{json.dumps(co_located_player_slugs, indent=2)}\n\n"
             f"--- STORY PROGRESSION ---\n{json.dumps(story_progression, indent=2)}\n\n"
             f"--- TURN VISIBILITY ---\n{json.dumps(turn_visibility, indent=2)}\n\n"
             f"--- SUMMARY UPDATE ---\n{summary_update}\n\n"
@@ -20989,6 +21108,7 @@ class ZorkEmulator:
         delta.reasoning = reasoning
         delta.state_update = state_update
         delta.player_state_update = player_state_update
+        delta.co_located_player_slugs = co_located_player_slugs
         delta.character_updates = character_updates
         delta.summary_update = summary_update
         delta.calendar_update = calendar_update
