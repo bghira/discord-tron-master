@@ -798,7 +798,7 @@ class ZorkEmulator:
         # ── NARRATION CRAFT ──
         "NARRATION CRAFT:\n"
         "- Write in current style direction. Plain and direct unless a character canonically speaks otherwise.\n"
-        "- 1-6 beats per turn. Vary sentence rhythm and pacing turn to turn.\n"
+        "- 1-3 beats per turn. Vary sentence rhythm and pacing turn to turn.\n"
         "- DELTA MODE: new developments only. No recap of WORLD_SUMMARY or RECENT_TURNS.\n"
         "- Do not re-state the player's action unless needed for immediate clarity.\n"
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
@@ -1982,10 +1982,6 @@ class ZorkEmulator:
                 calendar_update.get("remove"), list
             ):
                 return True
-        if isinstance(state_update, dict):
-            for key in ("current_chapter", "current_scene"):
-                if key in state_update:
-                    return True
         return False
 
     @classmethod
@@ -20925,59 +20921,6 @@ class ZorkEmulator:
             & set(used_tool_names)
         )
         raw_narration = narration
-        if (
-            not _planning_tools_used
-            and cls._looks_like_major_narrative_beat(
-                narration=narration,
-                summary_update=summary_update,
-                state_update=state_update
-                if isinstance(state_update, dict)
-                else {},
-                character_updates=character_updates
-                if isinstance(character_updates, dict)
-                else {},
-                calendar_update=calendar_update,
-            )
-        ):
-            _planning_prompt = (
-                f"{tool_augmented_prompt}\n"
-                "PLANNING_ENFORCEMENT:\n"
-                "A major beat occurred. Before ending the turn, return ONLY one planning tool call JSON:\n"
-                "- plot_plan OR consequence_log (chapter_plan optional in off-rails)\n"
-                "No narration. No extra keys.\n"
-            )
-            _planning_resp = await gpt.turbo_completion(
-                system_prompt,
-                _planning_prompt,
-                temperature=0.6,
-                max_tokens=512,
-            )
-            if _planning_resp:
-                _planning_resp = cls._clean_response(_planning_resp)
-                _planning_json = cls._extract_json(_planning_resp)
-                if _planning_json:
-                    try:
-                        _planning_payload = cls._parse_json_lenient(
-                            _planning_json
-                        )
-                        _planning_name = str(
-                            _planning_payload.get("tool_call") or ""
-                        ).strip()
-                        if _planning_name in {
-                            "plot_plan",
-                            "chapter_plan",
-                            "consequence_log",
-                        }:
-                            forced_planning_payload = _planning_payload
-                            _zork_log(
-                                "FORCED PLANNING TOOL",
-                                json.dumps(
-                                    forced_planning_payload,
-                                    ensure_ascii=True,
-                                ),
-                            )
-                    except Exception:
-                        pass
 
         narration = cls._trim_text(narration, cls.MAX_NARRATION_CHARS)
         narration = cls._strip_inventory_from_narration(narration)
