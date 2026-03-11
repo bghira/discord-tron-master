@@ -8643,17 +8643,23 @@ class ZorkEmulator:
             and viewer_user_id is not None
             and turns
         ):
-            for turn in turns[-24:]:
+            for turn in turns[-48:]:
                 if not isinstance(turn, ZorkTurn):
                     continue
                 if turn.kind != "narrator":
                     continue
-                if not cls._turn_visible_in_recent_turns_context(
+                # Use the broader _turn_visible_to_viewer check rather
+                # than _turn_visible_in_recent_turns_context.  WORLD_SUMMARY
+                # represents the player's memory — they should see their
+                # own local/private experiences even after leaving that
+                # location, just like RECENT_TURNS can be expanded by the
+                # model to include the player's private interactions.
+                if not cls._turn_visible_to_viewer(
                     turn,
-                    viewer_user_id=viewer_user_id,
-                    viewer_slug=viewer_slug,
-                    viewer_location_key=viewer_location_key,
-                    viewer_private_context_key=viewer_private_context_key,
+                    viewer_user_id,
+                    viewer_slug,
+                    viewer_location_key,
+                    viewer_private_context_key,
                 ):
                     continue
                 meta = cls._safe_turn_meta(turn)
@@ -8670,12 +8676,14 @@ class ZorkEmulator:
                     )
                 _append_if_relevant(recent_lines, summary_candidate)
 
-        # The persisted campaign.summary blob predates visibility-aware
-        # composition and may contain global/stale lines from scenes the current
-        # viewer should not see. Once we have usable recent narrator history for
-        # this viewer, prefer that scoped history and treat the persisted blob as
-        # fallback only.
-        lines = recent_lines if recent_lines else persisted_lines
+        # The persisted campaign.summary blob is unscoped — it predates
+        # visibility-aware composition and may contain lines from scenes the
+        # current viewer should not see.  Only fall back to it when turn
+        # history was not provided at all (e.g. map rendering without turns).
+        # When turns are available the visibility-filtered recent_lines is
+        # authoritative, even if it happens to be empty.
+        _have_turn_history = isinstance(turns, list) and bool(turns)
+        lines = recent_lines if (_have_turn_history or not persisted_lines) else persisted_lines
 
         if not lines:
             active_chapters = cls._chapters_for_prompt(
