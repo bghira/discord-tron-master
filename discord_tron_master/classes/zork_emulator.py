@@ -20655,6 +20655,10 @@ class ZorkEmulator:
         if json_text:
             try:
                 payload = cls._parse_json_lenient(json_text)
+                # Don't parse stray tool_call responses as narration
+                if isinstance(payload, dict) and cls._is_tool_call(payload):
+                    _zork_log("STRAY TOOL_CALL IN FINAL RESPONSE (ignored)", response[:300])
+                    payload = {}
                 scene_output_raw = payload.get("scene_output")
                 narration_candidate = str(
                     payload.get("narration") or ""
@@ -20867,12 +20871,69 @@ class ZorkEmulator:
             if _retry_resp:
                 _retry_resp = cls._clean_response(_retry_resp)
                 if not cls._looks_like_reasoning(_retry_resp):
+                    # Check if the repair response is a tool_call that
+                    # slipped through (e.g. ready_to_write).  If so,
+                    # discard it — the model needs to produce narration,
+                    # not another tool call.  Re-prompt once more.
+                    _retry_json = cls._extract_json(_retry_resp)
+                    _retry_payload = None
+                    if _retry_json:
+                        try:
+                            _retry_payload = cls._parse_json_lenient(_retry_json)
+                        except Exception:
+                            pass
+                    if (
+                        isinstance(_retry_payload, dict)
+                        and cls._is_tool_call(_retry_payload)
+                    ):
+                        _zork_log(
+                            "REASONING LEAK REPAIR RETURNED TOOL_CALL (ignored)",
+                            _retry_resp[:300],
+                        )
+                        # Force a second repair attempt asking explicitly
+                        # for narration, not a tool call.
+                        _retry_resp2 = await gpt.turbo_completion(
+                            system_prompt,
+                            (
+                                f"{tool_augmented_prompt}\n"
+                                "Your previous responses were NOT player-facing narration. "
+                                "Do NOT return a tool_call. Return the final in-character "
+                                "narration JSON with reasoning, scene_output, narration, "
+                                "state_update, summary_update. Write the scene NOW.\n"
+                            ),
+                            temperature=0.8,
+                            max_tokens=2048,
+                        )
+                        if _retry_resp2:
+                            _retry_resp2 = cls._clean_response(_retry_resp2)
+                            if (
+                                not cls._looks_like_reasoning(_retry_resp2)
+                            ):
+                                _retry_resp = _retry_resp2
+                                _retry_json = cls._extract_json(_retry_resp)
+                                _retry_payload = None
+                                if _retry_json:
+                                    try:
+                                        _retry_payload = cls._parse_json_lenient(
+                                            _retry_json
+                                        )
+                                    except Exception:
+                                        pass
+                                # If it's STILL a tool call, give up and
+                                # fall through to empty payload retry.
+                                if (
+                                    isinstance(_retry_payload, dict)
+                                    and cls._is_tool_call(_retry_payload)
+                                ):
+                                    _retry_payload = None
                     response = _retry_resp
                     narration = response.strip()
                     _rj = cls._extract_json(response)
                     if _rj:
                         try:
                             _rp = cls._parse_json_lenient(_rj)
+                            if isinstance(_rp, dict) and cls._is_tool_call(_rp):
+                                _rp = {}  # Don't parse tool calls as narration
                             scene_output_raw = _rp.get("scene_output")
                             _rn = str(_rp.get("narration") or "").strip()
                             if not _rn:
