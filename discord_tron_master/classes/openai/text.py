@@ -564,12 +564,12 @@ class GPT:
 
     def _run_claude_cli(self, role: str, prompt: str) -> str:
         workdir = self._ensure_cli_workdir()
+        user_prompt = self._build_claude_structured_user_prompt(prompt)
         command = [
             "claude",
             "-p",
-            self._build_claude_structured_user_prompt(prompt),
             "--output-format",
-            "json",
+            "stream-json",
             "--permission-mode",
             "dontAsk",
             "--tools",
@@ -582,23 +582,109 @@ class GPT:
             command.extend(
                 ["--system-prompt", self._build_claude_structured_system_instructions(role)]
             )
-        result = subprocess.run(
+        proc = subprocess.Popen(
             command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            capture_output=True,
-            timeout=self._CLI_TIMEOUT_SECONDS,
             cwd=workdir,
-            check=False,
         )
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-            raise RuntimeError(f"Claude CLI request failed: {detail}")
-        payload = self._extract_last_json_object(result.stdout)
-        if not isinstance(payload, dict):
-            raise RuntimeError("Claude CLI returned no JSON result payload")
-        if payload.get("is_error") is True:
-            raise RuntimeError(f"Claude CLI request failed: {payload.get('result') or payload}")
-        return str(payload.get("result") or "").strip()
+        try:
+            proc.stdin.write(user_prompt)
+            proc.stdin.close()
+            content = self._consume_claude_stream(proc)
+        except Exception:
+            proc.kill()
+            raise
+        finally:
+            proc.wait()
+        if proc.returncode != 0 and not content:
+            detail = (proc.stderr.read() if proc.stderr else "") or f"exit code {proc.returncode}"
+            raise RuntimeError(f"Claude CLI request failed: {detail.strip()}")
+        return content or ""
+
+    def _consume_claude_stream(self, proc: subprocess.Popen) -> str | None:
+        """Read stream-json lines from a claude CLI process.
+
+        Accumulates assistant text and detects tool-call JSON early
+        (same pattern as ``_consume_zai_stream``).  Returns the
+        concatenated assistant text.
+        """
+        import time
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        chunks: list[str] = []
+        brace_depth = 0
+        in_json = False
+        found_tool_call = False
+
+        def _readline():
+            return proc.stdout.readline()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            while True:
+                future = executor.submit(_readline)
+                try:
+                    line = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
+                except FuturesTimeout:
+                    future.cancel()
+                    proc.kill()
+                    raise self._TTFTTimeout("Claude CLI stream silent for "
+                                            f"{self._ZAI_TTFT_TIMEOUT}s")
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = str(event.get("type") or "")
+                if etype == "assistant":
+                    text = str(event.get("message") or "")
+                    if text:
+                        chunks.append(text)
+                elif etype == "content_block_delta":
+                    text = str(event.get("delta", {}).get("text") or
+                               event.get("text") or "")
+                    if text:
+                        chunks.append(text)
+                elif etype == "result":
+                    result_text = str(event.get("result") or "")
+                    if result_text:
+                        chunks = [result_text]
+                    break
+                else:
+                    continue
+
+                if not found_tool_call and chunks:
+                    for ch in (chunks[-1] if chunks else ""):
+                        if ch == '{':
+                            if not in_json:
+                                in_json = True
+                            brace_depth += 1
+                        elif ch == '}':
+                            brace_depth -= 1
+                            if in_json and brace_depth == 0:
+                                so_far = "".join(chunks)
+                                if '"tool_call"' in so_far and '"narration"' not in so_far:
+                                    found_tool_call = True
+
+                if found_tool_call:
+                    proc.kill()
+                    break
+        except self._TTFTTimeout:
+            raise
+        except Exception as e:
+            logger.warning(f"Error during Claude CLI stream consumption: {e}")
+        finally:
+            executor.shutdown(wait=False)
+
+        return "".join(chunks).strip() or None
 
     def _run_gemini_cli(self, role: str, prompt: str) -> str:
         workdir = self._ensure_cli_workdir()
@@ -714,13 +800,23 @@ class GPT:
                         return None
                 return None
 
-            try:
-                return await asyncio.to_thread(
-                    self._run_cli_backend, backend, effective_role, effective_prompt
-                )
-            except Exception as e:
-                logger.error(f"Error sending request to {backend}: {e}")
-                return None
+            max_ttft_retries = 3
+            for attempt in range(1, max_ttft_retries + 1):
+                try:
+                    return await asyncio.to_thread(
+                        self._run_cli_backend, backend, effective_role, effective_prompt
+                    )
+                except self._TTFTTimeout:
+                    logger.warning(
+                        f"{backend} TTFT timeout (attempt {attempt}/{max_ttft_retries}), retrying"
+                    )
+                    if attempt == max_ttft_retries:
+                        logger.error(f"{backend} TTFT timeout after all retries")
+                        return None
+                except Exception as e:
+                    logger.error(f"Error sending request to {backend}: {e}")
+                    return None
+            return None
 
     def retrieve_image(self, url: str):
         import requests
