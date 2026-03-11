@@ -10584,7 +10584,7 @@ class ZorkEmulator:
 
     _REASONING_PREFIXES = re.compile(
         r"^(I need to |I should |I'll |Let me |I want to |I will |First,? I |"
-        r"Now I |My plan |Step \d|To respond|Before I |I must )",
+        r"Now I |My plan |Step \d|To respond|Before I |I must |Looking at |To handle )",
         re.IGNORECASE,
     )
 
@@ -10597,6 +10597,79 @@ class ZorkEmulator:
         if cls._REASONING_PREFIXES.match(stripped):
             return True
         return False
+
+    @classmethod
+    def _synthesize_research_tool_call_from_planner_prose(
+        cls,
+        text: str,
+        *,
+        current_tool_name: str = "",
+        sms_inline_draft: Optional[Tuple[str, str]] = None,
+        player_name: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        stripped = str(text or "").strip()
+        if not stripped or not cls._looks_like_reasoning(stripped):
+            return None
+        lowered = " ".join(stripped.lower().split())
+        if sms_inline_draft is not None:
+            sms_recipient, sms_message = sms_inline_draft
+            sms_thread = (
+                cls._sms_normalize_thread_key(sms_recipient)
+                or str(sms_recipient or "").strip()
+            )
+            if (
+                current_tool_name != "sms_read"
+                and (
+                    "existing sms thread" in lowered
+                    or "read the yasmin thread" in lowered
+                    or "read the thread" in lowered
+                    or "check the existing sms thread" in lowered
+                    or "check the thread" in lowered
+                    or "see what's already been exchanged" in lowered
+                    or (
+                        ("thread" in lowered or "sms" in lowered or "text" in lowered)
+                        and any(
+                            phrase in lowered
+                            for phrase in (
+                                "let me first",
+                                "first read",
+                                "first check",
+                                "need to check",
+                                "need to read",
+                                "should read",
+                            )
+                        )
+                    )
+                )
+            ):
+                return {
+                    "tool_call": "sms_read",
+                    "thread": sms_thread,
+                    "limit": 20,
+                }
+            if (
+                sms_thread
+                and sms_message
+                and any(
+                    phrase in lowered
+                    for phrase in (
+                        "record the outgoing message",
+                        "record the message",
+                        "write the outgoing message",
+                        "write the message",
+                        "send the message",
+                        "store the outgoing message",
+                    )
+                )
+            ):
+                return {
+                    "tool_call": "sms_write",
+                    "thread": sms_thread,
+                    "from": str(player_name or "").strip() or "Player",
+                    "to": str(sms_recipient or "").strip(),
+                    "message": str(sms_message or "").strip(),
+                }
+        return None
 
     @classmethod
     def _sanitize_reasoning(cls, value: object) -> Optional[str]:
@@ -14634,7 +14707,57 @@ class ZorkEmulator:
         # Bail out if recipient is still a bare article.
         if recipient.lower() in cls._SMS_ARTICLES:
             return None
+        # Strip trailing filler words ("back", "again", "now", etc.)
+        _FILLER_SUFFIX_RE = re.compile(
+            r"\s+(?:back|again|now|real\s+quick|rn|asap|too|also|first|next|later)\s*$",
+            re.IGNORECASE,
+        )
+        recipient = _FILLER_SUFFIX_RE.sub("", recipient).strip()
+        if not recipient:
+            return None
         return recipient[:80], message[:500]
+
+    @classmethod
+    def _resolve_sms_recipient(
+        cls,
+        raw_recipient: str,
+        campaign: "ZorkCampaign",
+        player_state: Dict[str, object],
+    ) -> str:
+        """Resolve a raw SMS recipient name against known characters.
+
+        Matches by first name, full name, or slug prefix. Returns the
+        character's display name if found, otherwise the raw recipient.
+        """
+        raw = str(raw_recipient or "").strip()
+        if not raw:
+            return raw
+        raw_lower = raw.lower()
+        characters = cls.get_campaign_characters(campaign)
+        if not isinstance(characters, dict):
+            return raw
+        # Also include the player registry for other players
+        best_match: Optional[str] = None
+        for slug, char_data in characters.items():
+            if not isinstance(char_data, dict):
+                continue
+            name = str(char_data.get("name") or "").strip()
+            if not name:
+                continue
+            name_lower = name.lower()
+            # Exact full name match
+            if raw_lower == name_lower:
+                return name
+            # First-name match
+            first_name = name_lower.split()[0] if name_lower else ""
+            if first_name and raw_lower == first_name:
+                best_match = name
+            # Slug prefix match ("yasmin" matches "yasmin-devereaux")
+            slug_norm = str(slug or "").strip().lower()
+            if slug_norm and slug_norm.startswith(raw_lower.replace(" ", "-")):
+                if not best_match:
+                    best_match = name
+        return best_match or raw
 
     @staticmethod
     def _is_private_phone_command_line(value: object) -> bool:
@@ -17463,8 +17586,12 @@ class ZorkEmulator:
             sms_intent = cls._extract_inline_sms_intent(action)
             if sms_intent is not None:
                 sms_activity_detected = True
-                sms_inline_draft = sms_intent
                 sms_recipient, sms_message = sms_intent
+                # Resolve "Yasmin" → "Yasmin Devereaux" via character list
+                sms_recipient = cls._resolve_sms_recipient(
+                    sms_recipient, campaign, player_state
+                )
+                sms_inline_draft = (sms_recipient, sms_message)
                 sms_sender = str(
                     player_state.get("character_name")
                     or f"Player {ctx.author.id}"
@@ -18792,6 +18919,70 @@ class ZorkEmulator:
             )
 
         gpt.turbo_completion = _stage_aware_turbo_completion
+
+        async def _parse_research_phase_payload(
+            raw_response: str,
+            *,
+            current_tool_name: str,
+        ) -> Optional[Dict[str, Any]]:
+            json_text_tc = cls._extract_json(raw_response)
+            if json_text_tc:
+                try:
+                    return cls._parse_json_lenient(json_text_tc)
+                except Exception:
+                    pass
+            synthesized = cls._synthesize_research_tool_call_from_planner_prose(
+                raw_response,
+                current_tool_name=current_tool_name,
+                sms_inline_draft=sms_inline_draft,
+                player_name=str(
+                    player_state.get("character_name")
+                    or f"Player {user_id}"
+                ).strip(),
+            )
+            if synthesized:
+                _zork_log(
+                    "RESEARCH PROSE REPAIRED TO TOOL_CALL",
+                    json.dumps(synthesized, ensure_ascii=True),
+                )
+                return synthesized
+            repair_prompt = (
+                f"{tool_augmented_prompt}\n"
+                "RESEARCH_PHASE_FORMAT_ERROR: Your previous response was plain-language planning text, "
+                "not a JSON tool call.\n"
+                "Return ONLY one JSON object now: either a tool_call or ready_to_write.\n"
+                "Do not narrate. Do not explain your plan.\n"
+            )
+            repair_response = await _turn_model_call(
+                repair_prompt,
+                thinking_enabled=False,
+            )
+            if not repair_response:
+                return None
+            repair_response = cls._clean_response(repair_response)
+            _zork_log("RESEARCH FORMAT REPAIR RESPONSE", repair_response)
+            repair_json = cls._extract_json(repair_response)
+            if repair_json:
+                try:
+                    return cls._parse_json_lenient(repair_json)
+                except Exception:
+                    pass
+            synthesized = cls._synthesize_research_tool_call_from_planner_prose(
+                repair_response,
+                current_tool_name=current_tool_name,
+                sms_inline_draft=sms_inline_draft,
+                player_name=str(
+                    player_state.get("character_name")
+                    or f"Player {user_id}"
+                ).strip(),
+            )
+            if synthesized:
+                _zork_log(
+                    "RESEARCH REPAIR PROSE REPAIRED TO TOOL_CALL",
+                    json.dumps(synthesized, ensure_ascii=True),
+                )
+                return synthesized
+            return None
 
         def _tool_budget_note() -> str:
             remaining = max(0, max_tool_chain_steps - tool_chain_steps)
@@ -20512,14 +20703,11 @@ class ZorkEmulator:
                 )
                 break
 
-            json_text_tc = cls._extract_json(response)
-            if not json_text_tc:
-                first_payload = None
-                break
-            try:
-                first_payload = cls._parse_json_lenient(json_text_tc)
-            except Exception:
-                first_payload = None
+            first_payload = await _parse_research_phase_payload(
+                response,
+                current_tool_name=tool_name,
+            )
+            if not first_payload:
                 break
 
         # Hard-stop infinite tool loops
