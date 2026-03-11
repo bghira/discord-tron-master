@@ -568,6 +568,7 @@ class GPT:
         command = [
             "claude",
             "-p",
+            "--verbose",
             "--output-format",
             "stream-json",
             "--permission-mode",
