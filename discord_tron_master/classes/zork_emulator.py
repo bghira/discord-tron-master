@@ -19310,11 +19310,22 @@ class ZorkEmulator:
                         scene_npc_slugs=_rtw_npc_slugs,
                     )
 
+                # Build PC name list for the dialogue restriction reminder
+                _pc_names_for_reminder = [
+                    str(p.get("name") or p.get("player_slug") or "")
+                    for p in _campaign_players
+                    if str(p.get("name") or p.get("player_slug") or "").strip()
+                ]
                 tool_result_block = (
                     "RESEARCH_COMPLETE: Context gathering is complete.\n"
                     "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
                     "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update.\n"
                 )
+                if _pc_names_for_reminder:
+                    tool_result_block += (
+                        f"\nPLAYER_CHARACTERS (real humans — do NOT write their dialogue, actions, decisions, "
+                        f"emotional reactions, facial expressions, or movement): {', '.join(_pc_names_for_reminder)}\n"
+                    )
                 if _rtw_npc_slugs:
                     tool_result_block += (
                         f"\nSCENE_PARTICIPANTS_LCD: speakers={sorted(_rtw_speakers)} listeners={sorted(_rtw_listeners)}\n"
