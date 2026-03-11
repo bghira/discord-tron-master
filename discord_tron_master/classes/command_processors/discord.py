@@ -65,13 +65,6 @@ def _contains_flag(value, flag_keys):
     return False
 
 
-def _channel_log_label(channel):
-    channel_id = getattr(channel, "id", "unknown")
-    channel_name = getattr(channel, "name", None)
-    if not channel_name:
-        channel_name = channel.__class__.__name__ if channel is not None else "UnknownChannel"
-    return channel_name, channel_id
-
 
 def _is_zork_scene_request(arguments, data):
     return _contains_flag(arguments, ZORK_SCENE_FLAG_KEYS) or _contains_flag(
@@ -464,8 +457,8 @@ async def send_message(
                     message, adding_reactions
                 )
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error sending message to {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error sending message to {label}: {e}")
     return {"success": True, "result": "Message sent."}
 
 
@@ -481,9 +474,9 @@ async def send_large_message(
                 channel, arguments["message"]
             )
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
+            label = _channel_log_label(channel)
             logger.error(
-                f"Error sending large message to {channel_name} ({channel_id}): {e}"
+                f"Error sending large message to {label}: {e}"
             )
     return {"success": True, "result": "Large message sent."}
 
@@ -559,8 +552,8 @@ async def edit_message(
             message = await channel.fetch_message(data["message_id"])
             await message.edit(content=arguments["message"])
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error editing message in {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error editing message in {label}: {e}")
     return {"success": True, "result": "Message edited."}
 
 
@@ -573,8 +566,8 @@ async def send_embed(
         try:
             await channel.send(embed=arguments["embed"])
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error sending embed to {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error sending embed to {label}: {e}")
     return {"success": True, "result": "Embed sent."}
 
 
@@ -589,8 +582,8 @@ async def send_file(
         try:
             await channel.send(file=arguments["file"])
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error sending file to {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error sending file to {label}: {e}")
     return {"success": True, "result": "File sent."}
 
 
@@ -602,8 +595,8 @@ async def send_files(
         try:
             await channel.send(files=arguments["files"])
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error sending files to {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error sending files to {label}: {e}")
     return {"success": True, "result": "Files sent."}
 
 
@@ -753,8 +746,8 @@ async def create_thread(
                     message, adding_reactions
                 )
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error creating thread in {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error creating thread in {label}: {e}")
     logger.debug(f"Exiting create_thread")
     return {"success": True, "result": "Thread created."}
 
@@ -767,8 +760,8 @@ async def delete_thread(
         try:
             await channel.delete()
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
-            logger.error(f"Error deleting thread in {channel_name} ({channel_id}): {e}")
+            label = _channel_log_label(channel)
+            logger.error(f"Error deleting thread in {label}: {e}")
     return {"success": True, "result": "Thread deleted."}
 
 
@@ -781,9 +774,9 @@ async def send_message_to_thread(
         try:
             await discord.send(content=arguments["message"])
         except Exception as e:
-            channel_name, channel_id = _channel_log_label(channel)
+            label = _channel_log_label(channel)
             logger.error(
-                f"Error sending message to thread in {channel_name} ({channel_id}): {e}"
+                f"Error sending message to thread in {label}: {e}"
             )
     return {"success": True, "result": "Message sent."}
 

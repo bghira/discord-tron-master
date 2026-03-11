@@ -228,25 +228,48 @@ class GPT:
             }
         return client.chat.completions.create(**request_kwargs)
 
+    _ZAI_TTFT_TIMEOUT = 10  # seconds; kill and retry if no content token arrives
+
+    class _TTFTTimeout(Exception):
+        """Raised when the first content token takes too long."""
+
     def _consume_zai_stream(self, stream):
         """Consume a ZAI streaming response. Returns content text.
 
         Detects tool_call JSON early and stops reading once the JSON
         object closes, avoiding wasted time on trailing tokens.
+
+        Raises ``_TTFTTimeout`` if no content token arrives within
+        ``_ZAI_TTFT_TIMEOUT`` seconds so the caller can retry.
         """
+        import time
+
         chunks = []
         brace_depth = 0
         in_json = False
         found_tool_call = False
+        first_content_received = False
+        t_start = time.monotonic()
 
         try:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta is None:
+                    if not first_content_received and (time.monotonic() - t_start) > self._ZAI_TTFT_TIMEOUT:
+                        stream.close()
+                        raise self._TTFTTimeout(
+                            f"No content token within {self._ZAI_TTFT_TIMEOUT}s"
+                        )
                     continue
                 text = delta.content
                 if not text:
+                    if not first_content_received and (time.monotonic() - t_start) > self._ZAI_TTFT_TIMEOUT:
+                        stream.close()
+                        raise self._TTFTTimeout(
+                            f"No content token within {self._ZAI_TTFT_TIMEOUT}s"
+                        )
                     continue
+                first_content_received = True
                 chunks.append(text)
 
                 # Track JSON brace depth for early exit on tool calls
@@ -266,6 +289,8 @@ class GPT:
                 if found_tool_call:
                     stream.close()
                     break
+        except self._TTFTTimeout:
+            raise
         except Exception as e:
             logger.warning(f"Error during ZAI stream consumption: {e}")
 
@@ -657,19 +682,29 @@ class GPT:
                     {"role": "assistant", "content": effective_role},
                     {"role": "user", "content": effective_prompt},
                 ]
-                try:
-                    stream = await asyncio.to_thread(
-                        self._send_zai_request_streaming,
-                        message_log,
-                        thinking_enabled=bool(thinking_enabled),
-                    )
-                    content = await asyncio.to_thread(
-                        self._consume_zai_stream, stream
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending request to ZAI: {e}")
-                    return None
-                return content or None
+                max_ttft_retries = 3
+                for attempt in range(1, max_ttft_retries + 1):
+                    try:
+                        stream = await asyncio.to_thread(
+                            self._send_zai_request_streaming,
+                            message_log,
+                            thinking_enabled=bool(thinking_enabled),
+                        )
+                        content = await asyncio.to_thread(
+                            self._consume_zai_stream, stream
+                        )
+                        return content or None
+                    except self._TTFTTimeout:
+                        logger.warning(
+                            f"ZAI TTFT timeout (attempt {attempt}/{max_ttft_retries}), retrying"
+                        )
+                        if attempt == max_ttft_retries:
+                            logger.error("ZAI TTFT timeout after all retries")
+                            return None
+                    except Exception as e:
+                        logger.error(f"Error sending request to ZAI: {e}")
+                        return None
+                return None
 
             try:
                 return await asyncio.to_thread(
