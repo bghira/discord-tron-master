@@ -719,8 +719,8 @@ class ZorkEmulator:
         "  narration should be the plain-text render of the same scene_output when both are present.\n"
         '  Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"listeners":["deshawn-williams"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
         '  Action beat: {"reasoning":"Chris physically moves the jar while Rent watches.","type":"action","speaker":"chris-crawly","actors":["chris-crawly"],"listeners":["rent"],"visibility":"local","aware_discord_ids":[],"aware_npc_slugs":["rent"],"text":"Chris angles the jar toward the pocket."}\n'
-        "- state_update: REQUIRED every turn. Must include game_time, current_chapter, current_scene.\n"
-        "- summary_update: REQUIRED every turn. One sentence. Lasting change or current dramatic state. Don't tattle — this field is shared across players, so never leak secrets, private conversations, intimate details, or hidden motives here. Those belong in narration and state_update, not summary_update.\n"
+        "- state_update: REQUIRED every turn. Must include game_time, current_chapter, current_scene. Don't tattle — WORLD_STATE is shared across ALL players. Never store intimate details, secrets, or private information in state_update. Track private/local context through narration, player_state_update, and character_updates instead.\n"
+        "- summary_update: REQUIRED every turn. One sentence. Lasting change or current dramatic state. Don't tattle — WORLD_SUMMARY is also shared across all players. Keep it to publicly observable facts only.\n"
         "Optional keys:\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: see PLAYER STATE section\n"
@@ -1137,7 +1137,7 @@ class ZorkEmulator:
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
         "- In EVERY final non-tool JSON response, include state_update.current_chapter and state_update.current_scene explicitly.\n"
         "- In EVERY final non-tool JSON response, include state_update.game_time explicitly.\n"
-        "- In EVERY final non-tool JSON response, include summary_update (one sentence, no tattling — don't leak secrets or private details into the shared summary).\n"
+        "- In EVERY final non-tool JSON response, include summary_update (one sentence, publicly observable facts only). No tattling in state_update or summary_update — both are shared with all players.\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
         "- If the scene does not advance yet, still restate the current chapter/scene indexes from STORY_CONTEXT in state_update.\n"
