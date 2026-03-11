@@ -229,6 +229,7 @@ class GPT:
         return client.chat.completions.create(**request_kwargs)
 
     _ZAI_TTFT_TIMEOUT = 10  # seconds; kill and retry if no content token arrives
+    _CLI_STREAM_TIMEOUT = 120  # seconds; generous for CLI backends (thinking phases)
 
     class _TTFTTimeout(Exception):
         """Raised when the first content token takes too long."""
@@ -628,12 +629,12 @@ class GPT:
             while True:
                 future = executor.submit(_readline)
                 try:
-                    line = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
+                    line = future.result(timeout=self._CLI_STREAM_TIMEOUT)
                 except FuturesTimeout:
                     future.cancel()
                     proc.kill()
                     raise self._TTFTTimeout("Claude CLI stream silent for "
-                                            f"{self._ZAI_TTFT_TIMEOUT}s")
+                                            f"{self._CLI_STREAM_TIMEOUT}s")
                 if not line:
                     break
                 line = line.strip()
