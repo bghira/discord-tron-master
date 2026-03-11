@@ -36,6 +36,7 @@ logger.setLevel("INFO")
 _ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
 _ZORK_LOG_STATE = threading.local()
 _ZORK_LOG_RETENTION = 100
+_ZORK_LOG_ARCHIVE_PREFIX = "turn-"
 
 
 def _zork_log_component(value: object, default: str) -> str:
@@ -74,23 +75,23 @@ def _zork_log_context_dir(
     return os.path.join(_ZORK_LOG_ROOT, "global")
 
 
-def _zork_log_numeric_entries(dir_path: str) -> list[tuple[int, str]]:
-    entries: list[tuple[int, str]] = []
+def _zork_log_archive_entries(dir_path: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
     try:
         names = os.listdir(dir_path)
     except OSError:
         return entries
     for name in names:
-        match = re.fullmatch(r"(\d+)\.log", name)
+        match = re.fullmatch(rf"{re.escape(_ZORK_LOG_ARCHIVE_PREFIX)}([0-9-]+)\.log", name)
         if not match:
             continue
-        entries.append((int(match.group(1)), os.path.join(dir_path, name)))
+        entries.append((str(match.group(1)), os.path.join(dir_path, name)))
     entries.sort(key=lambda item: item[0])
     return entries
 
 
 def _zork_log_prune_dir(dir_path: str, keep: int = _ZORK_LOG_RETENTION) -> None:
-    entries = _zork_log_numeric_entries(dir_path)
+    entries = _zork_log_archive_entries(dir_path)
     while len(entries) > keep:
         _, path = entries.pop(0)
         try:
@@ -99,12 +100,42 @@ def _zork_log_prune_dir(dir_path: str, keep: int = _ZORK_LOG_RETENTION) -> None:
             break
 
 
-def _zork_log_next_turn_path(dir_path: str) -> str:
+def _zork_log_rotate_latest_path(latest_path: str) -> None:
+    if not latest_path or not os.path.exists(latest_path):
+        return
+    dir_path = os.path.dirname(latest_path)
     os.makedirs(dir_path, exist_ok=True)
-    entries = _zork_log_numeric_entries(dir_path)
-    next_idx = (entries[-1][0] if entries else 0) + 1
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    archive_path = os.path.join(
+        dir_path, f"{_ZORK_LOG_ARCHIVE_PREFIX}{stamp}.log"
+    )
+    counter = 1
+    while os.path.exists(archive_path):
+        archive_path = os.path.join(
+            dir_path, f"{_ZORK_LOG_ARCHIVE_PREFIX}{stamp}-{counter}.log"
+        )
+        counter += 1
+    try:
+        os.replace(latest_path, archive_path)
+    except OSError:
+        return
     _zork_log_prune_dir(dir_path, keep=max(0, _ZORK_LOG_RETENTION - 1))
-    return os.path.join(dir_path, f"{next_idx}.log")
+
+
+def _zork_log_latest_turn_path(
+    dir_path: str,
+    *,
+    user_id: object = None,
+    is_dm: bool = False,
+) -> str:
+    os.makedirs(dir_path, exist_ok=True)
+    if is_dm:
+        latest_name = "latest.log"
+    else:
+        latest_name = f"latest-{_zork_log_component(user_id, 'user')}.log"
+    latest_path = os.path.join(dir_path, latest_name)
+    _zork_log_rotate_latest_path(latest_path)
+    return latest_path
 
 
 def _zork_log_push_path(path: str) -> Optional[str]:
@@ -17182,7 +17213,13 @@ class ZorkEmulator:
             channel_id=None if is_dm else channel_id,
             user_id=user_id if is_dm else None,
         )
-        return _zork_log_push_path(_zork_log_next_turn_path(dir_path))
+        return _zork_log_push_path(
+            _zork_log_latest_turn_path(
+                dir_path,
+                user_id=user_id,
+                is_dm=is_dm,
+            )
+        )
 
     @classmethod
     def _pop_contextual_turn_log_scope(cls, token: Optional[str]) -> None:
