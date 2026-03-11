@@ -3194,6 +3194,55 @@ class ZorkEmulator:
         return player_match and npc_match
 
     @classmethod
+    def _turn_visible_in_recent_turns_context(
+        cls,
+        turn: ZorkTurn,
+        *,
+        viewer_user_id: int,
+        viewer_slug: str,
+        viewer_location_key: str,
+        viewer_private_context_key: str,
+    ) -> bool:
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        if isinstance(visibility, dict):
+            scope = str(visibility.get("scope") or "").strip().lower()
+            turn_context_key = str(
+                visibility.get("context_key") or meta.get("context_key") or ""
+            ).strip()
+            turn_location_keys = {
+                k for k in (
+                    cls._normalize_location_key(visibility.get("location_key")),
+                    cls._normalize_location_key(meta.get("location_key")),
+                ) if k
+            }
+            viewer_location_key_norm = cls._normalize_location_key(viewer_location_key)
+            if scope in {"", "public"}:
+                return True
+            if scope == "local":
+                return bool(
+                    viewer_location_key_norm
+                    and turn_location_keys
+                    and viewer_location_key_norm in turn_location_keys
+                )
+            if scope in {"private", "limited"} and turn_context_key:
+                return cls._turn_visible_to_viewer(
+                    turn,
+                    viewer_user_id,
+                    viewer_slug,
+                    viewer_location_key,
+                    viewer_private_context_key,
+                )
+            return False
+        return cls._turn_visible_to_viewer(
+            turn,
+            viewer_user_id,
+            viewer_slug,
+            viewer_location_key,
+            viewer_private_context_key,
+        )
+
+    @classmethod
     def _recent_turns_text_for_viewer(
         cls,
         campaign: ZorkCampaign,
@@ -3229,45 +3278,13 @@ class ZorkEmulator:
             if not content:
                 continue
             meta = cls._safe_turn_meta(turn)
-            visibility = meta.get("visibility")
-            visible = False
-            if isinstance(visibility, dict):
-                scope = str(visibility.get("scope") or "").strip().lower()
-                turn_context_key = str(
-                    visibility.get("context_key") or meta.get("context_key") or ""
-                ).strip()
-                turn_location_keys = {
-                    k for k in (
-                        cls._normalize_location_key(visibility.get("location_key")),
-                        cls._normalize_location_key(meta.get("location_key")),
-                    ) if k
-                }
-                if scope in {"", "public"}:
-                    visible = True
-                elif scope == "local":
-                    visible = bool(
-                        viewer_location_key_norm
-                        and turn_location_keys
-                        and viewer_location_key_norm in turn_location_keys
-                    )
-                elif scope in {"private", "limited"} and turn_context_key:
-                    visible = cls._turn_visible_to_viewer(
-                        turn,
-                        viewer_user_id,
-                        viewer_slug,
-                        viewer_location_key,
-                        viewer_private_context_key,
-                    )
-                else:
-                    visible = False
-            else:
-                visible = cls._turn_visible_to_viewer(
-                    turn,
-                    viewer_user_id,
-                    viewer_slug,
-                    viewer_location_key,
-                    viewer_private_context_key,
-                )
+            visible = cls._turn_visible_in_recent_turns_context(
+                turn,
+                viewer_user_id=viewer_user_id,
+                viewer_slug=viewer_slug,
+                viewer_location_key=viewer_location_key,
+                viewer_private_context_key=viewer_private_context_key,
+            )
             if (
                 not visible
                 and (requested_player_slugs or requested_npc_slugs)
@@ -8633,12 +8650,12 @@ class ZorkEmulator:
                     continue
                 if turn.kind != "narrator":
                     continue
-                if not cls._turn_visible_to_viewer(
+                if not cls._turn_visible_in_recent_turns_context(
                     turn,
-                    viewer_user_id,
-                    viewer_slug,
-                    viewer_location_key,
-                    viewer_private_context_key,
+                    viewer_user_id=viewer_user_id,
+                    viewer_slug=viewer_slug,
+                    viewer_location_key=viewer_location_key,
+                    viewer_private_context_key=viewer_private_context_key,
                 ):
                     continue
                 meta = cls._safe_turn_meta(turn)
