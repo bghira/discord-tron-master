@@ -18822,6 +18822,7 @@ class ZorkEmulator:
         viewer_private_context = preflight.viewer_private_context
         private_context_candidate = preflight.private_context_candidate
         sms_activity_detected = preflight.sms_activity_detected
+        sms_inline_draft = preflight.sms_inline_draft
         is_dm = preflight.is_dm
         channel_id = preflight.channel_id
         on_rails = preflight.on_rails
