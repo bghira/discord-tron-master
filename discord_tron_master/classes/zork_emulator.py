@@ -19350,7 +19350,7 @@ class ZorkEmulator:
                 # Build PC name list for the dialogue restriction reminder
                 _pc_names_for_reminder = [
                     str(p.get("name") or p.get("player_slug") or "")
-                    for p in _campaign_players
+                    for p in party_snapshot
                     if str(p.get("name") or p.get("player_slug") or "").strip()
                 ]
                 tool_result_block = (
