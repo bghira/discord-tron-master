@@ -21205,6 +21205,39 @@ class ZorkEmulator:
                         _repair_payload = cls._parse_json_lenient(
                             _repair_json
                         )
+                        # Guard: if repair returned a tool_call, re-prompt
+                        if isinstance(_repair_payload, dict) and cls._is_tool_call(_repair_payload):
+                            _zork_log(
+                                "EMPTY PAYLOAD REPAIR returned tool_call (rejected)",
+                                _repair_response[:300],
+                            )
+                            _repair2_resp = await gpt.turbo_completion(
+                                system_prompt,
+                                (
+                                    f"{tool_augmented_prompt}\n"
+                                    "Your previous responses were NOT player-facing narration. "
+                                    "Do NOT return a tool_call. Return the final in-character "
+                                    "narration JSON with reasoning, scene_output, narration, "
+                                    "state_update, summary_update. Write the scene NOW.\n"
+                                ),
+                                temperature=0.8,
+                                max_tokens=2048,
+                            )
+                            if _repair2_resp:
+                                _repair2_resp = cls._clean_response(_repair2_resp)
+                                _repair2_json = cls._extract_json(_repair2_resp)
+                                if _repair2_json:
+                                    _repair2_payload = cls._parse_json_lenient(_repair2_json)
+                                    if isinstance(_repair2_payload, dict) and not cls._is_tool_call(_repair2_payload):
+                                        _repair_payload = _repair2_payload
+                                        _repair_response = _repair2_resp
+                                    else:
+                                        _zork_log(
+                                            "EMPTY PAYLOAD REPAIR 2nd attempt still tool_call (giving up)",
+                                            str(_repair2_resp or "")[:300],
+                                        )
+                                        raise ValueError("repair returned tool_call twice")
+
                         scene_output_raw = _repair_payload.get(
                             "scene_output"
                         )
@@ -21292,6 +21325,12 @@ class ZorkEmulator:
                         _clock_payload = cls._parse_json_lenient(
                             _clock_retry_json
                         )
+                        if isinstance(_clock_payload, dict) and cls._is_tool_call(_clock_payload):
+                            _zork_log(
+                                "CLOCK DRIFT REPAIR returned tool_call (ignored)",
+                                _clock_retry_resp[:300],
+                            )
+                            raise ValueError("clock drift repair returned tool_call")
                         scene_output_raw = _clock_payload.get(
                             "scene_output"
                         )
@@ -21362,6 +21401,12 @@ class ZorkEmulator:
                         _anti_payload = cls._parse_json_lenient(
                             _anti_echo_json
                         )
+                        if isinstance(_anti_payload, dict) and cls._is_tool_call(_anti_payload):
+                            _zork_log(
+                                "ANTI-ECHO REPAIR returned tool_call (ignored)",
+                                _anti_echo_resp[:300],
+                            )
+                            raise ValueError("anti-echo repair returned tool_call")
                         scene_output_raw = _anti_payload.get(
                             "scene_output"
                         )
