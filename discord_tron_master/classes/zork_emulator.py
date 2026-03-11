@@ -909,7 +909,6 @@ class ZorkEmulator:
         "- Not loaded by default. If you need immediate scene continuity, ask for it with the recent_turns tool.\n"
         "- When loaded, includes turn/time tags like [TURN #N | Day D HH:MM]. Use them to track pacing and chronology.\n"
         "- Already filtered to what the acting player plausibly knows. Hidden/private turns from unrelated players are omitted.\n"
-        "- CURRENTLY_ATTENTIVE_PLAYERS lists players active within ATTENTION_WINDOW_SECONDS. Use it to pace time and scene focus.\n"
         "Source material:\n"
         "- When SOURCE_MATERIAL_DOCS is present, treat it as canon. Source lookup should be part of your research plan "
         "before asserting key plot facts, but only query the relevant subset for this turn.\n"
@@ -962,7 +961,7 @@ class ZorkEmulator:
         "- Source-material memory search should only be enabled when the current player action explicitly asks for canon recall/details.\n"
         "- Do NOT call memory_search, memory_terms, memory_turn, or memory_store.\n"
         "- You may still call recent_turns for immediate visible continuity.\n"
-        "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, CURRENTLY_ATTENTIVE_PLAYERS, and recent_turns when needed.\n"
+        "- Use WORLD_SUMMARY, WORLD_STATE, WORLD_CHARACTERS, PARTY_SNAPSHOT, and recent_turns when needed.\n"
     )
     # RECENT_TURNS_TOOL_PROMPT removed — recent_turns is now preloaded by heuristic.
     # MEMORY_BOOTSTRAP_TOOL_PROMPT removed — bootstrap phase eliminated.
@@ -1214,9 +1213,8 @@ class ZorkEmulator:
         "Every turn, you MUST advance game_time in state_update by a plausible amount "
         "(minutes for quick actions, hours for travel, etc.). "
         "Scale the advance by SPEED_MULTIPLIER — at 2x, time passes roughly twice as fast per turn.\n"
-        "Use CURRENTLY_ATTENTIVE_PLAYERS for pacing: if only one player is attentive and no immediate deadline is active, "
-        "prefer larger jumps (15-90 minutes or to the next meaningful beat) instead of repeated 5-10 minute increments.\n"
-        "If multiple players are currently attentive in the same campaign, keep finer-grained time only when needed to preserve shared-scene coherence.\n"
+        "Pace game_time by scene needs: prefer larger jumps (15-90 minutes or to the next meaningful beat) when no immediate deadline is active, "
+        "and keep finer-grained time only when needed to preserve shared-scene coherence.\n"
         "Update these fields in state_update:\n"
         '- "game_time": {"day": int, "hour": int (0-23), "minute": int (0-59), '
         '"period": "morning"|"afternoon"|"evening"|"night", '
@@ -8672,7 +8670,12 @@ class ZorkEmulator:
                     )
                 _append_if_relevant(recent_lines, summary_candidate)
 
-        lines = persisted_lines + recent_lines
+        # The persisted campaign.summary blob predates visibility-aware
+        # composition and may contain global/stale lines from scenes the current
+        # viewer should not see. Once we have usable recent narrator history for
+        # this viewer, prefer that scoped history and treat the persisted blob as
+        # fallback only.
+        lines = recent_lines if recent_lines else persisted_lines
 
         if not lines:
             active_chapters = cls._chapters_for_prompt(
@@ -16407,8 +16410,6 @@ class ZorkEmulator:
             f"CURRENT_GAME_TIME: {cls._dump_json(_game_time)}\n"
             f"SPEED_MULTIPLIER: {_speed_mult}\n"
             f"DIFFICULTY: {_difficulty}\n"
-            f"ATTENTION_WINDOW_SECONDS: {cls.ATTENTION_WINDOW_SECONDS}\n"
-            f"CURRENTLY_ATTENTIVE_PLAYERS: {cls._dump_json(_currently_attentive)}\n"
             f"CAMPAIGN_PLAYERS: {cls._dump_json(_campaign_players)}\n"
             f"ACTIVE_PLAYER_LOCATION: {cls._dump_json(_active_location_context)}\n"
             f"ACTIVE_PRIVATE_CONTEXT: {cls._dump_json(_viewer_private_context or {})}\n"
