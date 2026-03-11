@@ -720,7 +720,7 @@ class ZorkEmulator:
         '  Example beat: {"reasoning":"Sasha is present and hears this.","type":"npc_dialogue","speaker":"sasha","actors":["sasha"],"listeners":["deshawn-williams"],"visibility":"local","aware_discord_ids":[1234567890],"aware_npc_slugs":["sasha"],"text":"\\"Keep moving.\\""}\n'
         '  Action beat: {"reasoning":"Chris physically moves the jar while Rent watches.","type":"action","speaker":"chris-crawly","actors":["chris-crawly"],"listeners":["rent"],"visibility":"local","aware_discord_ids":[],"aware_npc_slugs":["rent"],"text":"Chris angles the jar toward the pocket."}\n'
         "- state_update: REQUIRED every turn. Must include game_time, current_chapter, current_scene.\n"
-        "- summary_update: REQUIRED every turn. One sentence. Lasting change or current dramatic state.\n"
+        "- summary_update: REQUIRED every turn. One sentence. Lasting change or current dramatic state. Write for a PUBLIC audience — never include confidential, intimate, or private details (secrets shared in confidence, private conversations, hidden motives). Those belong in narration and state_update, not here.\n"
         "Optional keys:\n"
         "- xp_awarded: integer (0-10)\n"
         "- player_state_update: see PLAYER STATE section\n"
@@ -1137,7 +1137,7 @@ class ZorkEmulator:
         "- Adjust pacing/details within scenes, but major plot points must match the outline.\n"
         "- In EVERY final non-tool JSON response, include state_update.current_chapter and state_update.current_scene explicitly.\n"
         "- In EVERY final non-tool JSON response, include state_update.game_time explicitly.\n"
-        "- In EVERY final non-tool JSON response, include summary_update (one sentence of lasting change or current dramatic state).\n"
+        "- In EVERY final non-tool JSON response, include summary_update (one sentence of lasting change or current dramatic state — public-safe, no secrets or private details).\n"
         "- Use state_update.current_chapter / state_update.current_scene to advance.\n"
         "- When a scene beat completes, advance to the next scene in the SAME turn instead of leaving STORY_CONTEXT unchanged.\n"
         "- If the scene does not advance yet, still restate the current chapter/scene indexes from STORY_CONTEXT in state_update.\n"
@@ -17977,10 +17977,9 @@ class ZorkEmulator:
             )
             campaign.state_json = cls._dump_json(campaign_state)
 
-        _turn_is_public = (
-            str((turn_visibility or {}).get("scope") or "").strip().lower()
-            in {"public", "local"}
-        )
+        _turn_scope = str((turn_visibility or {}).get("scope") or "").strip().lower()
+        _turn_is_public = _turn_scope in {"public", "local"}
+        _turn_is_global_public = _turn_scope == "public"
 
         # Player state update application
         player_state = cls.get_player_state(player)
@@ -18225,9 +18224,9 @@ class ZorkEmulator:
         if summary_update:
             summary_update = summary_update.strip()
             summary_update = cls._strip_inventory_mentions(summary_update)
-            if not _turn_is_public:
+            if not _turn_is_global_public:
                 _zork_log(
-                    f"SUMMARY FILTERED (non-public turn) campaign={campaign.id}",
+                    f"SUMMARY FILTERED (non-global-public turn, scope={_turn_scope!r}) campaign={campaign.id}",
                     summary_update,
                 )
             elif not cls._scene_output_is_summary_public_safe(scene_output):
@@ -21719,17 +21718,15 @@ class ZorkEmulator:
                         )
                         campaign.state_json = cls._dump_json(campaign_state)
 
-                    _turn_is_public = (
-                        str((turn_visibility or {}).get("scope") or "").strip().lower()
-                        in {"public", "local"}
-                    )
+                    _timed_turn_scope = str((turn_visibility or {}).get("scope") or "").strip().lower()
+                    _turn_is_global_public = _timed_turn_scope == "public"
 
                     if summary_update:
                         summary_update = summary_update.strip()
                         summary_update = cls._strip_inventory_mentions(summary_update)
-                        if not _turn_is_public:
+                        if not _turn_is_global_public:
                             _zork_log(
-                                f"SUMMARY FILTERED (non-public timed event) campaign={campaign.id}",
+                                f"SUMMARY FILTERED (non-global-public timed event, scope={_timed_turn_scope!r}) campaign={campaign.id}",
                                 summary_update,
                             )
                         elif not cls._scene_output_is_summary_public_safe(scene_output_raw):
