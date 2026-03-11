@@ -239,37 +239,44 @@ class GPT:
         Detects tool_call JSON early and stops reading once the JSON
         object closes, avoiding wasted time on trailing tokens.
 
-        Raises ``_TTFTTimeout`` if no content token arrives within
-        ``_ZAI_TTFT_TIMEOUT`` seconds so the caller can retry.
+        Raises ``_TTFTTimeout`` if the stream goes silent (no chunks of
+        any kind) for ``_ZAI_TTFT_TIMEOUT`` seconds, indicating a stalled
+        connection.  Thinking-phase chunks count as activity.
         """
         import time
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
         chunks = []
         brace_depth = 0
         in_json = False
         found_tool_call = False
-        first_content_received = False
-        t_start = time.monotonic()
+        stream_iter = iter(stream)
 
+        def _next_chunk():
+            return next(stream_iter)
+
+        executor = ThreadPoolExecutor(max_workers=1)
         try:
-            for chunk in stream:
+            while True:
+                # Block until the next chunk or timeout
+                future = executor.submit(_next_chunk)
+                try:
+                    chunk = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
+                except FuturesTimeout:
+                    future.cancel()
+                    stream.close()
+                    raise self._TTFTTimeout(
+                        f"Stream silent for {self._ZAI_TTFT_TIMEOUT}s"
+                    )
+                except StopIteration:
+                    break
+
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta is None:
-                    if not first_content_received and (time.monotonic() - t_start) > self._ZAI_TTFT_TIMEOUT:
-                        stream.close()
-                        raise self._TTFTTimeout(
-                            f"No content token within {self._ZAI_TTFT_TIMEOUT}s"
-                        )
                     continue
                 text = delta.content
                 if not text:
-                    if not first_content_received and (time.monotonic() - t_start) > self._ZAI_TTFT_TIMEOUT:
-                        stream.close()
-                        raise self._TTFTTimeout(
-                            f"No content token within {self._ZAI_TTFT_TIMEOUT}s"
-                        )
                     continue
-                first_content_received = True
                 chunks.append(text)
 
                 # Track JSON brace depth for early exit on tool calls
@@ -281,7 +288,6 @@ class GPT:
                     elif ch == '}':
                         brace_depth -= 1
                         if in_json and brace_depth == 0:
-                            # Complete JSON object received
                             so_far = "".join(chunks)
                             if '"tool_call"' in so_far and '"narration"' not in so_far:
                                 found_tool_call = True
@@ -293,6 +299,8 @@ class GPT:
             raise
         except Exception as e:
             logger.warning(f"Error during ZAI stream consumption: {e}")
+        finally:
+            executor.shutdown(wait=False)
 
         return "".join(chunks) or None
 
