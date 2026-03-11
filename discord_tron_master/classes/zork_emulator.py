@@ -654,12 +654,15 @@ class ZorkEmulator:
         "RECENT_TURNS has already been loaded for the acting player.\n"
         "Do NOT narrate yet unless the system explicitly says to finalize.\n"
         "Your job in this phase is to gather any deeper continuity, canon, SMS, plot, chapter, or consequence context that materially matters for this turn.\n"
-        "When research is sufficient, return ONLY {\"tool_call\": \"ready_to_write\"}.\n"
+        "When research is sufficient, return {\"tool_call\": \"ready_to_write\", \"speakers\": [...], \"listeners\": [...]} with all scene participant NPC/player slugs.\n"
     )
     READY_TO_WRITE_TOOL_PROMPT = (
         "\nYou have a ready_to_write tool for ending the research phase.\n"
-        "When you have enough context to write the turn, return ONLY:\n"
-        '{"tool_call": "ready_to_write"}\n'
+        "When you have enough context to write the turn, return:\n"
+        '{"tool_call": "ready_to_write", "speakers": ["npc-slug-1"], "listeners": ["npc-slug-2", "player-slug"]}\n'
+        "speakers = characters who will speak or act this turn. listeners = characters who observe/overhear.\n"
+        "Include ALL NPCs and players present in the upcoming scene. The harness uses this to filter context to the\n"
+        "LOWEST COMMON DENOMINATOR — only events that all scene participants could plausibly know about.\n"
         "Do not narrate in the same response as ready_to_write.\n"
         "If the player's communication mode/substance matters before narration, you may first request only the relevant communication rules:\n"
         '{"tool_call": "communication_rules", "keys": ["GM-RULE-COMMUNICATION-SOFTENING", "GM-RULE-SUBSTANCE-EXTRACTION"]}\n'
@@ -3095,6 +3098,72 @@ class ZorkEmulator:
         return bool(viewer_slug and viewer_slug in player_slugs)
 
     @classmethod
+    def _turn_visible_to_npc(
+        cls,
+        turn: ZorkTurn,
+        npc_slug: str,
+    ) -> bool:
+        """Check whether *npc_slug* would plausibly know about *turn*.
+
+        An NPC "knows" about a turn if:
+        - The turn has public scope, OR
+        - The NPC appeared as speaker/actor/listener/aware_npc in any beat
+        """
+        meta = cls._safe_turn_meta(turn)
+        visibility = meta.get("visibility")
+        if isinstance(visibility, dict):
+            scope = str(visibility.get("scope") or "").strip().lower()
+            if scope in {"", "public"}:
+                return True
+        elif not visibility:
+            # Legacy turns without visibility metadata — treat as public
+            return True
+
+        slug_norm = cls._player_slug_key(npc_slug)
+        if not slug_norm:
+            return False
+
+        # Check scene_output beats for NPC presence
+        scene_output = meta.get("scene_output")
+        if isinstance(scene_output, dict):
+            beats = scene_output.get("beats")
+            if isinstance(beats, list):
+                for beat in beats:
+                    if not isinstance(beat, dict):
+                        continue
+                    if cls._player_slug_key(beat.get("speaker")) == slug_norm:
+                        return True
+                    for field in ("actors", "listeners", "aware_npc_slugs"):
+                        entries = beat.get(field)
+                        if isinstance(entries, list):
+                            for entry in entries:
+                                if cls._player_slug_key(entry) == slug_norm:
+                                    return True
+
+        # Check turn-level visibility participant lists
+        if isinstance(visibility, dict):
+            for field in ("visible_player_slugs",):
+                raw = visibility.get(field)
+                if isinstance(raw, list):
+                    for entry in raw:
+                        if cls._player_slug_key(entry) == slug_norm:
+                            return True
+
+        return False
+
+    @classmethod
+    def _turn_visible_to_all_scene_npcs(
+        cls,
+        turn: ZorkTurn,
+        npc_slugs: set[str],
+    ) -> bool:
+        """Return True only if ALL listed NPCs would know about this turn."""
+        for npc_slug in npc_slugs:
+            if not cls._turn_visible_to_npc(turn, npc_slug):
+                return False
+        return True
+
+    @classmethod
     def _active_scene_npc_slugs(
         cls,
         campaign: ZorkCampaign,
@@ -3252,6 +3321,7 @@ class ZorkEmulator:
         viewer_private_context_key: str,
         requested_player_slugs: set[str],
         requested_npc_slugs: set[str],
+        scene_npc_slugs: Optional[set[str]] = None,
     ) -> str:
         recent_lines: List[str] = []
         _OOC_RE = re.compile(r"^\s*\[OOC\b", re.IGNORECASE)
@@ -3296,6 +3366,11 @@ class ZorkEmulator:
                 visible = True
             if not visible:
                 continue
+            # LCD filtering: skip turns that scene NPCs don't know about
+            if scene_npc_slugs and not cls._turn_visible_to_all_scene_npcs(
+                turn, scene_npc_slugs
+            ):
+                continue
 
             scene_output_lines = cls._scene_output_recent_lines(
                 turn,
@@ -3305,6 +3380,7 @@ class ZorkEmulator:
                 viewer_slug=viewer_slug,
                 viewer_location_key=viewer_location_key,
                 viewer_private_context_key=viewer_private_context_key,
+                scene_npc_slugs=scene_npc_slugs,
             )
             if scene_output_lines and turn.kind == "narrator":
                 recent_lines.extend(scene_output_lines)
@@ -3842,6 +3918,7 @@ class ZorkEmulator:
         viewer_slug: str = "",
         viewer_location_key: str = "",
         viewer_private_context_key: str = "",
+        scene_npc_slugs: Optional[set[str]] = None,
     ) -> List[str]:
         if not isinstance(scene_output, dict):
             return []
@@ -3925,6 +4002,23 @@ class ZorkEmulator:
                 )
             if not beat_visible:
                 continue
+            # LCD beat filter: skip beats that scene NPCs don't know about
+            if scene_npc_slugs and beat_visibility not in {"", "public"}:
+                beat_npc_slugs = {
+                    cls._player_slug_key(e)
+                    for e in (
+                        list(beat.get("actors") or [])
+                        + list(beat.get("listeners") or [])
+                        + list(beat.get("aware_npc_slugs") or [])
+                        + [beat.get("speaker")]
+                    )
+                    if cls._player_slug_key(e)
+                }
+                if not all(
+                    cls._player_slug_key(npc) in beat_npc_slugs
+                    for npc in scene_npc_slugs
+                ):
+                    continue
             lines.append(
                 json.dumps(
                     {
@@ -8610,6 +8704,7 @@ class ZorkEmulator:
         viewer_slug: str = "",
         viewer_location_key: str = "",
         viewer_private_context_key: str = "",
+        scene_npc_slugs: Optional[set[str]] = None,
         max_chars: Optional[int] = None,
     ) -> str:
         raw_summary = cls._strip_inventory_mentions(campaign.summary or "")
@@ -8648,18 +8743,24 @@ class ZorkEmulator:
                     continue
                 if turn.kind != "narrator":
                     continue
-                # Use the broader _turn_visible_to_viewer check rather
-                # than _turn_visible_in_recent_turns_context.  WORLD_SUMMARY
-                # represents the player's memory — they should see their
-                # own local/private experiences even after leaving that
-                # location, just like RECENT_TURNS can be expanded by the
-                # model to include the player's private interactions.
+                # Use the broader _turn_visible_to_viewer check —
+                # WORLD_SUMMARY represents the player's memory, so they
+                # see their own local/private experiences even after
+                # leaving that location.
                 if not cls._turn_visible_to_viewer(
                     turn,
                     viewer_user_id,
                     viewer_slug,
                     viewer_location_key,
                     viewer_private_context_key,
+                ):
+                    continue
+                # LCD filtering: when scene_npc_slugs is provided, only
+                # include turns that ALL scene NPCs also know about.
+                # This prevents the model from leaking information that
+                # an NPC participant couldn't plausibly know.
+                if scene_npc_slugs and not cls._turn_visible_to_all_scene_npcs(
+                    turn, scene_npc_slugs
                 ):
                     continue
                 meta = cls._safe_turn_meta(turn)
@@ -15610,7 +15711,8 @@ class ZorkEmulator:
                     "Use memory/source/SMS/planning tools only when they materially improve continuity."
                 ),
                 (
-                    'When research is sufficient, return ONLY {"tool_call": "ready_to_write"}. Do not narrate yet.'
+                    'When research is sufficient, return {"tool_call": "ready_to_write", "speakers": [...], "listeners": [...]} '
+                    'with ALL scene participant slugs. Do not narrate yet.'
                 ),
             )
         return cls._turn_response_style_note(
@@ -18967,12 +19069,70 @@ class ZorkEmulator:
 
             elif tool_name == "ready_to_write":
                 _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+
+                # Extract scene participants for LCD filtering
+                _rtw_speakers = first_payload.get("speakers") or []
+                _rtw_listeners = first_payload.get("listeners") or []
+                if isinstance(_rtw_speakers, str):
+                    _rtw_speakers = [_rtw_speakers]
+                if isinstance(_rtw_listeners, str):
+                    _rtw_listeners = [_rtw_listeners]
+                _rtw_npc_slugs: set[str] = set()
+                _viewer_slug_norm = cls._player_slug_key(viewer_slug)
+                for raw_slug in list(_rtw_speakers) + list(_rtw_listeners):
+                    slug = cls._player_slug_key(raw_slug)
+                    # Exclude the acting player — they're the viewer,
+                    # not an NPC whose knowledge we need to constrain.
+                    if slug and slug != _viewer_slug_norm:
+                        _rtw_npc_slugs.add(slug)
+
+                # LCD-filtered WORLD_SUMMARY: only events ALL scene
+                # participants (player + NPCs) would know about.
+                _lcd_summary = ""
+                _lcd_recent = ""
+                if _rtw_npc_slugs:
+                    _lcd_summary = cls._compose_world_summary(
+                        campaign,
+                        cls.get_campaign_state(campaign),
+                        turns=turns,
+                        viewer_user_id=user_id,
+                        viewer_slug=viewer_slug,
+                        viewer_location_key=viewer_location_key,
+                        viewer_private_context_key=viewer_private_context_key,
+                        scene_npc_slugs=_rtw_npc_slugs,
+                        max_chars=cls.MAX_SUMMARY_CHARS,
+                    )
+                    _lcd_recent_turns = cls.get_recent_turns(
+                        campaign.id,
+                        limit=cls.MAX_RECENT_TURNS,
+                    )
+                    _lcd_recent = cls._recent_turns_text_for_viewer(
+                        campaign,
+                        _lcd_recent_turns,
+                        viewer_user_id=user_id,
+                        viewer_slug=viewer_slug,
+                        viewer_location_key=viewer_location_key,
+                        viewer_private_context_key=viewer_private_context_key,
+                        requested_player_slugs=set(),
+                        requested_npc_slugs=_rtw_npc_slugs,
+                        scene_npc_slugs=_rtw_npc_slugs,
+                    )
+
                 tool_result_block = (
                     "RESEARCH_COMPLETE: Context gathering is complete.\n"
                     "Do NOT call any more tools now. Return final narration/state JSON directly.\n"
                     "REQUIRED fields: reasoning, scene_output, narration, state_update (with game_time/current_chapter/current_scene), summary_update.\n"
-                    + cls.WRITING_CRAFT_PROMPT
                 )
+                if _rtw_npc_slugs:
+                    tool_result_block += (
+                        f"\nSCENE_PARTICIPANTS_LCD: speakers={sorted(_rtw_speakers)} listeners={sorted(_rtw_listeners)}\n"
+                        "The following WORLD_SUMMARY and RECENT_TURNS are filtered to the LOWEST COMMON DENOMINATOR — "
+                        "only events that ALL scene participants (including NPCs) would plausibly know about. "
+                        "Use ONLY this context for writing. Do not reference events that an NPC participant could not know.\n"
+                        f"\nWORLD_SUMMARY_LCD: {_lcd_summary or '(empty)'}\n"
+                        f"\nRECENT_TURNS_LCD:\n{_lcd_recent}\n"
+                    )
+                tool_result_block += cls.WRITING_CRAFT_PROMPT
                 _zork_log("READY TO WRITE", tool_result_block)
                 _append_tool_prompt(tool_result_block)
                 response = await _turn_model_call(
