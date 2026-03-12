@@ -4034,8 +4034,10 @@ class ZorkEmulator:
                 )
             if not beat_visible:
                 continue
-            # LCD beat filter: skip beats that scene NPCs don't know about
-            if scene_npc_slugs and beat_visibility not in {"", "public"}:
+            # LCD beat filter: same-room local beats are included by default
+            # for the current scene. Keep stricter participant checks for
+            # private/limited beats.
+            if scene_npc_slugs and beat_visibility not in {"", "public", "local"}:
                 beat_npc_slugs = {
                     cls._player_slug_key(e)
                     for e in (
@@ -8794,15 +8796,35 @@ class ZorkEmulator:
                     viewer_private_context_key,
                 ):
                     continue
-                # LCD filtering: when scene_npc_slugs is provided, only
-                # include turns that ALL scene NPCs also know about.
-                # This prevents the model from leaking information that
-                # an NPC participant couldn't plausibly know.
-                if scene_npc_slugs and not cls._turn_visible_to_all_scene_npcs(
-                    turn, scene_npc_slugs
-                ):
-                    continue
                 meta = cls._safe_turn_meta(turn)
+                # LCD filtering: same-room local turns are available by
+                # default to current-scene NPCs even when the beat did not
+                # explicitly enumerate them as listeners/speakers. Keep
+                # stricter participant checks for private/limited turns.
+                if scene_npc_slugs:
+                    _vis = meta.get("visibility")
+                    _scope = (
+                        str(_vis.get("scope") or "").strip().lower()
+                        if isinstance(_vis, dict)
+                        else ""
+                    )
+                    _turn_loc = (
+                        (_vis.get("location_key") if isinstance(_vis, dict) else None)
+                        or meta.get("location_key")
+                    )
+                    same_room_local_turn = bool(
+                        _scope == "local"
+                        and viewer_location_key
+                        and cls._normalize_location_key(_turn_loc)
+                        == cls._normalize_location_key(viewer_location_key)
+                    )
+                    if (
+                        not same_room_local_turn
+                        and not cls._turn_visible_to_all_scene_npcs(
+                            turn, scene_npc_slugs
+                        )
+                    ):
+                        continue
                 if bool(meta.get("suppress_context")):
                     continue
                 summary_candidate = meta.get("summary_update")
