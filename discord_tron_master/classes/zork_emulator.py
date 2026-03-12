@@ -11723,6 +11723,128 @@ class ZorkEmulator:
         return 1
 
     @classmethod
+    def _state_container_matches_location(
+        cls,
+        container_key: object,
+        location_value: object,
+    ) -> bool:
+        container_norm = cls._normalize_location_key(container_key)
+        location_norm = cls._normalize_location_key(location_value)
+        if not container_norm or not location_norm:
+            return False
+        return (
+            container_norm == location_norm
+            or location_norm.endswith(container_norm)
+            or container_norm.endswith(location_norm)
+        )
+
+    @classmethod
+    def _canonical_location_for_state_container(
+        cls,
+        campaign: ZorkCampaign,
+        campaign_state: Dict[str, object],
+        container_key: object,
+        *,
+        player_state: Optional[Dict[str, object]] = None,
+        player_registry: Optional[Dict[str, Dict[object, Dict[str, object]]]] = None,
+        characters: Optional[Dict[str, dict]] = None,
+    ) -> Optional[str]:
+        container_text = str(container_key or "").strip()
+        if not container_text:
+            return None
+        candidates: set[str] = set()
+        if isinstance(player_state, dict):
+            loc = str(player_state.get("location") or "").strip()
+            if loc and cls._state_container_matches_location(container_text, loc):
+                candidates.add(loc)
+        registry = player_registry or cls._campaign_player_registry(campaign.id)
+        by_user_id = registry.get("by_user_id", {}) if isinstance(registry, dict) else {}
+        for user_id in by_user_id:
+            row = ZorkPlayer.query.filter_by(
+                campaign_id=campaign.id,
+                user_id=user_id,
+            ).first()
+            if row is None:
+                continue
+            loc = str(cls.get_player_state(row).get("location") or "").strip()
+            if loc and cls._state_container_matches_location(container_text, loc):
+                candidates.add(loc)
+        char_map = characters if isinstance(characters, dict) else cls.get_campaign_characters(campaign)
+        if isinstance(char_map, dict):
+            for payload in char_map.values():
+                if isinstance(payload, dict):
+                    loc = str(payload.get("location") or "").strip()
+                    if loc and cls._state_container_matches_location(container_text, loc):
+                        candidates.add(loc)
+        if isinstance(campaign_state, dict):
+            for payload in campaign_state.values():
+                if isinstance(payload, dict):
+                    loc = str(payload.get("location") or "").strip()
+                    if loc and cls._state_container_matches_location(container_text, loc):
+                        candidates.add(loc)
+        if len(candidates) == 1:
+            return next(iter(candidates))
+        fallback = str(container_text).replace("_", "-").strip("-")
+        return fallback or None
+
+    @classmethod
+    def _consume_state_occupant_hints(
+        cls,
+        campaign: ZorkCampaign,
+        campaign_state: Dict[str, object],
+        state_update: Dict[str, object],
+        character_updates: Dict[str, object],
+        *,
+        player_state: Optional[Dict[str, object]] = None,
+    ) -> Tuple[Dict[str, object], Dict[str, object], int]:
+        if not isinstance(state_update, dict):
+            return {}, character_updates if isinstance(character_updates, dict) else {}, 0
+        if not isinstance(character_updates, dict):
+            character_updates = {}
+        characters = cls.get_campaign_characters(campaign)
+        registry = cls._campaign_player_registry(campaign.id)
+        consumed = 0
+        for state_key, value in list(state_update.items()):
+            if not isinstance(value, dict):
+                continue
+            container_location = cls._canonical_location_for_state_container(
+                campaign,
+                campaign_state,
+                state_key,
+                player_state=player_state,
+                player_registry=registry,
+                characters=characters,
+            )
+            for occupant_field in ("occupants", "occupied_by"):
+                raw_list = value.get(occupant_field)
+                if not isinstance(raw_list, list):
+                    continue
+                del value[occupant_field]
+                consumed += 1
+                if not container_location:
+                    continue
+                for item in raw_list:
+                    resolved_slug = cls._resolve_existing_character_slug(
+                        characters if isinstance(characters, dict) else {},
+                        item,
+                    )
+                    if not resolved_slug:
+                        continue
+                    current_update = character_updates.get(resolved_slug)
+                    if current_update is None:
+                        current_update = {}
+                    if not isinstance(current_update, dict):
+                        continue
+                    current_update.setdefault("location", container_location)
+                    character_updates[resolved_slug] = current_update
+        if consumed:
+            _zork_log(
+                "STATE OCCUPANT HINTS CONSUMED",
+                f"Removed {consumed} occupant field(s) from state_update and converted known NPCs to character_updates.",
+            )
+        return state_update, character_updates, consumed
+
+    @classmethod
     def total_points_for_level(cls, level: int) -> int:
         return cls.BASE_POINTS + max(level - 1, 0) * cls.POINTS_PER_LEVEL
 
@@ -18048,6 +18170,13 @@ class ZorkEmulator:
         state_update, player_state_update = cls._split_room_state(
             state_update, player_state_update
         )
+        state_update, character_updates, _occupant_hint_count = cls._consume_state_occupant_hints(
+            campaign,
+            campaign_state,
+            state_update if isinstance(state_update, dict) else {},
+            character_updates if isinstance(character_updates, dict) else {},
+            player_state=player_state,
+        )
 
         # Apply state update to campaign_state
         pre_turn_game_time = preflight.pre_turn_game_time
@@ -18123,6 +18252,12 @@ class ZorkEmulator:
                 campaign_state,
                 "anti_echo_retry",
                 amount=anti_echo_retry_count,
+            )
+        if _occupant_hint_count > 0:
+            cls._increment_auto_fix_counter(
+                campaign_state,
+                "state_occupant_hints_consumed",
+                amount=_occupant_hint_count,
             )
 
         campaign_state = cls._scrub_inventory_from_state(campaign_state)
@@ -22182,6 +22317,13 @@ class ZorkEmulator:
                         state_update,
                         calendar_update,
                     )
+                    state_update, character_updates, _occupant_hint_count = cls._consume_state_occupant_hints(
+                        campaign,
+                        campaign_state,
+                        state_update if isinstance(state_update, dict) else {},
+                        character_updates if isinstance(character_updates, dict) else {},
+                        player_state=player_state,
+                    )
                     pre_turn_game_time = cls._extract_game_time_snapshot(campaign_state)
 
                     # Merge state update with conflict resolution (instead of _apply_state_update)
@@ -22332,6 +22474,12 @@ class ZorkEmulator:
                             "location_auto_sync_roster_overlay",
                             amount=_roster_overlay_sync_count,
                         )
+                        if _occupant_hint_count:
+                            cls._increment_auto_fix_counter(
+                                campaign_state,
+                                "state_occupant_hints_consumed",
+                                amount=_occupant_hint_count,
+                            )
                         _zork_log(
                             f"LOCATION AUTO-SYNC (timed event) campaign={campaign.id}",
                             (
@@ -22340,6 +22488,12 @@ class ZorkEmulator:
                                 f"world_characters={_char_loc_sync_count} "
                                 f"roster_overlay={_roster_overlay_sync_count}"
                             ),
+                        )
+                    elif _occupant_hint_count:
+                        cls._increment_auto_fix_counter(
+                            campaign_state,
+                            "state_occupant_hints_consumed",
+                            amount=_occupant_hint_count,
                         )
                     _player_entity_sync_count = cls._sync_player_states_from_campaign_entities(
                         campaign,
