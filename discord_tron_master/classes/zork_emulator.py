@@ -4241,6 +4241,37 @@ class ZorkEmulator:
         ).strip()
 
     @classmethod
+    def _player_known_game_time(
+        cls,
+        player: Optional[ZorkPlayer],
+        *,
+        fallback_time: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, int]:
+        fallback_snapshot = cls._extract_game_time_snapshot(
+            {"game_time": fallback_time or {}}
+        )
+        if player is None:
+            return fallback_snapshot
+        player_state = cls.get_player_state(player)
+        known_time = player_state.get("game_time")
+        if not isinstance(known_time, dict) or not known_time:
+            return fallback_snapshot
+        return cls._extract_game_time_snapshot({"game_time": known_time})
+
+    @classmethod
+    def _set_player_known_game_time(
+        cls,
+        player: ZorkPlayer,
+        game_time: Dict[str, int],
+    ) -> None:
+        player_state = cls.get_player_state(player)
+        player_state["game_time"] = cls._game_time_from_total_minutes(
+            cls._game_time_to_total_minutes(game_time)
+        )
+        player.state_json = cls._dump_json(player_state)
+        player.updated = db.func.now()
+
+    @classmethod
     def _brief_event_summary(
         cls,
         *,
@@ -4312,6 +4343,7 @@ class ZorkEmulator:
     async def _send_private_dm_time_jump_notifications(
         cls,
         *,
+        campaign_id: int,
         campaign_name: str,
         recipient_user_ids: List[int],
         from_time: Dict[str, int],
@@ -4324,22 +4356,52 @@ class ZorkEmulator:
         bot_instance = DiscordBot.get_instance()
         if bot_instance is None or bot_instance.bot is None:
             return
-        from_label = cls._format_game_time_label(from_time)
-        to_label = cls._format_game_time_label(to_time)
-        message = (
-            f"**[Time Jump Notice]** `{campaign_name}` advanced by about {delta_minutes} in-world minutes.\n"
-            f"From: {from_label}\n"
-            f"To: {to_label}\n"
-            f"Cause: {event_summary}"
-        )
+        app = AppConfig.get_flask()
+        fallback_from_time = cls._extract_game_time_snapshot({"game_time": from_time})
+        to_snapshot = cls._extract_game_time_snapshot({"game_time": to_time})
+        to_total_minutes = cls._game_time_to_total_minutes(to_snapshot)
+        to_label = cls._format_game_time_label(to_snapshot)
         for user_id in recipient_user_ids:
             try:
+                recipient_from_time = fallback_from_time
+                if app is not None:
+                    with app.app_context():
+                        player = ZorkPlayer.query.filter_by(
+                            campaign_id=campaign_id,
+                            user_id=user_id,
+                        ).first()
+                        recipient_from_time = cls._player_known_game_time(
+                            player,
+                            fallback_time=fallback_from_time,
+                        )
+                recipient_from_total = cls._game_time_to_total_minutes(
+                    recipient_from_time
+                )
+                if recipient_from_total >= to_total_minutes:
+                    continue
+                recipient_delta_minutes = to_total_minutes - recipient_from_total
+                message = (
+                    f"**[Time Jump Notice]** `{campaign_name}` advanced by about "
+                    f"{recipient_delta_minutes} in-world minutes.\n"
+                    f"From: {cls._format_game_time_label(recipient_from_time)}\n"
+                    f"To: {to_label}\n"
+                    f"Cause: {event_summary}"
+                )
                 user = bot_instance.bot.get_user(user_id)
                 if user is None:
                     user = await bot_instance.bot.fetch_user(user_id)
                 if user is None:
                     continue
                 await DiscordBot.send_large_message(user, message)
+                if app is not None:
+                    with app.app_context():
+                        player = ZorkPlayer.query.filter_by(
+                            campaign_id=campaign_id,
+                            user_id=user_id,
+                        ).first()
+                        if player is not None:
+                            cls._set_player_known_game_time(player, to_snapshot)
+                            db.session.commit()
             except Exception:
                 logger.debug(
                     "Zork: failed to send DM time-jump notification to user %s",
@@ -5874,7 +5936,7 @@ class ZorkEmulator:
             "\n"
             "CONFRONTATION SINCERITY:\n"
             "For NPCs who challenge the player philosophically or morally (villains, tempters, nihilists, gatekeepers), add a CHAR-[NAME]-CONFRONTATION note. The GM must engage with the sincerity of the player's defiance even when the words are plain. 'You're wrong' spoken with conviction is a valid response. The NPC should not dismiss simple sincerity as naive or re-ask until the player delivers a philosophically sophisticated rebuttal. The NPC reacts to the stance, not the eloquence.\n"
-            "Avoid generic AI-default names for any new characters. Ban list: Morgan, Kai, River, Sage, Quinn, Riley, Jordan, Avery, Harper, Rowan, Blake, Skyler, Ash, Nova, Zara, Milo, Ezra, Luna; surnames: Chen, Mendoza, Nakamura, Patel, Rollins, Kim, Santos, Okafor, Volkov, Johansson, Delacroix, Venn, Sands, Kade, Park.\n"
+            "Avoid generic AI-default names for any new characters. Ban list: Morgan, Kai, River, Sage, Quinn, Riley, Jordan, Avery, Harper, Rowan, Blake, Skyler, Ash, Nova, Zara, Milo, Ezra, Luna, Marcus; surnames: Chen, Mendoza, Nakamura, Patel, Rollins, Kim, Santos, Okafor, Volkov, Johansson, Delacroix, Venn, Sands, Kade, Park.\n"
             "Preserve player agency, kindness, and genre tone. Unless the genre explicitly demands otherwise, do not invent trauma hooks or coercive plot pressure.\n"
             f"{source_tool_instructions}"
         )
@@ -18828,6 +18890,7 @@ class ZorkEmulator:
                 )
                 if recipients:
                     time_jump_notification = {
+                        "campaign_id": campaign.id,
                         "campaign_name": campaign.name,
                         "recipient_user_ids": recipients,
                         "from_time": pre_turn_game_time,
@@ -18987,6 +19050,9 @@ class ZorkEmulator:
         if isinstance(time_jump_notification, dict):
             asyncio.ensure_future(
                 cls._send_private_dm_time_jump_notifications(
+                    campaign_id=int(
+                        time_jump_notification.get("campaign_id") or campaign.id
+                    ),
                     campaign_name=str(
                         time_jump_notification.get("campaign_name") or campaign.name
                     ),
