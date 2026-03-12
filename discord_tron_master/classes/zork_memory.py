@@ -21,32 +21,48 @@ logger = logging.getLogger(__name__)
 # Embedding helpers – lazy-loaded on first use
 # ---------------------------------------------------------------------------
 
-_model = None
+_model_minilm = None
+_model_snowflake = None
 _model_lock = threading.Lock()
 _EMBED_DIM = 384
 _MAX_INPUT_CHARS = 512
 _SOURCE_SNIPPET_MAX_CHARS = 1200
 
-
-def _get_model():
-    """Return the sentence-transformer model, loading it on first call."""
-    global _model
-    if _model is not None:
-        return _model
-    with _model_lock:
-        if _model is not None:
-            return _model
-        from sentence_transformers import SentenceTransformer
-
-        _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-        return _model
+EMBED_SOURCE_MINILM = "minilm"
+EMBED_SOURCE_SNOWFLAKE = "snowflake"
+EMBED_SOURCE_DEFAULT = EMBED_SOURCE_SNOWFLAKE
 
 
-def _embed(text: str) -> bytes:
+def _get_model(source: str = EMBED_SOURCE_DEFAULT):
+    """Return the sentence-transformer model for *source*, loading it on first call."""
+    global _model_minilm, _model_snowflake
+    if source == EMBED_SOURCE_MINILM:
+        if _model_minilm is not None:
+            return _model_minilm
+        with _model_lock:
+            if _model_minilm is not None:
+                return _model_minilm
+            from sentence_transformers import SentenceTransformer
+
+            _model_minilm = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+            return _model_minilm
+    else:
+        if _model_snowflake is not None:
+            return _model_snowflake
+        with _model_lock:
+            if _model_snowflake is not None:
+                return _model_snowflake
+            from sentence_transformers import SentenceTransformer
+
+            _model_snowflake = SentenceTransformer("Snowflake/snowflake-arctic-embed-s")
+            return _model_snowflake
+
+
+def _embed(text: str, source: str = EMBED_SOURCE_DEFAULT) -> bytes:
     """Return *text*'s embedding as a compact bytes blob (384 × float32)."""
     import numpy as np
 
-    model = _get_model()
+    model = _get_model(source)
     truncated = text[:_MAX_INPUT_CHARS]
     vector = model.encode(truncated, normalize_embeddings=True)
     return np.asarray(vector, dtype=np.float32).tobytes()
@@ -57,6 +73,15 @@ def _bytes_to_vector(blob: bytes):
     import numpy as np
 
     return np.frombuffer(blob, dtype=np.float32)
+
+
+def _campaign_embed_sources(conn, table: str, campaign_id) -> set:
+    """Return the set of distinct embed_source values for a campaign in *table*."""
+    rows = conn.execute(
+        f"SELECT DISTINCT embed_source FROM {table} WHERE campaign_id = ?",
+        (campaign_id,),
+    ).fetchall()
+    return {str(r[0] or EMBED_SOURCE_MINILM) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +103,7 @@ CREATE TABLE IF NOT EXISTS turn_embeddings (
     visibility_scope  TEXT NOT NULL DEFAULT 'public',
     location_key      TEXT,
     channel_id        INTEGER,
+    embed_source TEXT NOT NULL DEFAULT 'minilm',
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_te_campaign ON turn_embeddings(campaign_id);
@@ -89,6 +115,7 @@ CREATE TABLE IF NOT EXISTS manual_memories (
     term        TEXT    NOT NULL,
     content     TEXT    NOT NULL,
     embedding   BLOB    NOT NULL,
+    embed_source TEXT NOT NULL DEFAULT 'minilm',
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_mm_campaign ON manual_memories(campaign_id);
@@ -103,6 +130,7 @@ CREATE TABLE IF NOT EXISTS source_material_chunks (
     chunk_index     INTEGER NOT NULL,
     chunk_text      TEXT    NOT NULL,
     embedding       BLOB    NOT NULL,
+    embed_source    TEXT NOT NULL DEFAULT 'minilm',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sm_campaign ON source_material_chunks(campaign_id);
@@ -181,6 +209,14 @@ class ZorkMemory:
             )
         for statement in alter_statements:
             conn.execute(statement)
+        for table_name in ("turn_embeddings", "manual_memories", "source_material_chunks"):
+            cols = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            col_names = {str(r[1] or "").strip() for r in cols}
+            if "embed_source" not in col_names:
+                conn.execute(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN embed_source TEXT NOT NULL DEFAULT 'minilm'"
+                )
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_te_campaign_visibility ON turn_embeddings(campaign_id, visibility_scope);
@@ -268,8 +304,8 @@ class ZorkMemory:
                 channel_id = None
             conn.execute(
                 "INSERT OR REPLACE INTO turn_embeddings "
-                "(turn_id, campaign_id, user_id, kind, content, embedding, actor_player_slug, visibility_scope, location_key, channel_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(turn_id, campaign_id, user_id, kind, content, embedding, actor_player_slug, visibility_scope, location_key, channel_id, embed_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     turn_id,
                     campaign_id,
@@ -281,6 +317,7 @@ class ZorkMemory:
                     visibility_scope,
                     location_key,
                     channel_id,
+                    EMBED_SOURCE_DEFAULT,
                 ),
             )
             conn.execute(
@@ -365,129 +402,132 @@ class ZorkMemory:
         import numpy as np
 
         try:
-            query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
+            sources = _campaign_embed_sources(conn, "turn_embeddings", campaign_id)
+            if not sources:
+                return []
             visibility_scope_raw = str(visibility_scope or "").strip().lower()
             viewer_slug_key = cls._normalize_slug(viewer_player_slug)
             viewer_location_key_clean = str(viewer_location_key or "").strip().lower()
             participant_slug_key = cls._normalize_slug(participant_slug)
             aware_npc_slug_key = cls._normalize_slug(aware_npc_slug)
-            sql = [
-                "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
-                "FROM turn_embeddings te",
-                "WHERE te.campaign_id = ?",
-            ]
-            params: List[object] = [campaign_id]
 
-            visibility_clauses: List[str] = []
-            if viewer_user_id is not None:
-                visibility_clauses.append(
-                    "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.user_id = ?)"
-                )
-                params.append(int(viewer_user_id))
-            if viewer_slug_key:
-                visibility_clauses.append(
-                    "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.player_slug = ?)"
-                )
-                params.append(viewer_slug_key)
-            viewer_location_key_clean = str(viewer_location_key or "").strip().lower()
-            if viewer_location_key_clean:
-                visibility_clauses.append(
-                    "(te.visibility_scope = 'local' AND LOWER(te.location_key) = ?)"
-                )
-                params.append(viewer_location_key_clean)
-            if visibility_clauses:
-                sql.append(
-                    "AND (te.visibility_scope = 'public' OR " + " OR ".join(visibility_clauses) + ")"
-                )
-
-            if participant_slug_key:
-                sql.append(
-                    "AND (te.actor_player_slug = ? OR EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp2 WHERE tvp2.turn_id = te.turn_id AND tvp2.player_slug = ?))"
-                )
-                params.extend([participant_slug_key, participant_slug_key])
-
-            if aware_npc_slug_key:
-                sql.append(
-                    "AND EXISTS (SELECT 1 FROM turn_embedding_aware_npcs tan WHERE tan.turn_id = te.turn_id AND tan.npc_slug = ?)"
-                )
-                params.append(aware_npc_slug_key)
-
-            if visibility_scope_raw in {"public", "private", "limited", "local"}:
-                visibility_scope_key = cls._normalize_visibility_scope(visibility_scope_raw)
-                sql.append("AND te.visibility_scope = ?")
-                params.append(visibility_scope_key)
-
-            rows = conn.execute("\n".join(sql), tuple(params)).fetchall()
-            legacy_turn_ids: set[int] = set()
-            if (
-                not visibility_scope_raw
-                and not participant_slug_key
-                and not aware_npc_slug_key
-            ):
-                legacy_sql = [
+            scored: List[Dict[str, object]] = []
+            for source in sources:
+                query_vec = _bytes_to_vector(_embed(query, source=source))
+                sql = [
                     "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
                     "FROM turn_embeddings te",
                     "WHERE te.campaign_id = ?",
-                    "AND te.visibility_scope = 'public'",
-                    "AND COALESCE(te.actor_player_slug, '') = ''",
-                    "AND COALESCE(te.location_key, '') = ''",
-                    "AND NOT EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id)",
+                    "AND te.embed_source = ?",
                 ]
-                legacy_params: List[object] = [campaign_id]
-                legacy_rows = conn.execute(
-                    "\n".join(legacy_sql), tuple(legacy_params)
-                ).fetchall()
-                existing_turn_ids = set()
-                for row in rows:
-                    try:
-                        existing_turn_ids.add(int(row[0]))
-                    except Exception:
-                        continue
-                merged_rows = list(rows)
-                for legacy_row in legacy_rows:
-                    try:
-                        legacy_turn_id = int(legacy_row[0])
-                    except Exception:
-                        continue
-                    if legacy_turn_id in existing_turn_ids:
-                        continue
-                    existing_turn_ids.add(legacy_turn_id)
-                    legacy_turn_ids.add(legacy_turn_id)
-                    merged_rows.append(legacy_row)
-                rows = merged_rows
-            if not rows:
-                return []
+                params: List[object] = [campaign_id, source]
 
-            scored: List[Dict[str, object]] = []
-            for (
-                turn_id,
-                kind,
-                content,
-                blob,
-                actor_player_slug,
-                row_visibility_scope,
-                location_key,
-            ) in rows:
-                vec = _bytes_to_vector(blob)
-                # Both vectors are already L2-normalised → dot == cosine sim.
-                score = float(np.dot(query_vec, vec))
-                scored.append(
-                    {
-                        "turn_id": int(turn_id),
-                        "kind": str(kind or ""),
-                        "content": str(content or ""),
-                        "score": score,
-                        "actor_player_slug": str(actor_player_slug or ""),
-                        "visibility_scope": (
-                            "legacy-unlabeled"
-                            if int(turn_id) in legacy_turn_ids
-                            else str(row_visibility_scope or "public")
-                        ),
-                        "location_key": str(location_key or ""),
-                        "legacy_visibility_unlabeled": int(turn_id) in legacy_turn_ids,
-                    }
-                )
+                visibility_clauses: List[str] = []
+                if viewer_user_id is not None:
+                    visibility_clauses.append(
+                        "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.user_id = ?)"
+                    )
+                    params.append(int(viewer_user_id))
+                if viewer_slug_key:
+                    visibility_clauses.append(
+                        "EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id AND tvp.player_slug = ?)"
+                    )
+                    params.append(viewer_slug_key)
+                if viewer_location_key_clean:
+                    visibility_clauses.append(
+                        "(te.visibility_scope = 'local' AND LOWER(te.location_key) = ?)"
+                    )
+                    params.append(viewer_location_key_clean)
+                if visibility_clauses:
+                    sql.append(
+                        "AND (te.visibility_scope = 'public' OR " + " OR ".join(visibility_clauses) + ")"
+                    )
+
+                if participant_slug_key:
+                    sql.append(
+                        "AND (te.actor_player_slug = ? OR EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp2 WHERE tvp2.turn_id = te.turn_id AND tvp2.player_slug = ?))"
+                    )
+                    params.extend([participant_slug_key, participant_slug_key])
+
+                if aware_npc_slug_key:
+                    sql.append(
+                        "AND EXISTS (SELECT 1 FROM turn_embedding_aware_npcs tan WHERE tan.turn_id = te.turn_id AND tan.npc_slug = ?)"
+                    )
+                    params.append(aware_npc_slug_key)
+
+                if visibility_scope_raw in {"public", "private", "limited", "local"}:
+                    visibility_scope_key = cls._normalize_visibility_scope(visibility_scope_raw)
+                    sql.append("AND te.visibility_scope = ?")
+                    params.append(visibility_scope_key)
+
+                rows = conn.execute("\n".join(sql), tuple(params)).fetchall()
+                legacy_turn_ids: set[int] = set()
+                if (
+                    not visibility_scope_raw
+                    and not participant_slug_key
+                    and not aware_npc_slug_key
+                ):
+                    legacy_sql = [
+                        "SELECT te.turn_id, te.kind, te.content, te.embedding, te.actor_player_slug, te.visibility_scope, te.location_key",
+                        "FROM turn_embeddings te",
+                        "WHERE te.campaign_id = ?",
+                        "AND te.embed_source = ?",
+                        "AND te.visibility_scope = 'public'",
+                        "AND COALESCE(te.actor_player_slug, '') = ''",
+                        "AND COALESCE(te.location_key, '') = ''",
+                        "AND NOT EXISTS (SELECT 1 FROM turn_embedding_visible_players tvp WHERE tvp.turn_id = te.turn_id)",
+                    ]
+                    legacy_params: List[object] = [campaign_id, source]
+                    legacy_rows = conn.execute(
+                        "\n".join(legacy_sql), tuple(legacy_params)
+                    ).fetchall()
+                    existing_turn_ids = set()
+                    for row in rows:
+                        try:
+                            existing_turn_ids.add(int(row[0]))
+                        except Exception:
+                            continue
+                    merged_rows = list(rows)
+                    for legacy_row in legacy_rows:
+                        try:
+                            legacy_turn_id = int(legacy_row[0])
+                        except Exception:
+                            continue
+                        if legacy_turn_id in existing_turn_ids:
+                            continue
+                        existing_turn_ids.add(legacy_turn_id)
+                        legacy_turn_ids.add(legacy_turn_id)
+                        merged_rows.append(legacy_row)
+                    rows = merged_rows
+
+                for (
+                    turn_id,
+                    kind,
+                    content,
+                    blob,
+                    actor_player_slug,
+                    row_visibility_scope,
+                    location_key,
+                ) in rows:
+                    vec = _bytes_to_vector(blob)
+                    score = float(np.dot(query_vec, vec))
+                    scored.append(
+                        {
+                            "turn_id": int(turn_id),
+                            "kind": str(kind or ""),
+                            "content": str(content or ""),
+                            "score": score,
+                            "actor_player_slug": str(actor_player_slug or ""),
+                            "visibility_scope": (
+                                "legacy-unlabeled"
+                                if int(turn_id) in legacy_turn_ids
+                                else str(row_visibility_scope or "public")
+                            ),
+                            "location_key": str(location_key or ""),
+                            "legacy_visibility_unlabeled": int(turn_id) in legacy_turn_ids,
+                        }
+                    )
 
             scored.sort(key=lambda t: float(t.get("score") or 0.0), reverse=True)
             return scored[:top_k]
@@ -596,10 +636,10 @@ class ZorkMemory:
             conn.execute(
                 """
                 INSERT INTO manual_memories
-                (campaign_id, category, term, content, embedding)
-                VALUES (?, ?, ?, ?, ?)
+                (campaign_id, category, term, content, embedding, embed_source)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (campaign_id, category_clean, term_clean, content_clean, blob),
+                (campaign_id, category_clean, term_clean, content_clean, blob, EMBED_SOURCE_DEFAULT),
             )
             conn.commit()
             return True, "stored"
@@ -623,33 +663,38 @@ class ZorkMemory:
         import numpy as np
 
         try:
-            query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
-            if category and str(category).strip():
-                category_key = cls._normalize_key(str(category))
-                rows = conn.execute(
-                    """
-                    SELECT category, content, embedding
-                    FROM manual_memories
-                    WHERE campaign_id = ? AND category = ?
-                    """,
-                    (campaign_id, category_key),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT category, content, embedding
-                    FROM manual_memories
-                    WHERE campaign_id = ?
-                    """,
-                    (campaign_id,),
-                ).fetchall()
+            sources = _campaign_embed_sources(conn, "manual_memories", campaign_id)
+            if not sources:
+                return []
 
             scored: List[Tuple[str, str, float]] = []
-            for mem_category, content, blob in rows:
-                vec = _bytes_to_vector(blob)
-                score = float(np.dot(query_vec, vec))
-                scored.append((str(mem_category or ""), str(content or ""), score))
+            for source in sources:
+                query_vec = _bytes_to_vector(_embed(query, source=source))
+                if category and str(category).strip():
+                    category_key = cls._normalize_key(str(category))
+                    rows = conn.execute(
+                        """
+                        SELECT category, content, embedding
+                        FROM manual_memories
+                        WHERE campaign_id = ? AND category = ? AND embed_source = ?
+                        """,
+                        (campaign_id, category_key, source),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT category, content, embedding
+                        FROM manual_memories
+                        WHERE campaign_id = ? AND embed_source = ?
+                        """,
+                        (campaign_id, source),
+                    ).fetchall()
+
+                for mem_category, content, blob in rows:
+                    vec = _bytes_to_vector(blob)
+                    score = float(np.dot(query_vec, vec))
+                    scored.append((str(mem_category or ""), str(content or ""), score))
             scored.sort(key=lambda t: t[2], reverse=True)
             return scored[: max(1, int(top_k))]
         except Exception:
@@ -1173,8 +1218,8 @@ class ZorkMemory:
                 conn.execute(
                     """
                     INSERT INTO source_material_chunks
-                    (campaign_id, document_key, document_label, chunk_index, chunk_text, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (campaign_id, document_key, document_label, chunk_index, chunk_text, embedding, embed_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         campaign_id,
@@ -1183,6 +1228,7 @@ class ZorkMemory:
                         idx,
                         chunk_text,
                         _embed(chunk_text),
+                        EMBED_SOURCE_DEFAULT,
                     ),
                 )
             conn.commit()
@@ -1330,59 +1376,87 @@ class ZorkMemory:
         import numpy as np
 
         try:
-            query_vec = _bytes_to_vector(_embed(query))
             conn = cls._get_conn()
+            sources = _campaign_embed_sources(conn, "source_material_chunks", campaign_id)
+            if not sources:
+                return []
             before_n = max(0, min(50, int(before_lines)))
             after_n = max(0, min(50, int(after_lines)))
             key = str(document_key or "").strip()
+
+            # Build by_doc index from all rows (for window expansion).
             if key:
-                rows = conn.execute(
+                all_rows = conn.execute(
                     """
-                    SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                    SELECT document_key, chunk_index, chunk_text
                     FROM source_material_chunks
                     WHERE campaign_id = ? AND document_key = ?
                     """,
                     (campaign_id, key),
                 ).fetchall()
             else:
-                rows = conn.execute(
+                all_rows = conn.execute(
                     """
-                    SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                    SELECT document_key, chunk_index, chunk_text
                     FROM source_material_chunks
                     WHERE campaign_id = ?
                     """,
                     (campaign_id,),
                 ).fetchall()
-            if not rows:
-                return []
-
             by_doc: dict[str, dict[int, str]] = {}
+            for r_key, r_idx, r_text in all_rows:
+                doc_k = str(r_key or "")
+                ci = int(r_idx or 0)
+                ct = str(r_text or "")
+                if ci > 0 and ct:
+                    by_doc.setdefault(doc_k, {})[ci] = ct
+
             scored: List[Tuple[str, str, int, str, float]] = []
-            for row_key, row_label, row_chunk_idx, row_chunk_text, row_blob in rows:
-                doc_key = str(row_key or "")
-                chunk_idx = int(row_chunk_idx or 0)
-                chunk_text = str(row_chunk_text or "")
-                if chunk_idx > 0 and chunk_text:
-                    by_doc.setdefault(doc_key, {})[chunk_idx] = chunk_text
-                vec = _bytes_to_vector(row_blob)
-                score = float(np.dot(query_vec, vec))
-                scored.append(
-                    (
-                        doc_key,
-                        str(row_label or ""),
-                        chunk_idx,
-                        chunk_text,
-                        score,
+            for source in sources:
+                query_vec = _bytes_to_vector(_embed(query, source=source))
+                if key:
+                    rows = conn.execute(
+                        """
+                        SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                        FROM source_material_chunks
+                        WHERE campaign_id = ? AND document_key = ? AND embed_source = ?
+                        """,
+                        (campaign_id, key, source),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT document_key, document_label, chunk_index, chunk_text, embedding
+                        FROM source_material_chunks
+                        WHERE campaign_id = ? AND embed_source = ?
+                        """,
+                        (campaign_id, source),
+                    ).fetchall()
+
+                for row_key, row_label, row_chunk_idx, row_chunk_text, row_blob in rows:
+                    doc_key_str = str(row_key or "")
+                    chunk_idx = int(row_chunk_idx or 0)
+                    chunk_text = str(row_chunk_text or "")
+                    vec = _bytes_to_vector(row_blob)
+                    score = float(np.dot(query_vec, vec))
+                    scored.append(
+                        (
+                            doc_key_str,
+                            str(row_label or ""),
+                            chunk_idx,
+                            chunk_text,
+                            score,
+                        )
                     )
-                )
+
             scored.sort(key=lambda t: t[4], reverse=True)
             selected = scored[: max(1, int(top_k))]
             expanded: List[Tuple[str, str, int, str, float]] = []
             mark_center = bool(before_n or after_n)
-            for doc_key, doc_label, center_idx, center_text, score in selected:
-                doc_chunks = by_doc.get(doc_key, {})
+            for doc_key_s, doc_label, center_idx, center_text, score in selected:
+                doc_chunks = by_doc.get(doc_key_s, {})
                 if center_idx <= 0:
-                    expanded.append((doc_key, doc_label, center_idx, center_text, score))
+                    expanded.append((doc_key_s, doc_label, center_idx, center_text, score))
                     continue
                 start_idx = max(1, center_idx - before_n)
                 end_idx = center_idx + after_n
@@ -1399,7 +1473,7 @@ class ZorkMemory:
                     window_parts = [center_text]
                 expanded.append(
                     (
-                        doc_key,
+                        doc_key_s,
                         doc_label,
                         center_idx,
                         "\n".join(window_parts),

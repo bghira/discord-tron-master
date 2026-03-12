@@ -378,6 +378,7 @@ class ZorkEmulator:
     MAX_SUMMARY_CHARS = 10000
     MAX_STATE_CHARS = 10000
     MAX_RECENT_TURNS = 24
+    MAX_WORLD_SUMMARY_SOURCE_TURNS = 120
     MAX_TURN_CHARS = 1200
     MAX_NARRATION_CHARS = 23500
     MAX_PARTY_CONTEXT_PLAYERS = 6
@@ -8765,11 +8766,18 @@ class ZorkEmulator:
             _append_if_relevant(persisted_lines, raw_line)
 
         if (
-            isinstance(turns, list)
-            and viewer_user_id is not None
-            and turns
+            viewer_user_id is not None
         ):
-            for turn in turns[-48:]:
+            summary_turns = (
+                cls.get_recent_turns(
+                    campaign.id,
+                    limit=cls.MAX_WORLD_SUMMARY_SOURCE_TURNS,
+                )
+                if not isinstance(turns, list)
+                or len(turns) < cls.MAX_WORLD_SUMMARY_SOURCE_TURNS
+                else turns
+            )
+            for turn in summary_turns:
                 if not isinstance(turn, ZorkTurn):
                     continue
                 if turn.kind != "narrator":
@@ -8814,7 +8822,9 @@ class ZorkEmulator:
         # history was not provided at all (e.g. map rendering without turns).
         # When turns are available the visibility-filtered recent_lines is
         # authoritative, even if it happens to be empty.
-        _have_turn_history = isinstance(turns, list) and bool(turns)
+        _have_turn_history = viewer_user_id is not None or (
+            isinstance(turns, list) and bool(turns)
+        )
         lines = recent_lines if (_have_turn_history or not persisted_lines) else persisted_lines
 
         if not lines:
