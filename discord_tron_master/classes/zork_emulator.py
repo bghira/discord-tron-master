@@ -3293,6 +3293,19 @@ class ZorkEmulator:
         return player_match and npc_match
 
     @classmethod
+    def _turn_relevant_to_requested_npc_history(
+        cls,
+        turn: ZorkTurn,
+        *,
+        requested_npc_slugs: set[str],
+    ) -> bool:
+        for raw_slug in requested_npc_slugs:
+            npc_slug = cls._player_slug_key(raw_slug)
+            if npc_slug and cls._turn_visible_to_npc(turn, npc_slug):
+                return True
+        return False
+
+    @classmethod
     def _turn_visible_in_recent_turns_context(
         cls,
         turn: ZorkTurn,
@@ -3396,6 +3409,15 @@ class ZorkEmulator:
                 )
             ):
                 visible = True
+            if (
+                not visible
+                and requested_npc_slugs
+                and cls._turn_relevant_to_requested_npc_history(
+                    turn,
+                    requested_npc_slugs=requested_npc_slugs,
+                )
+            ):
+                visible = True
             if not visible:
                 continue
             # LCD filtering: skip turns that scene NPCs don't know about
@@ -3412,6 +3434,7 @@ class ZorkEmulator:
                 viewer_slug=viewer_slug,
                 viewer_location_key=viewer_location_key,
                 viewer_private_context_key=viewer_private_context_key,
+                requested_npc_slugs=requested_npc_slugs,
                 scene_npc_slugs=scene_npc_slugs,
             )
             if scene_output_lines and turn.kind == "narrator":
@@ -3950,6 +3973,7 @@ class ZorkEmulator:
         viewer_slug: str = "",
         viewer_location_key: str = "",
         viewer_private_context_key: str = "",
+        requested_npc_slugs: Optional[set[str]] = None,
         scene_npc_slugs: Optional[set[str]] = None,
     ) -> List[str]:
         if not isinstance(scene_output, dict):
@@ -4032,6 +4056,24 @@ class ZorkEmulator:
                         and viewer_private_context_key_norm == beat_context_key
                     )
                 )
+            if not beat_visible and requested_npc_slugs:
+                beat_npc_slugs = {
+                    cls._player_slug_key(e)
+                    for e in (
+                        list(beat.get("actors") or [])
+                        + list(beat.get("listeners") or [])
+                        + list(beat.get("aware_npc_slugs") or [])
+                        + [beat.get("speaker")]
+                    )
+                    if cls._player_slug_key(e)
+                }
+                requested_npc_keys = {
+                    cls._player_slug_key(npc)
+                    for npc in requested_npc_slugs
+                    if cls._player_slug_key(npc)
+                }
+                if beat_npc_slugs.intersection(requested_npc_keys):
+                    beat_visible = True
             if not beat_visible:
                 continue
             # LCD beat filter: same-room local beats are included by default
