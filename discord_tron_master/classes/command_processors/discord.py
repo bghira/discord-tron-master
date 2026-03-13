@@ -635,6 +635,9 @@ async def create_thread(
             if isinstance(channel, discord.Thread):
                 logger.debug(f"Channel is already a thread. Using it.")
                 thread = channel
+            elif isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
+                logger.debug(f"Channel is a DM/group channel. Sending directly (no threads in DMs).")
+                thread = channel
             elif isinstance(channel, discord.TextChannel):
                 logger.debug(f"Channel is a text channel. Creating thread.")
                 thread = await channel.create_thread(
