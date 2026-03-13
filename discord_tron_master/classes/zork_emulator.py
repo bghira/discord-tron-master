@@ -23186,7 +23186,7 @@ class ZorkEmulator:
                 f"PLAYER_ROOM_TITLE: {room_title or 'Unknown'}\n"
                 f"PLAYER_ROOM_SUMMARY: {room_summary or ''}\n"
                 f"PLAYER_EXITS: {exits or []}\n"
-                f"WORLD_SUMMARY: {cls._compose_world_summary(campaign, campaign_state, max_chars=1200)}\n"
+                f"WORLD_SUMMARY: {cls._compose_world_summary(campaign, campaign_state, max_chars=6000)}\n"
                 f"WORLD_STATE: {cls._dump_json(model_state)}\n"
                 f"LANDMARKS: {landmarks_text}\n"
                 f"WORLD_CHARACTER_LOCATIONS: {chars_text}\n"
