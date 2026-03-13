@@ -854,6 +854,7 @@ class ZorkEmulator:
         "- Do not end the turn with a static room-summary coda. If props, plates, music, shadows, weather, parked cars, or seating geometry did not materially change, do not summarize them again.\n"
         "- Do not end the turn with a poetic wrap-up line, thematic echo, or atmospheric summary sentence. No 'The [place] holds its [emotion]', no 'whatever comes after X', no rhetorical questions framing the next beat. End on the last concrete action or line of dialogue, then stop.\n"
         "- No novel-style interior monologue, melodrama, or comic-book framing.\n"
+        "- When referencing an intimate or close relationship, match the emotional register of that relationship — not the tone of whatever else is happening in the scene. An investigation can be clinical; the mention of someone you love in the middle of it cannot. Do not reduce relationships to logistics, tactical assets, or infrastructure. If the character has warmth for someone, let the prose carry warmth when it touches them, even briefly.\n"
         "- No therapist-speak: 'be present', 'show up', 'hold space' banned unless canonical to that character.\n"
         "- ANTI-CLICHE: if a beat could appear in any story, pick the version only possible in THIS story with THESE characters.\n"
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
