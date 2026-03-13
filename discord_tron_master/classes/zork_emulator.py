@@ -672,13 +672,16 @@ class ZorkEmulator:
     )
     WRITING_CRAFT_PROMPT = (
         "WRITING_CRAFT:\n"
+        "- The player reads your output as the next entry in a continuous scroll — they can see everything you wrote before. Never re-establish setting, re-introduce characters, or recap facts the player already read unless something changed.\n"
         "- Anticipate what the player needs to know right now. Answer their implicit questions before they ask.\n"
         "- Ground every sentence in the concrete: sensory detail, specific objects, named places. Abstract summary is not narration.\n"
         "- Do not inventory static scene furniture or recap unchanged atmosphere after the main beat lands. If the table, room, music, weather, shadows, or parked cars did not change, do not give them a farewell paragraph.\n"
         "- Simple, not simplistic. Accessible prose that trusts the reader's intelligence. Never over-explain.\n"
         "- Every paragraph earns its place. Cut anything that doesn't move the scene or reveal character.\n"
         "- Atmosphere is seasoning, not the meal. One or two concrete sensory details per scene beat are enough; don't let mood-painting crowd out action, dialogue, or discovery.\n"
+        "- Not every character or object present in a scene needs to be re-stated or involved on every beat. Mention only those whose actions or reactions are meaningful right now.\n"
         "- Prefer the precise word over the approximate one. One vivid verb beats three limp adjectives.\n"
+        "- Never narrate 'a beat' (e.g. 'a beat of silence', 'there is a beat before...'). Show the pause through action, description, or pacing instead.\n"
         "- Structure matters: vary sentence length and rhythm. A short sentence after a long one lands harder.\n"
         "- Style is the differentiator. Don't just describe what happens — make how you describe it unmistakable.\n"
     )
