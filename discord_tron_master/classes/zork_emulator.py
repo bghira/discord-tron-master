@@ -847,6 +847,7 @@ class ZorkEmulator:
         "- Do not re-state the player's action unless needed for immediate clarity.\n"
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
         "- Do not end the turn with a static room-summary coda. If props, plates, music, shadows, weather, parked cars, or seating geometry did not materially change, do not summarize them again.\n"
+        "- Do not end the turn with a poetic wrap-up line, thematic echo, or atmospheric summary sentence. No 'The [place] holds its [emotion]', no 'whatever comes after X', no rhetorical questions framing the next beat. End on the last concrete action or line of dialogue, then stop.\n"
         "- No novel-style interior monologue, melodrama, or comic-book framing.\n"
         "- No therapist-speak: 'be present', 'show up', 'hold space' banned unless canonical to that character.\n"
         "- ANTI-CLICHE: if a beat could appear in any story, pick the version only possible in THIS story with THESE characters.\n"
