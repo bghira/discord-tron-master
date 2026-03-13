@@ -15004,7 +15004,7 @@ class ZorkEmulator:
             f"{unread_threads} thread(s){suffix}."
         )
 
-    _SMS_ARTICLES = frozenset({"the", "a", "an", "my"})
+    _SMS_ARTICLES = frozenset({"the", "a", "an", "my", "back"})
 
     @classmethod
     def _extract_inline_sms_intent(
@@ -15016,7 +15016,7 @@ class ZorkEmulator:
             return None
         # Pattern 1: Colon-delimited — "text the Doc: hello"
         m = re.match(
-            r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:to\s+)?([^:\n]{1,120})\s*:\s*(.+?)\s*$",
+            r"^\s*(?:i\s+)?(?:send\s+)?(?:sms|text|message)\s+(?:back\s+)?(?:to\s+)?([^:\n]{1,120})\s*:\s*(.+?)\s*$",
             text,
             flags=re.IGNORECASE,
         )
