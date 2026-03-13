@@ -637,6 +637,7 @@ class ZorkEmulator:
     _concurrency_states: Dict[int, CampaignConcurrencyState] = {}
     _inflight_turns = set()
     _inflight_turns_lock = threading.Lock()
+    _shutdown_requested = False
     _pending_timers: Dict[int, dict] = {}  # campaign_id -> timer context dict
     _pending_sms_tasks: Dict[int, set] = {}  # campaign_id -> set[asyncio.Task]
     _turn_ephemeral_notices: Dict[Tuple[int, int], List[str]] = {}
@@ -1421,11 +1422,48 @@ class ZorkEmulator:
                 cls._inflight_turns.remove(key)
 
     @classmethod
+    def request_shutdown(cls):
+        """Set shutdown flag and cancel all pending timers and SMS tasks."""
+        cls._shutdown_requested = True
+        for campaign_id in list(cls._pending_timers.keys()):
+            cls.cancel_pending_timer(campaign_id)
+        for campaign_id in list(cls._pending_sms_tasks.keys()):
+            cls.cancel_pending_sms_deliveries(campaign_id)
+        logger.info("Shutdown requested: cancelled all pending timers and SMS tasks.")
+
+    @classmethod
+    def is_shutdown_requested(cls) -> bool:
+        return cls._shutdown_requested
+
+    @classmethod
+    async def wait_for_drain(cls, timeout: int = 120) -> bool:
+        """Poll until all in-flight turns complete or timeout expires."""
+        elapsed = 0
+        while elapsed < timeout:
+            with cls._inflight_turns_lock:
+                remaining = len(cls._inflight_turns)
+            if remaining == 0:
+                logger.info("All in-flight turns drained.")
+                return True
+            logger.info(
+                "Waiting for drain: %d in-flight turn(s), %ds elapsed.",
+                remaining,
+                elapsed,
+            )
+            await asyncio.sleep(2)
+            elapsed += 2
+        logger.warning("Drain timeout after %ds.", timeout)
+        return False
+
+    @classmethod
     async def begin_turn(
         cls,
         ctx,
         command_prefix: str = "!",
     ) -> Tuple[Optional[int], Optional[str]]:
+        if cls._shutdown_requested:
+            return (None, "Server is restarting. Please wait a moment.")
+
         app = AppConfig.get_flask()
         if app is None:
             raise RuntimeError("Flask app not initialized; cannot use ZorkEmulator.")

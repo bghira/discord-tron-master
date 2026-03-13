@@ -2942,3 +2942,25 @@ class Zork(commands.Cog):
             ZorkEmulator.cancel_pending_timer(campaign.id)
             ZorkEmulator.cancel_pending_sms_deliveries(campaign.id)
             await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")
+
+    @zork.command(name="restart")
+    async def zork_restart(self, ctx):
+        if not await self.bot.is_owner(ctx.author):
+            await ctx.send("This command is restricted to the bot owner.")
+            return
+        await ctx.send(
+            "Restart initiated. Rejecting new requests and draining in-flight turns..."
+        )
+        ZorkEmulator.request_shutdown()
+        drained = await ZorkEmulator.wait_for_drain(timeout=120)
+        if drained:
+            await ctx.send("All turns drained. Shutting down now.")
+        else:
+            remaining = len(ZorkEmulator._inflight_turns)
+            await ctx.send(
+                f"Drain timeout. {remaining} turn(s) still in-flight. Forcing shutdown."
+            )
+        await self.bot.close()
+        import sys
+
+        sys.exit(0)
