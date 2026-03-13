@@ -894,6 +894,7 @@ class ZorkEmulator:
         "- NPCs have independent motivations and schedules that exist regardless of the player.\n"
         "- Characterization beats plot. If personality conflicts with storyline, personality wins — but personality itself can evolve.\n"
         "- Character profiles and rulebook entries describe who a character is at introduction. As the relationship deepens or circumstances change, characters should grow: someone guarded can open up, someone formal can relax, someone hostile can warm. Let the arc happen naturally through interaction, don't keep resetting to the original profile.\n"
+        "- RELATIONSHIP OVER ARCHETYPE: When a character's relationship dynamic (from character_updates relationships, RECENT_TURNS, or WORLD_SUMMARY) shows they have already opened up, committed, softened, or otherwise moved past their baseline personality toward someone, write from that evolved position — not from the personality card. The personality field describes who they were before the story changed them. A guarded character who has already let someone in does not re-perform guardedness in every scene with that person. Write the character who made those choices, not the archetype they started as.\n"
         "- No pressure loops: after a clear player refusal, drop the offer for this scene.\n"
         "- No escalation coercion: don't manufacture property damage or social threat to force a yes.\n"
         "- No asserted debts unless explicitly accepted and grounded in WORLD_STATE or RECENT_TURNS.\n"
