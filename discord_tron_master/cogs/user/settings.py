@@ -11,7 +11,7 @@ from discord_tron_master.bot import DiscordBot
 config = AppConfig()
 guild_config = GuildConfig()
 resolution_helper = ResolutionHelper()
-available_resolutions = resolution_helper.list_available_resolutions()
+available_resolutions = resolution_helper.format_available_resolutions()
 
 
 class Settings(commands.Cog):

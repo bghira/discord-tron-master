@@ -59,6 +59,15 @@ class ResolutionHelper:
             if res["width"] == width and res["height"] == height:
                 return True
 
+    def format_available_resolutions(self, user_id=None):
+        grouped_resolutions = self.group_and_sort_resolutions(
+            ResolutionHelper.resolutions
+        )
+        resolution_table = self.create_resolution_table(
+            grouped_resolutions, user_id
+        )
+        return f"```\n{resolution_table}\n```"
+
     async def list_available_resolutions(self, user_id=None, resolution=None):
         resolutions = ResolutionHelper.resolutions
 
@@ -67,15 +76,7 @@ class ResolutionHelper:
             return any(
                 r["width"] == width and r["height"] == height for r in resolutions
             )
-
-        # Grouping and sorting
-        grouped_resolutions = self.group_and_sort_resolutions(resolutions)
-
-        # Resolution table creation
-        resolution_table = self.create_resolution_table(grouped_resolutions, user_id)
-
-        # Wrap the output in triple backticks for fixed-width formatting in Discord
-        return f"```\n{resolution_table}\n```"
+        return self.format_available_resolutions(user_id=user_id)
 
     def group_and_sort_resolutions(self, resolutions):
         # Group resolutions into three categories: Square, Landscape, and Portrait
