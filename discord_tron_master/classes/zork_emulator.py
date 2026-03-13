@@ -347,6 +347,7 @@ class ZorkEmulator:
         "current_scene",
         "current_status",
         "allegiance",
+        "evolving_personality",
         "relationship",
         "deceased_reason",
         "resolution",
@@ -821,9 +822,14 @@ class ZorkEmulator:
         "allegiance, relationship. "
         "appearance: 70-150 words, vivid physical description suitable for image generation. No image_url. "
         "speech_style: 2-3 sentences — sentence length, vocabulary, verbal tics, what they avoid saying.\n"
-        "On update: Only mutable fields accepted: location, current_status, allegiance, relationship, relationships, "
+        "On update: Only mutable fields accepted: location, current_status, allegiance, evolving_personality, relationship, relationships, "
         "literary_style, deceased_reason.\n"
-        "Foundational: name, personality, background, appearance, speech_style — set at creation, not overwritten by state updates, but the narrator should let these traits evolve naturally through story events.\n"
+        "Foundational: name, personality, background, appearance, speech_style — set at creation, not overwritten by state updates. "
+        "personality describes the character at entry; evolving_personality captures who they are NOW.\n"
+        "evolving_personality: Update this whenever a character's demeanor, emotional posture, or relational openness has meaningfully shifted from their baseline personality. "
+        "Write it as a present-tense snapshot, not a diff. Example: \"Day-one armor mostly down with Chace. Dry register intact but warmth no longer submerged. Still won't say the word.\"\n"
+        "allegiance: Update this as loyalties actually shift. Don't leave it frozen at the creation-time value. "
+        "Example progression: \"Herself\" → \"Herself, and increasingly Chace, though she hasn't filed that yet.\"\n"
         "Relationships: Map keyed by character slug: "
         "{\"deshawn\": {\"status\": \"...\", \"knows_about\": [...], \"doesnt_know\": [...], \"dynamic\": \"...\"}}.\n"
         "Removal: Set slug to null or {\"remove\": true}. "
@@ -842,7 +848,9 @@ class ZorkEmulator:
         "\"location\": \"jekyll-castle-east-annex-laboratory\", \"current_status\": \"Watching the doorway.\", "
         "\"allegiance\": \"self\", \"relationship\": \"wary ally\"}}}\n"
         "  Update: {\"character_updates\": {\"wren\": {\"location\": \"jekyll-castle-east-annex-laboratory\", "
-        "\"current_status\": \"Processing that the castle trip was unnecessary.\"}}}\n"
+        "\"current_status\": \"Processing that the castle trip was unnecessary.\", "
+        "\"allegiance\": \"The expedition, reluctantly.\", "
+        "\"evolving_personality\": \"Guard still up but less reflexive. Dry humor warming into actual jokes. Lets people see effort.\"}}}\n"
         "  Remove: {\"character_updates\": {\"wren\": null}}\n\n"
         # ── NARRATION CRAFT ──
         "NARRATION CRAFT:\n"
@@ -1049,9 +1057,13 @@ class ZorkEmulator:
         "- If PLAYER_ACTION involves phone/text/call/off-scene contact, use sms_list/sms_read before narrating; "
         "use sms_write when sending or replying. Use sms_schedule for delayed replies.\n"
         "- Phone/text/SMS turns should normally be private or limited, not local/public, unless the player explicitly shares the content out loud.\n"
-        "- CRITICAL SMS RULE: When an NPC replies via text/phone, you MUST call sms_write to record the NPC's reply "
-        "BEFORE outputting final narration. Both sides of a conversation must be in the SMS log. "
-        "If you narrate an NPC texting back but don't sms_write it, the reply is lost permanently.\n"
+        "- CRITICAL SMS RULE: When an NPC replies via text/phone, you MUST record the NPC's reply with sms_write. "
+        "Both sides of a conversation must be in the SMS log. "
+        "You may either call sms_write as a separate tool-use round BEFORE final narration, "
+        "or include a tool_calls array in your final response JSON alongside narration. "
+        "Example: {\"narration\": \"...\", \"tool_calls\": [{\"tool_call\": \"sms_write\", \"thread\": \"saul\", \"from\": \"Saul\", \"to\": \"Dale\", \"message\": \"On my way.\"}]}\n"
+        "Only sms_write and sms_schedule are supported in tool_calls. "
+        "If you narrate an NPC texting back but don't sms_write it (either way), the reply is lost permanently.\n"
         "- Only skip tools for trivial immediate physical follow-ups where continuity risk is near zero.\n"
         "- If unsure what to query, use current location + active NPC names + key nouns from PLAYER_ACTION.\n"
         "\nYou also have a memory_terms tool for wildcard term/category listing. Use it BEFORE storing memories:\n"
@@ -11833,7 +11845,7 @@ class ZorkEmulator:
         characters = cls.get_campaign_characters(campaign)
         if not isinstance(characters, dict) or not characters:
             return 0
-        overlay_mutable = {"location", "current_status", "allegiance"}
+        overlay_mutable = {"location", "current_status", "allegiance", "evolving_personality"}
         changed = 0
         for slug, overlay in state_update.items():
             if not isinstance(overlay, dict):
@@ -21456,6 +21468,17 @@ class ZorkEmulator:
                 )
                 give_item = payload.get("give_item")
                 calendar_update = payload.get("calendar_update")
+
+                # Post-hoc tool_calls embedded in final response
+                tool_calls_raw = payload.get("tool_calls")
+                if isinstance(tool_calls_raw, list):
+                    for tc in tool_calls_raw:
+                        if isinstance(tc, dict) and isinstance(tc.get("tool_call"), str):
+                            tc_name = str(tc["tool_call"]).strip().lower()
+                            delta.deferred_tool_writes.append({
+                                "tool": tc_name,
+                                **{k: v for k, v in tc.items() if k != "tool_call"},
+                            })
 
                 # Inline timed event fields
                 inline_timer_delay = payload.get("set_timer_delay")
