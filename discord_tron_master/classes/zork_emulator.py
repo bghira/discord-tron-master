@@ -14661,7 +14661,8 @@ class ZorkEmulator:
                         "seq": cls._coerce_non_negative_int(msg.get("seq", 0), default=0),
                     }
                 )
-            threads[key] = {"label": label, "messages": messages}
+            if messages:
+                threads[key] = {"label": label, "messages": messages}
         return threads
 
     @classmethod
@@ -14685,6 +14686,8 @@ class ZorkEmulator:
             messages = row.get("messages")
             if not isinstance(messages, list):
                 messages = []
+            if not messages:
+                continue
             last = messages[-1] if messages else {}
             preview = str(last.get("message") or "").strip()
             if len(preview) > cls.SMS_MAX_PREVIEW_CHARS:
