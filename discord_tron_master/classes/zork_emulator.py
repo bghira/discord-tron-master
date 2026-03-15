@@ -405,6 +405,7 @@ class ZorkEmulator:
     PLAYER_STATS_LAST_MESSAGE_AT_KEY = "last_message_at"
     PLAYER_STATS_LAST_MESSAGE_CONTEXT_KEY = "last_message_context"
     PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY = "last_message_channel_id"
+    _MENTION_RE = re.compile(r"<@!?(\d+)>")
     PRIVATE_DM_TIME_JUMP_NOTIFY_MINUTES = 30
     ATTACHMENT_MAX_BYTES = 500_000
     TURN_ATTACHMENT_INLINE_BYTES = 10_000
@@ -4474,6 +4475,85 @@ class ZorkEmulator:
                 logger.debug(
                     "Zork: failed to send DM time-jump notification to user %s",
                     user_id,
+                    exc_info=True,
+                )
+
+    @classmethod
+    def _detect_cross_thread_mentions(
+        cls,
+        narration: str,
+        campaign_id: int,
+        current_channel_id: int,
+        actor_user_id: int,
+    ) -> List[Dict[str, object]]:
+        """Return a list of ``{"user_id": int, "character_name": str}`` dicts
+        for players mentioned in *narration* who are NOT in the current channel."""
+        mentioned_ids: set[int] = set()
+        for m in cls._MENTION_RE.finditer(narration):
+            mentioned_ids.add(int(m.group(1)))
+        mentioned_ids.discard(actor_user_id)
+        if not mentioned_ids:
+            return []
+
+        registry = cls._campaign_player_registry(campaign_id)
+        by_user_id: Dict[int, Dict[str, object]] = registry.get("by_user_id", {})
+
+        recipients: List[Dict[str, object]] = []
+        for uid in mentioned_ids:
+            entry = by_user_id.get(uid)
+            if entry is None:
+                # Mentioned user is not in this campaign — skip.
+                continue
+            player = ZorkPlayer.query.filter_by(
+                campaign_id=campaign_id,
+                user_id=uid,
+            ).first()
+            if player is None:
+                continue
+            p_state = cls.get_player_state(player)
+            stats = cls._get_player_stats_from_state(p_state)
+            last_channel = stats.get(cls.PLAYER_STATS_LAST_MESSAGE_CHANNEL_ID_KEY)
+            if last_channel is not None and int(last_channel) == current_channel_id:
+                # Player is active in the same thread — they'll see it.
+                continue
+            recipients.append({
+                "user_id": uid,
+                "character_name": str(entry.get("name") or f"Adventurer-{str(uid)[-4:]}"),
+            })
+        return recipients
+
+    @classmethod
+    async def _send_cross_thread_mention_forwards(
+        cls,
+        *,
+        campaign_name: str,
+        actor_character_name: str,
+        narration: str,
+        recipients: List[Dict[str, object]],
+    ) -> None:
+        """Forward *narration* as a DM to each recipient not in the actor's thread."""
+        if not recipients:
+            return
+        bot_instance = DiscordBot.get_instance()
+        if bot_instance is None or bot_instance.bot is None:
+            return
+        for recipient in recipients:
+            uid = int(recipient["user_id"])
+            try:
+                message = (
+                    f"\U0001f4e8 **Forwarded from {actor_character_name}'s scene** "
+                    f"in `{campaign_name}`:\n\n{narration}"
+                )
+                user = bot_instance.bot.get_user(uid)
+                if user is None:
+                    user = await bot_instance.bot.fetch_user(uid)
+                if user is None:
+                    continue
+                await DiscordBot.send_large_message(user, message)
+            except Exception:
+                logger.debug(
+                    "Zork: failed to forward cross-thread mention DM to user %s",
+                    uid,
                     exc_info=True,
                 )
 
@@ -18938,7 +19018,7 @@ class ZorkEmulator:
                     re.IGNORECASE,
                 )
                 if (_give_re.search(action) or _give_re.search(raw_narration or "")) and not _refuse_re.search(raw_narration or ""):
-                    _mention_re = re.compile(r"<@!?(\d+)>")
+                    _mention_re = cls._MENTION_RE
                     for _m in _mention_re.finditer(raw_narration or ""):
                         _target_uid = int(_m.group(1))
                         if _target_uid != player.user_id:
@@ -19363,6 +19443,33 @@ class ZorkEmulator:
                     ),
                 )
             )
+
+        # Cross-thread mention forwarding
+        if _turn_is_public and display_narration:
+            _current_channel_id = (
+                int(ctx.channel.id)
+                if getattr(ctx, "channel", None) is not None
+                else None
+            )
+            if _current_channel_id is not None:
+                _cross_thread_recipients = cls._detect_cross_thread_mentions(
+                    display_narration,
+                    campaign.id,
+                    _current_channel_id,
+                    ctx.author.id,
+                )
+                if _cross_thread_recipients:
+                    _actor_name = str(
+                        player_state.get("character_name") or "Unknown"
+                    ).strip()
+                    asyncio.ensure_future(
+                        cls._send_cross_thread_mention_forwards(
+                            campaign_name=campaign.name,
+                            actor_character_name=_actor_name,
+                            narration=display_narration,
+                            recipients=_cross_thread_recipients,
+                        )
+                    )
 
         return display_narration
 
