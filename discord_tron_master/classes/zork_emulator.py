@@ -1648,11 +1648,18 @@ class ZorkEmulator:
 
     @classmethod
     def execute_rewind(
-        cls, campaign_id: int, target_discord_message_id: int, channel_id: int = None
+        cls,
+        campaign_id: int,
+        target_discord_message_id: int,
+        channel_id: int = None,
+        rewind_user_id: int | None = None,
+        player_only: bool = False,
     ) -> Optional[Tuple[int, int]]:
         """Restore campaign state to the snapshot at *target_discord_message_id*.
 
         When *channel_id* is provided, only turns from that channel are deleted.
+        When *player_only* is true, only the requesting player's state is restored
+        from the snapshot and only that player's subsequent turns are deleted.
         Returns ``(turn_id, deleted_count)`` on success, or ``None`` if the
         target turn/snapshot could not be found.
         """
@@ -1682,6 +1689,12 @@ class ZorkEmulator:
 
         if target_turn is None:
             return None
+        if player_only and rewind_user_id is not None:
+            try:
+                if int(target_turn.user_id or 0) != int(rewind_user_id):
+                    return None
+            except (TypeError, ValueError):
+                return None
 
         # 2. Load snapshot
         snapshot = ZorkSnapshot.query.filter_by(turn_id=target_turn.id).first()
@@ -1693,17 +1706,20 @@ class ZorkEmulator:
         if campaign is None:
             return None
 
-        campaign.state_json = snapshot.campaign_state_json
-        campaign.characters_json = snapshot.campaign_characters_json
-        campaign.summary = snapshot.campaign_summary
-        campaign.last_narration = snapshot.campaign_last_narration
-        campaign.updated = db.func.now()
+        if not player_only:
+            campaign.state_json = snapshot.campaign_state_json
+            campaign.characters_json = snapshot.campaign_characters_json
+            campaign.summary = snapshot.campaign_summary
+            campaign.last_narration = snapshot.campaign_last_narration
+            campaign.updated = db.func.now()
 
         # 4. Restore player states
         players_data = json.loads(snapshot.players_json)
         for pdata in players_data:
             player = ZorkPlayer.query.get(pdata["player_id"])
             if player is None:
+                continue
+            if player_only and rewind_user_id is not None and int(player.user_id or 0) != int(rewind_user_id):
                 continue
             player.level = pdata["level"]
             player.xp = pdata["xp"]
@@ -1718,6 +1734,8 @@ class ZorkEmulator:
         ]
         if channel_id is not None:
             turn_filter.append(ZorkTurn.channel_id == channel_id)
+        if player_only and rewind_user_id is not None:
+            turn_filter.append(ZorkTurn.user_id == rewind_user_id)
 
         # Collect turn IDs to delete so we can remove their snapshots first (FK).
         turn_ids_to_delete = [
@@ -1760,6 +1778,175 @@ class ZorkEmulator:
             )
 
         return (target_turn.id, deleted_count)
+
+    @classmethod
+    def execute_delete_turn(
+        cls,
+        campaign_id: int,
+        target_discord_message_id: int,
+        *,
+        channel_id: int | None = None,
+        delete_user_id: int | None = None,
+        player_only: bool = False,
+    ) -> dict[str, object]:
+        target_turn = cls.get_turn_for_message(target_discord_message_id)
+        if target_turn is None or int(target_turn.campaign_id or 0) != int(campaign_id):
+            return {"status": "not-found"}
+
+        if player_only and delete_user_id is not None:
+            try:
+                if int(target_turn.user_id or 0) != int(delete_user_id):
+                    return {"status": "forbidden"}
+            except (TypeError, ValueError):
+                return {"status": "forbidden"}
+
+        if player_only:
+            latest_scope_turn = (
+                ZorkTurn.query.filter(
+                    ZorkTurn.campaign_id == campaign_id,
+                    ZorkTurn.kind == "narrator",
+                    ZorkTurn.channel_id == channel_id,
+                    ZorkTurn.user_id == delete_user_id,
+                )
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+        else:
+            latest_scope_turn = (
+                ZorkTurn.query.filter(
+                    ZorkTurn.campaign_id == campaign_id,
+                    ZorkTurn.kind == "narrator",
+                )
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+        if latest_scope_turn is None or int(latest_scope_turn.id or 0) != int(target_turn.id or 0):
+            return {"status": "not-latest", "turn_id": int(target_turn.id or 0)}
+
+        if player_only:
+            previous_turn = (
+                ZorkTurn.query.filter(
+                    ZorkTurn.campaign_id == campaign_id,
+                    ZorkTurn.kind == "narrator",
+                    ZorkTurn.channel_id == channel_id,
+                    ZorkTurn.user_id == delete_user_id,
+                    ZorkTurn.id < target_turn.id,
+                )
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+        else:
+            previous_turn = (
+                ZorkTurn.query.filter(
+                    ZorkTurn.campaign_id == campaign_id,
+                    ZorkTurn.kind == "narrator",
+                    ZorkTurn.id < target_turn.id,
+                )
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+        if previous_turn is None:
+            return {"status": "no-prior-snapshot", "turn_id": int(target_turn.id or 0)}
+
+        snapshot = ZorkSnapshot.query.filter_by(turn_id=previous_turn.id).first()
+        if snapshot is None:
+            return {"status": "no-prior-snapshot", "turn_id": int(target_turn.id or 0)}
+
+        campaign = ZorkCampaign.query.get(campaign_id)
+        if campaign is None:
+            return {"status": "not-found"}
+
+        if player_only:
+            players_data = json.loads(snapshot.players_json or "[]")
+            restored = False
+            for pdata in players_data:
+                if not isinstance(pdata, dict):
+                    continue
+                try:
+                    player_id = int(pdata.get("player_id") or 0)
+                except (TypeError, ValueError):
+                    player_id = 0
+                player = ZorkPlayer.query.get(player_id) if player_id > 0 else None
+                if player is None:
+                    continue
+                if int(player.user_id or 0) != int(delete_user_id or 0):
+                    continue
+                player.level = pdata["level"]
+                player.xp = pdata["xp"]
+                player.attributes_json = pdata["attributes_json"]
+                player.state_json = pdata["state_json"]
+                player.updated = db.func.now()
+                restored = True
+                break
+            if not restored:
+                return {"status": "no-prior-snapshot", "turn_id": int(target_turn.id or 0)}
+        else:
+            campaign.state_json = snapshot.campaign_state_json
+            campaign.characters_json = snapshot.campaign_characters_json
+            campaign.summary = snapshot.campaign_summary
+            campaign.last_narration = snapshot.campaign_last_narration
+            campaign.updated = db.func.now()
+            players_data = json.loads(snapshot.players_json or "[]")
+            for pdata in players_data:
+                player = ZorkPlayer.query.get(pdata["player_id"])
+                if player is None:
+                    continue
+                player.level = pdata["level"]
+                player.xp = pdata["xp"]
+                player.attributes_json = pdata["attributes_json"]
+                player.state_json = pdata["state_json"]
+                player.updated = db.func.now()
+
+        turn_ids_to_delete = [int(target_turn.id)]
+        if target_turn.user_message_id:
+            paired_player_turn = (
+                ZorkTurn.query.filter_by(
+                    campaign_id=campaign_id,
+                    kind="player",
+                    user_message_id=target_turn.user_message_id,
+                )
+                .order_by(ZorkTurn.id.desc())
+                .first()
+            )
+            if paired_player_turn is not None:
+                turn_ids_to_delete.append(int(paired_player_turn.id))
+        turn_ids_to_delete = sorted({tid for tid in turn_ids_to_delete if tid > 0})
+
+        if turn_ids_to_delete:
+            ZorkSnapshot.query.filter(
+                ZorkSnapshot.turn_id.in_(turn_ids_to_delete),
+            ).delete(synchronize_session=False)
+            deleted_count = ZorkTurn.query.filter(
+                ZorkTurn.id.in_(turn_ids_to_delete),
+            ).delete(synchronize_session=False)
+        else:
+            deleted_count = 0
+
+        db.session.commit()
+
+        try:
+            if turn_ids_to_delete:
+                conn = ZorkMemory._get_conn()
+                placeholders = ",".join("?" for _ in turn_ids_to_delete)
+                conn.execute(
+                    f"DELETE FROM turn_embeddings WHERE turn_id IN ({placeholders})",
+                    turn_ids_to_delete,
+                )
+                conn.commit()
+        except Exception:
+            logger.debug(
+                "Zork delete-turn: embedding cleanup failed for campaign %s",
+                campaign_id,
+                exc_info=True,
+            )
+
+        return {
+            "status": "ok",
+            "turn_id": int(target_turn.id or 0),
+            "deleted_count": int(deleted_count or 0),
+            "user_message_id": int(target_turn.user_message_id or 0) if target_turn.user_message_id else 0,
+            "player_only": bool(player_only),
+        }
 
     @classmethod
     async def _delete_context_message(cls, ctx):
@@ -11326,6 +11513,18 @@ class ZorkEmulator:
                 private_context_line,
                 reasoning_line,
             ]
+        )
+
+    @classmethod
+    def get_turn_for_message(cls, discord_message_id: int) -> Optional["ZorkTurn"]:
+        try:
+            message_id = int(discord_message_id)
+        except (TypeError, ValueError):
+            return None
+        return (
+            ZorkTurn.query.filter_by(discord_message_id=message_id, kind="narrator")
+            .order_by(ZorkTurn.id.desc())
+            .first()
         )
 
     @classmethod

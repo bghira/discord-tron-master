@@ -21,6 +21,37 @@ class Reactions(commands.Cog):
         self.bot = bot
         self.config = AppConfig()
 
+    async def _is_image_admin_member(self, user) -> bool:
+        for role in getattr(user, "roles", []) or []:
+            if getattr(role, "name", "") == "Image Admin":
+                return True
+        return False
+
+    async def _purge_messages_after(self, channel, target_message):
+        def should_delete(m):
+            return m.id != target_message.id
+
+        try:
+            await channel.purge(after=target_message, check=should_delete, limit=200)
+        except Exception:
+            logging.exception("Zork rewind via reaction: purge failed")
+
+    async def _delete_turn_messages(self, channel, narrator_message, user_message_id: int | None = None):
+        if user_message_id:
+            try:
+                user_message = await channel.fetch_message(int(user_message_id))
+            except Exception:
+                user_message = None
+            if user_message is not None:
+                try:
+                    await user_message.delete()
+                except Exception:
+                    logging.debug("Zork delete-turn: failed deleting paired user message", exc_info=True)
+        try:
+            await narrator_message.delete()
+        except Exception:
+            logging.debug("Zork delete-turn: failed deleting narrator message", exc_info=True)
+
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:  # Ignore bot reactions
@@ -39,24 +70,118 @@ class Reactions(commands.Cog):
         if reaction.message.author != self.bot.user:
             logging.debug(f"Ignoring reaction on message not from me.")
             return
-        if str(reaction.emoji) in {"ℹ️", "ℹ"}:
+        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌"}:
             app = AppConfig.get_flask()
             if app is None:
                 return
             with app.app_context():
-                info_text = ZorkEmulator.get_turn_info_text_for_message(
-                    reaction.message.id
-                )
-            if not info_text:
-                return
-            if reaction.message.guild is None:
-                await DiscordBot.send_large_message(reaction.message, info_text)
-            else:
-                await DiscordBot.send_large_message(
+                turn = ZorkEmulator.get_turn_for_message(reaction.message.id)
+                if str(reaction.emoji) in {"ℹ️", "ℹ"}:
+                    info_text = ZorkEmulator.get_turn_info_text_for_message(
+                        reaction.message.id
+                    )
+                else:
+                    info_text = None
+            if turn is not None:
+                if str(reaction.emoji) in {"ℹ️", "ℹ"}:
+                    if not info_text:
+                        return
+                    if reaction.message.guild is None:
+                        await DiscordBot.send_large_message(reaction.message, info_text)
+                    else:
+                        await DiscordBot.send_large_message(
+                            reaction.message,
+                            f"{user.mention}\n{info_text}",
+                        )
+                    return
+
+                is_admin = await self._is_image_admin_member(user)
+                owner_ok = int(getattr(turn, "user_id", 0) or 0) == int(user.id)
+                if not owner_ok and not is_admin:
+                    await reaction.message.channel.send(
+                        f"{user.mention} only the turn owner or an Image Admin can do that."
+                    )
+                    return
+
+                dm_scope = reaction.message.guild is None
+                with app.app_context():
+                    if str(reaction.emoji) == "⏪":
+                        result = ZorkEmulator.execute_rewind(
+                            int(turn.campaign_id),
+                            reaction.message.id,
+                            channel_id=reaction.message.channel.id,
+                            rewind_user_id=user.id if dm_scope else None,
+                            player_only=dm_scope,
+                        )
+                    else:
+                        result = ZorkEmulator.execute_delete_turn(
+                            int(turn.campaign_id),
+                            reaction.message.id,
+                            channel_id=reaction.message.channel.id,
+                            delete_user_id=user.id if dm_scope else None,
+                            player_only=dm_scope,
+                        )
+
+                if str(reaction.emoji) == "⏪":
+                    if result is None:
+                        await reaction.message.channel.send(
+                            "Could not find a snapshot for that message. Only newer rewind-capable turns can be rewound to."
+                        )
+                        return
+                    turn_id, deleted_count = result
+                    await self._purge_messages_after(reaction.message.channel, reaction.message)
+                    if not dm_scope:
+                        ZorkEmulator.cancel_pending_timer(int(turn.campaign_id))
+                        ZorkEmulator.cancel_pending_sms_deliveries(int(turn.campaign_id))
+                        await reaction.message.channel.send(
+                            f"Rewound to turn {turn_id}. Removed {deleted_count} subsequent turn(s)."
+                        )
+                    else:
+                        await reaction.message.channel.send(
+                            f"Rewound your DM thread to turn {turn_id}. Removed {deleted_count} of your subsequent turn(s)."
+                        )
+                    return
+
+                status = str((result or {}).get("status") or "")
+                if status == "not-found":
+                    await reaction.message.channel.send("Turn not found.")
+                    return
+                if status == "forbidden":
+                    await reaction.message.channel.send(
+                        f"{user.mention} you can only remove your own DM turns."
+                    )
+                    return
+                if status == "not-latest":
+                    await reaction.message.channel.send(
+                        "Only the latest turn in this scope can be removed safely."
+                    )
+                    return
+                if status == "no-prior-snapshot":
+                    await reaction.message.channel.send(
+                        "That turn cannot be removed because there is no prior snapshot to restore from."
+                    )
+                    return
+                if status != "ok":
+                    await reaction.message.channel.send("Could not remove that turn.")
+                    return
+
+                if not dm_scope:
+                    ZorkEmulator.cancel_pending_timer(int(turn.campaign_id))
+                    ZorkEmulator.cancel_pending_sms_deliveries(int(turn.campaign_id))
+                await self._delete_turn_messages(
+                    reaction.message.channel,
                     reaction.message,
-                    f"{user.mention}\n{info_text}",
+                    int((result or {}).get("user_message_id") or 0),
                 )
-            return
+                if dm_scope:
+                    await reaction.message.channel.send(
+                        f"Removed your latest DM turn {result.get('turn_id')}."
+                    )
+                else:
+                    await reaction.message.channel.send(
+                        f"Removed latest turn {result.get('turn_id')}."
+                    )
+                return
         image_urls = []
         img = None
         for embed in reaction.message.embeds:
