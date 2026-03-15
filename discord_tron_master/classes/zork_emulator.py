@@ -673,6 +673,7 @@ class ZorkEmulator:
         "(intent, decision, question, or action), not repetitive reaction text. "
         "Vary pacing and meter between turns: sometimes clipped, sometimes patient, sometimes blunt, sometimes practical. "
         "Do not default emotional beats to the same therapeutic language or cadence every time. "
+        "No closing cadence: do not end turns with a settlement phrase that resolves scene energy through rhythmic finality. If the scene is still tense, the last line stays tense. "
         "Avoid contrived emotional-summary language or therapist-speak "
         "unless that exact voice is canonically right for the speaking character. "
         "ANTI-ECHO: do NOT restate, paraphrase, or mirror the player's just-written wording. "
@@ -701,6 +702,7 @@ class ZorkEmulator:
         "- Never narrate 'a beat' (e.g. 'a beat of silence', 'there is a beat before...'). Show the pause through action, description, or pacing instead.\n"
         "- Structure matters: vary sentence length and rhythm. A short sentence after a long one lands harder.\n"
         "- Style is the differentiator. Don't just describe what happens — make how you describe it unmistakable.\n"
+        "- Vary your landing gear. Turns can end mid-exchange, on a practical detail, on a half-finished gesture, abruptly after dialogue. Not every turn needs a final settling sentence that signals 'scene complete' — most shouldn't.\n"
     )
     PROMPT_STAGE_BOOTSTRAP = "bootstrap"  # Deprecated: kept for logging/audit only; bootstrap LLM call eliminated.
     PROMPT_STAGE_RESEARCH = "research"
@@ -897,6 +899,7 @@ class ZorkEmulator:
         "- Avoid repetitive recap loops: at most one brief callback sentence to prior events, then move the scene forward.\n"
         "- Do not end the turn with a static room-summary coda. If props, plates, music, shadows, weather, parked cars, or seating geometry did not materially change, do not summarize them again.\n"
         "- Do not end the turn with a poetic wrap-up line, thematic echo, or atmospheric summary sentence. No 'The [place] holds its [emotion]', no 'whatever comes after X', no rhetorical questions framing the next beat. End on the last concrete action or line of dialogue, then stop.\n"
+        "- CLOSING CADENCE: do not write a settlement phrase — a rhythmically final sentence that resolves scene energy with prosodic falling meter. If tension is still live, the last sentence should leave it live. Vary how turns end: mid-dialogue, mid-action, on a question, on a practical detail, abruptly. A turn that always lands with the same settling rhythm trains the reader to stop feeling tension.\n"
         "- No refrain or motific repetition — do not repeat the same structural tail, closing image, or variable-word-swap line across consecutive turns. A repeated line does not accumulate weight; it becomes a crutch. If you catch yourself ending two turns the same way, cut the pattern.\n"
         "- No novel-style interior monologue, melodrama, or comic-book framing.\n"
         "- When referencing an intimate or close relationship, match the emotional register of that relationship — not the tone of whatever else is happening in the scene. An investigation can be clinical; the mention of someone you love in the middle of it cannot. Do not reduce relationships to logistics, tactical assets, or infrastructure. If the character has warmth for someone, let the prose carry warmth when it touches them, even briefly.\n"
