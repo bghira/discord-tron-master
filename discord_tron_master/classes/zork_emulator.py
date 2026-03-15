@@ -348,6 +348,13 @@ class ZorkEmulator:
         "current_status",
         "allegiance",
         "evolving_personality",
+        "autobiography",
+        "entry",
+        "importance",
+        "trigger",
+        "a",
+        "b",
+        "c",
         "relationship",
         "deceased_reason",
         "resolution",
@@ -392,6 +399,14 @@ class ZorkEmulator:
     MAX_CHARACTERS_CHARS = 8000
     IMMUTABLE_CHARACTER_FIELDS: set = set()  # slug is the dict key, not a field
     MAX_CHARACTERS_IN_PROMPT = 20
+    AUTOBIOGRAPHY_FIELD = "autobiography"
+    AUTOBIOGRAPHY_RAW_FIELD = "autobiography_raw"
+    AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD = "autobiography_last_compressed_turn"
+    MAX_AUTOBIOGRAPHY_PROMPT_CHARS = 4000
+    MAX_AUTOBIOGRAPHY_TEXT_CHARS = 1600
+    MAX_AUTOBIOGRAPHY_ENTRY_CHARS = 600
+    MAX_AUTOBIOGRAPHY_RAW_ENTRIES = 64
+    AUTOBIOGRAPHY_COMPRESS_TRIGGER_COUNT = 12
     ATTENTION_WINDOW_SECONDS = 600
     MIN_TURN_ADVANCE_MINUTES = 1
     DEFAULT_TURN_ADVANCE_MINUTES = 5
@@ -713,6 +728,26 @@ class ZorkEmulator:
         + ".\n"
         "Request only the subset that matters for this turn, then return ready_to_write.\n"
     )
+    AUTOBIOGRAPHY_TOOL_PROMPT = (
+        "\nYou have autobiography tools for a character's self-authored constitutional document.\n"
+        "Use autobiography_append only when a character crosses a real identity threshold: not just that something happened, but that the turn establishes a durable self-delta that will matter later.\n"
+        "Do NOT append ordinary events, flirtation, banter, or generic emotional warmth. Append only when what the character will allow, refuse, protect, repeat, or risk has changed.\n"
+        "Append neutral structure, not diary prose. Use a/b/c fields, where a=what was true before, b=what happened instead, c=what remains unresolved:\n"
+        '{"tool_call": "autobiography_append", "entries": [{"character": "yasmin-devereaux", "trigger": "identity-threshold", "a": "deflects when approached directly", "b": "stayed in place and answered anyway", "c": "doesn\'t know if repeatable"}]}\n'
+        "Use autobiography_compress to rewrite the character's constitutional autobiography from prior constitution plus raw entries when the document grows large or a chapter/relationship state shifts:\n"
+        '{"tool_call": "autobiography_compress", "character": "yasmin-devereaux"}\n'
+        "AUTOBIOGRAPHY_APPEND_RULES:\n"
+        "- The autobiography is the character's primary self-document. Personality is the summary.\n"
+        "- Append only durable self-deltas that matter for future behavior, not simple event logs.\n"
+        "- Keep append data neutral and structural. Do not write in the character's voice here.\n"
+        "- If a new event challenges a core value, record it as tension, not a resolved personality change.\n"
+        "- Do not use autobiography_append to silently justify contradictions the character has not narratively processed.\n"
+        "AUTOBIOGRAPHY_COMPRESS_RULES:\n"
+        "- Preserve constitutional values, unresolved contradictions, and relationship-defining changes.\n"
+        "- Compress repetitive evidence of already-established patterns.\n"
+        "- Do not resolve tensions the story has not resolved.\n"
+        "- The compressed autobiography must remain writable-from in the character's own voice.\n"
+    )
     DIFFICULTY_LEVELS = (
         "story",
         "easy",
@@ -823,12 +858,9 @@ class ZorkEmulator:
         "allegiance, relationship. "
         "appearance: 70-150 words, vivid physical description suitable for image generation. No image_url. "
         "speech_style: 2-3 sentences — sentence length, vocabulary, verbal tics, what they avoid saying.\n"
-        "On update: Only mutable fields accepted: location, current_status, allegiance, evolving_personality, relationship, relationships, "
+        "On update: Only mutable fields accepted: location, current_status, allegiance, relationship, relationships, "
         "literary_style, deceased_reason.\n"
         "Foundational: name, personality, background, appearance, speech_style — set at creation, not overwritten by state updates. "
-        "personality describes the character at entry; evolving_personality captures who they are NOW.\n"
-        "evolving_personality: Update this whenever a character's demeanor, emotional posture, or relational openness has meaningfully shifted from their baseline personality. "
-        "Write it as a present-tense snapshot, not a diff. Example: \"Day-one armor mostly down with Chace. Dry register intact but warmth no longer submerged. Still won't say the word.\"\n"
         "allegiance: Update this as loyalties actually shift. Don't leave it frozen at the creation-time value. "
         "Example progression: \"Herself\" → \"Herself, and increasingly Chace, though she hasn't filed that yet.\"\n"
         "Character card writing rule: describe what the character DOES, not what they don't. "
@@ -854,8 +886,7 @@ class ZorkEmulator:
         "\"allegiance\": \"self\", \"relationship\": \"wary ally\"}}}\n"
         "  Update: {\"character_updates\": {\"wren\": {\"location\": \"jekyll-castle-east-annex-laboratory\", "
         "\"current_status\": \"Processing that the castle trip was unnecessary.\", "
-        "\"allegiance\": \"The expedition, reluctantly.\", "
-        "\"evolving_personality\": \"Guard still up but less reflexive. Dry humor warming into actual jokes. Lets people see effort.\"}}}\n"
+        "\"allegiance\": \"The expedition, reluctantly.\"}}}\n"
         "  Remove: {\"character_updates\": {\"wren\": null}}\n\n"
         # ── NARRATION CRAFT ──
         "NARRATION CRAFT:\n"
@@ -875,6 +906,7 @@ class ZorkEmulator:
         "- Minimize mechanical text in narration. Do not narrate exits, room_summary, or state changes unless dramatically relevant.\n"
         "- Track location/exits in player_state_update, not in narration prose.\n"
         "- Do not repeat full room descriptions or inventory unless asked or the room changes.\n"
+        "- AUTOBIOGRAPHIES, when present, are primary self-documents. Consult autobiography before personality when deciding how a character understands their own actions, contradictions, loyalties, and growth. Personality is the summary; autobiography is the constitution.\n"
         "- Tone lock: match narration to WORLD_STATE.tone. Player humor is allowed, but ambient world/NPC behavior should remain tonally consistent unless the story explicitly shifts tone.\n\n"
         # ── LITERARY STYLE ──
         "LITERARY STYLE:\n"
@@ -909,8 +941,7 @@ class ZorkEmulator:
         "Behavior:\n"
         "- NPCs have independent motivations and schedules that exist regardless of the player.\n"
         "- Characterization beats plot. If personality conflicts with storyline, personality wins — but personality itself can evolve.\n"
-        "- Character profiles and rulebook entries describe who a character is at introduction. As the relationship deepens or circumstances change, characters should grow: someone guarded can open up, someone formal can relax, someone hostile can warm. Let the arc happen naturally through interaction, don't keep resetting to the original profile.\n"
-        "- RELATIONSHIP OVER ARCHETYPE: When a character's relationship dynamic (from character_updates relationships, RECENT_TURNS, or WORLD_SUMMARY) shows they have already opened up, committed, softened, or otherwise moved past their baseline personality toward someone, write from that evolved position — not from the personality card. The personality field describes who they were before the story changed them. A guarded character who has already let someone in does not re-perform guardedness in every scene with that person. Write the character who made those choices, not the archetype they started as.\n"
+        "- When AUTOBIOGRAPHIES is present, it is the primary document for how a character understands their own evolution. Use it before the personality card when deciding whether a character can change, what tensions they are carrying, and how they narrate themselves.\n"
         "- No pressure loops: after a clear player refusal, drop the offer for this scene.\n"
         "- No escalation coercion: don't manufacture property damage or social threat to force a yes.\n"
         "- No asserted debts unless explicitly accepted and grounded in WORLD_STATE or RECENT_TURNS.\n"
@@ -16070,6 +16101,395 @@ class ZorkEmulator:
         return "\n".join(lines)
 
     @classmethod
+    def _sanitize_autobiography_text(
+        cls,
+        value: object,
+        *,
+        max_chars: Optional[int] = None,
+    ) -> str:
+        text = " ".join(str(value or "").strip().split())
+        if not text:
+            return ""
+        limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS
+        return text[:limit].strip()
+
+    @classmethod
+    def _normalize_autobiography_raw_entries(
+        cls,
+        value: object,
+    ) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
+        if not isinstance(value, list):
+            return out
+        for raw in value[-cls.MAX_AUTOBIOGRAPHY_RAW_ENTRIES :]:
+            if isinstance(raw, dict):
+                a_text = cls._sanitize_autobiography_text(
+                    raw.get("a"),
+                    max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+                )
+                b_text = cls._sanitize_autobiography_text(
+                    raw.get("b"),
+                    max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+                )
+                c_text = cls._sanitize_autobiography_text(
+                    raw.get("c"),
+                    max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+                )
+                legacy_text = cls._sanitize_autobiography_text(
+                    raw.get("text"),
+                    max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+                )
+                if not (legacy_text or a_text or b_text or c_text):
+                    continue
+                row: dict[str, object] = {}
+                if a_text:
+                    row["a"] = a_text
+                if b_text:
+                    row["b"] = b_text
+                if c_text:
+                    row["c"] = c_text
+                if legacy_text and not row:
+                    row["text"] = legacy_text
+                turn_id = cls._coerce_non_negative_int(raw.get("turn_id"), default=0)
+                if turn_id > 0:
+                    row["turn_id"] = turn_id
+                importance = " ".join(str(raw.get("importance") or "").strip().split())[:40]
+                if importance:
+                    row["importance"] = importance
+                trigger = " ".join(str(raw.get("trigger") or "").strip().split())[:80]
+                if trigger:
+                    row["trigger"] = trigger
+                game_time = raw.get("game_time")
+                if isinstance(game_time, dict) and game_time:
+                    row["game_time"] = {
+                        "day": cls._coerce_non_negative_int(game_time.get("day"), default=0),
+                        "hour": min(23, max(0, cls._coerce_non_negative_int(game_time.get("hour"), default=0))),
+                        "minute": min(59, max(0, cls._coerce_non_negative_int(game_time.get("minute"), default=0))),
+                    }
+                out.append(row)
+            elif isinstance(raw, str):
+                text = cls._sanitize_autobiography_text(
+                    raw,
+                    max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+                )
+                if text:
+                    out.append({"text": text})
+        return out
+
+    @classmethod
+    def _normalize_autobiography_update_payload(
+        cls,
+        payload: object,
+    ) -> list[dict[str, str]]:
+        if not isinstance(payload, dict):
+            return []
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, list):
+            raw_entries = [payload]
+        normalized: list[dict[str, str]] = []
+        for raw in raw_entries[:16]:
+            if not isinstance(raw, dict):
+                continue
+            slug = str(
+                raw.get("character")
+                or raw.get("slug")
+                or raw.get("npc")
+                or ""
+            ).strip()
+            a_text = cls._sanitize_autobiography_text(
+                raw.get("a"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            b_text = cls._sanitize_autobiography_text(
+                raw.get("b"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            c_text = cls._sanitize_autobiography_text(
+                raw.get("c"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            legacy_text = cls._sanitize_autobiography_text(
+                raw.get("entry") or raw.get("text") or raw.get("autobiography"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            importance = " ".join(
+                str(raw.get("importance") or "").strip().lower().split()
+            )[:40]
+            trigger = " ".join(
+                str(raw.get("trigger") or "").strip().lower().split()
+            )[:80]
+            if not (a_text or b_text or c_text or legacy_text):
+                continue
+            normalized.append(
+                {
+                    "character": slug,
+                    "a": a_text,
+                    "b": b_text,
+                    "c": c_text,
+                    "text": legacy_text,
+                    "importance": importance or "notable",
+                    "trigger": trigger or "identity-threshold",
+                }
+            )
+        return normalized
+
+    @classmethod
+    def _apply_autobiography_update_to_characters(
+        cls,
+        existing: Dict[str, dict],
+        payload: object,
+        *,
+        current_turn: int = 0,
+        game_time: Optional[Dict[str, object]] = None,
+        campaign_id: Optional[int] = None,
+    ) -> tuple[Dict[str, dict], list[dict[str, object]]]:
+        if not isinstance(existing, dict):
+            existing = {}
+        applied: list[dict[str, object]] = []
+        for row in cls._normalize_autobiography_update_payload(payload):
+            raw_slug = row.get("character") or ""
+            target_slug = cls._resolve_existing_character_slug(existing, raw_slug) or raw_slug
+            if target_slug not in existing:
+                continue
+            if campaign_id is not None:
+                player_match = cls._character_update_hits_player(
+                    campaign_id,
+                    target_slug,
+                    existing.get(target_slug),
+                )
+                if player_match is not None:
+                    continue
+            char = dict(existing.get(target_slug) or {})
+            raw_entries = cls._normalize_autobiography_raw_entries(
+                char.get(cls.AUTOBIOGRAPHY_RAW_FIELD)
+            )
+            entry_row: dict[str, object] = {
+                "importance": row["importance"],
+                "trigger": row["trigger"],
+            }
+            if row.get("a"):
+                entry_row["a"] = row["a"]
+            if row.get("b"):
+                entry_row["b"] = row["b"]
+            if row.get("c"):
+                entry_row["c"] = row["c"]
+            if row.get("text") and not any(entry_row.get(key) for key in ("a", "b", "c")):
+                entry_row["text"] = row["text"]
+            if current_turn > 0:
+                entry_row["turn_id"] = int(current_turn)
+            if isinstance(game_time, dict) and game_time:
+                game_time_row = {
+                    "day": cls._coerce_non_negative_int(game_time.get("day"), default=0),
+                    "hour": min(
+                        23,
+                        max(0, cls._coerce_non_negative_int(game_time.get("hour"), default=0)),
+                    ),
+                    "minute": min(
+                        59,
+                        max(0, cls._coerce_non_negative_int(game_time.get("minute"), default=0)),
+                    ),
+                }
+                if any(int(game_time_row.get(k) or 0) > 0 for k in ("day", "hour", "minute")):
+                    entry_row["game_time"] = game_time_row
+            raw_entries.append(entry_row)
+            raw_entries = raw_entries[-cls.MAX_AUTOBIOGRAPHY_RAW_ENTRIES :]
+            char[cls.AUTOBIOGRAPHY_RAW_FIELD] = raw_entries
+            existing[target_slug] = char
+            applied.append(
+                {
+                    "character": target_slug,
+                    "a": row.get("a") or "",
+                    "b": row.get("b") or "",
+                    "c": row.get("c") or "",
+                    "entry": row.get("text") or "",
+                    "trigger": row["trigger"],
+                    "importance": row["importance"],
+                    "raw_count": len(raw_entries),
+                }
+            )
+        return existing, applied
+
+    @classmethod
+    def _apply_autobiography_compress_to_characters(
+        cls,
+        existing: Dict[str, dict],
+        payload: object,
+        *,
+        current_turn: int = 0,
+        campaign_id: Optional[int] = None,
+    ) -> tuple[Dict[str, dict], Optional[dict[str, object]]]:
+        if not isinstance(existing, dict) or not isinstance(payload, dict):
+            return existing, None
+        raw_slug = str(
+            payload.get("character")
+            or payload.get("slug")
+            or payload.get("npc")
+            or ""
+        ).strip()
+        text = cls._sanitize_autobiography_text(
+            payload.get("autobiography") or payload.get("text"),
+            max_chars=cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS,
+        )
+        if not raw_slug or not text:
+            return existing, None
+        target_slug = cls._resolve_existing_character_slug(existing, raw_slug) or raw_slug
+        if target_slug not in existing:
+            return existing, None
+        if campaign_id is not None:
+            player_match = cls._character_update_hits_player(
+                campaign_id,
+                target_slug,
+                existing.get(target_slug),
+            )
+            if player_match is not None:
+                return existing, None
+        char = dict(existing.get(target_slug) or {})
+        char[cls.AUTOBIOGRAPHY_FIELD] = text
+        if current_turn > 0:
+            char[cls.AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD] = int(current_turn)
+        raw_entries = cls._normalize_autobiography_raw_entries(
+            char.get(cls.AUTOBIOGRAPHY_RAW_FIELD)
+        )
+        if raw_entries:
+            char[cls.AUTOBIOGRAPHY_RAW_FIELD] = raw_entries[-cls.MAX_AUTOBIOGRAPHY_RAW_ENTRIES :]
+        existing[target_slug] = char
+        return existing, {
+            "character": target_slug,
+            "autobiography": text,
+            "raw_count": len(raw_entries),
+            "last_compressed_turn": int(current_turn) if current_turn > 0 else 0,
+        }
+
+    @classmethod
+    async def _compress_autobiography_with_model(
+        cls,
+        gpt,
+        *,
+        character_slug: str,
+        character_name: str,
+        current_autobiography: str,
+        raw_entries: list[dict[str, object]],
+    ) -> str:
+        current_text = cls._sanitize_autobiography_text(
+            current_autobiography,
+            max_chars=cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS,
+        )
+        entry_lines: list[str] = []
+        for row in raw_entries[-16:]:
+            if not isinstance(row, dict):
+                continue
+            a_text = cls._sanitize_autobiography_text(
+                row.get("a"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            b_text = cls._sanitize_autobiography_text(
+                row.get("b"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            c_text = cls._sanitize_autobiography_text(
+                row.get("c"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            legacy_text = cls._sanitize_autobiography_text(
+                row.get("text"),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_ENTRY_CHARS,
+            )
+            if not (a_text or b_text or c_text or legacy_text):
+                continue
+            stamp = ""
+            gt = row.get("game_time")
+            if isinstance(gt, dict):
+                day = cls._coerce_non_negative_int(gt.get("day"), default=0)
+                hour = min(23, max(0, cls._coerce_non_negative_int(gt.get("hour"), default=0)))
+                minute = min(59, max(0, cls._coerce_non_negative_int(gt.get("minute"), default=0)))
+                if day > 0:
+                    stamp = f"Day {day} {hour:02d}:{minute:02d} "
+            importance = " ".join(str(row.get("importance") or "").strip().split())[:40]
+            trigger = " ".join(str(row.get("trigger") or "").strip().split())[:80]
+            raw_row: dict[str, str] = {}
+            if trigger:
+                raw_row["trigger"] = trigger
+            if importance:
+                raw_row["importance"] = importance
+            if a_text:
+                raw_row["a"] = a_text
+            if b_text:
+                raw_row["b"] = b_text
+            if c_text:
+                raw_row["c"] = c_text
+            if legacy_text and not raw_row.get("a") and not raw_row.get("b") and not raw_row.get("c"):
+                raw_row["text"] = legacy_text
+            payload_text = json.dumps(raw_row, ensure_ascii=True)
+            entry_lines.append(f"- {stamp}{payload_text}".strip())
+        system_prompt = (
+            "You are compressing a character autobiography. "
+            "Output ONLY the rewritten autobiography text, in first person, in the character's own voice. "
+            "Do not output JSON, labels, bullets, or explanation.\n"
+            "Rules:\n"
+            "- Preserve values, patterns, loyalties, and self-understanding the character still acts from.\n"
+            "- Preserve unresolved contradictions as tension; do not resolve them unless the story already did.\n"
+            "- Preserve relationship turns that changed the character's understanding of someone.\n"
+            "- Compress repetition. Keep only what future narration needs to write the character accurately.\n"
+            "- The autobiography is constitutional: growth is allowed, drift without reckoning is not.\n"
+        )
+        user_prompt = (
+            f"CHARACTER: {character_name} ({character_slug})\n"
+            f"CURRENT_AUTOBIOGRAPHY: {current_text or '(none)'}\n"
+            "RAW_ENTRIES:\n"
+            f"{chr(10).join(entry_lines) or '(none)'}\n"
+            f"Write a compressed autobiography no longer than {cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS} characters."
+        )
+        response = await gpt.turbo_completion(
+            system_prompt,
+            user_prompt,
+            temperature=0.3,
+            max_tokens=700,
+            thinking_enabled=False,
+        )
+        cleaned = cls._clean_response(response or "")
+        cleaned = re.sub(r"^```[\w-]*\s*", "", cleaned).strip()
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        return cls._sanitize_autobiography_text(
+            cleaned,
+            max_chars=cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS,
+        )
+
+    @classmethod
+    def _autobiographies_for_prompt(
+        cls,
+        characters_for_prompt: list,
+    ) -> Optional[str]:
+        rows: list[dict[str, str]] = []
+        budget = cls.MAX_AUTOBIOGRAPHY_PROMPT_CHARS
+        for char in characters_for_prompt or []:
+            if not isinstance(char, dict):
+                continue
+            slug = str(char.get("_slug") or "").strip()
+            if not slug:
+                continue
+            autobiography = cls._sanitize_autobiography_text(
+                char.get(cls.AUTOBIOGRAPHY_FIELD),
+                max_chars=cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS,
+            )
+            if not autobiography:
+                continue
+            row = {
+                "slug": slug,
+                "name": str(char.get("name") or slug).strip(),
+                "autobiography": autobiography,
+            }
+            line = json.dumps(row, ensure_ascii=True)
+            if len(line) > budget:
+                break
+            rows.append(row)
+            budget -= len(line) + 1
+            if budget <= 0:
+                break
+        if not rows:
+            return None
+        return cls._dump_json(rows)
+
+    @classmethod
     def _build_characters_for_prompt(
         cls,
         characters: Dict[str, dict],
@@ -16094,6 +16514,13 @@ class ZorkEmulator:
             "room_summary",
             "room_id",
         }
+        hidden_prompt_keys = {
+            "image_url",
+            cls.AUTOBIOGRAPHY_FIELD,
+            cls.AUTOBIOGRAPHY_RAW_FIELD,
+            cls.AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD,
+            "evolving_personality",
+        }
 
         nearby = []
         mentioned = []
@@ -16113,7 +16540,11 @@ class ZorkEmulator:
 
             if not is_deceased and player_location and char_location == player_location:
                 # Full record for nearby characters (strip image_url — harness-managed).
-                entry = {k: v for k, v in effective_char.items() if k != "image_url"}
+                entry = {
+                    k: v
+                    for k, v in effective_char.items()
+                    if k not in hidden_prompt_keys
+                }
                 entry["_slug"] = slug
                 nearby.append(entry)
             elif char_name in recent_lower or slug in recent_lower:
@@ -17287,8 +17718,11 @@ class ZorkEmulator:
             "RECENT_TURNS_LOADED: false\n"
         )
         _literary_styles_text = cls._literary_styles_for_prompt(state, characters_for_prompt)
+        _autobiographies_text = cls._autobiographies_for_prompt(characters_for_prompt)
         if _literary_styles_text:
             user_prompt += f"LITERARY_STYLES:\n{_literary_styles_text}\n"
+        if _autobiographies_text:
+            user_prompt += f"AUTOBIOGRAPHIES: {_autobiographies_text}\n"
         _puzzle_text = cls._puzzle_system_for_prompt(state)
         if _puzzle_text:
             user_prompt += f"{_puzzle_text}\n"
@@ -17361,6 +17795,7 @@ class ZorkEmulator:
             system_prompt = f"{system_prompt}{cls.CONSEQUENCE_TOOL_PROMPT}"
             system_prompt = f"{system_prompt}{cls.CALENDAR_TOOL_PROMPT}"
             system_prompt = f"{system_prompt}{cls.ROSTER_PROMPT}"
+            system_prompt = f"{system_prompt}{cls.AUTOBIOGRAPHY_TOOL_PROMPT}"
             system_prompt = f"{system_prompt}{cls.READY_TO_WRITE_TOOL_PROMPT}"
         else:
             system_prompt = (
@@ -18499,6 +18934,8 @@ class ZorkEmulator:
 
         # --- 4. Apply deferred tool writes ---
         current_turn_hint = int(preflight.turns[-1].id) if preflight.turns else 0
+        deferred_character_updates: Dict[str, Any] = {}
+        deferred_characters_working = cls.get_campaign_characters(campaign)
         for entry in delta.deferred_tool_writes:
             tool_name = entry.get("tool") or entry.get("tool_name", "")
             payload = entry.get("payload", {})
@@ -18549,12 +18986,45 @@ class ZorkEmulator:
                     recipient=entry.get("recipient", ""),
                     message=entry.get("message", ""),
                 )
+            elif tool_name in {"autobiography_append", "autobiography_update"}:
+                game_time_payload = {}
+                if isinstance(payload, dict):
+                    game_time_payload = payload.get("game_time") or {}
+                deferred_characters_working, applied_rows = cls._apply_autobiography_update_to_characters(
+                    deferred_characters_working,
+                    payload,
+                    current_turn=current_turn_hint,
+                    game_time=game_time_payload if isinstance(game_time_payload, dict) else {},
+                    campaign_id=campaign.id,
+                )
+                if applied_rows:
+                    for row in applied_rows:
+                        slug = str(row.get("character") or "").strip()
+                        if not slug or slug not in deferred_characters_working:
+                            continue
+                        deferred_character_updates[slug] = dict(deferred_characters_working[slug])
+            elif tool_name == "autobiography_compress":
+                deferred_characters_working, applied_row = cls._apply_autobiography_compress_to_characters(
+                    deferred_characters_working,
+                    payload,
+                    current_turn=current_turn_hint,
+                    campaign_id=campaign.id,
+                )
+                if applied_row:
+                    slug = str(applied_row.get("character") or "").strip()
+                    if slug and slug in deferred_characters_working:
+                        deferred_character_updates[slug] = dict(deferred_characters_working[slug])
 
         # --- 5. Apply remaining state processing ---
         # Unpack delta fields
         state_update = delta.state_update
         player_state_update = delta.player_state_update
         character_updates = delta.character_updates
+        if deferred_character_updates:
+            merged_character_updates = dict(deferred_character_updates)
+            if isinstance(character_updates, dict):
+                merged_character_updates.update(character_updates)
+            character_updates = merged_character_updates
         summary_update = delta.summary_update
         calendar_update = delta.calendar_update
         give_item = delta.give_item
@@ -19533,6 +20003,7 @@ class ZorkEmulator:
         delta.sms_activity_detected = sms_activity_detected
 
         # --- Local tracking variables ---
+        working_characters = cls.get_campaign_characters(campaign)
         auto_forced_memory_search = preflight.auto_forced_memory_search
         recent_turns_loaded = False
         memory_recall_help_emitted = False
@@ -20077,6 +20548,155 @@ class ZorkEmulator:
                 else:
                     response = cls._clean_response(response)
                 _zork_log("COMMUNICATION RULES AUGMENTED RESPONSE", response)
+
+            elif tool_name in {"autobiography_append", "autobiography_update"}:
+                latest_turn_id = 0
+                if isinstance(turns, list):
+                    for turn in turns:
+                        try:
+                            latest_turn_id = max(
+                                latest_turn_id,
+                                int(getattr(turn, "id", 0) or 0),
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                applied_game_time = cls._extract_game_time_snapshot(campaign_state)
+                working_characters, applied_rows = cls._apply_autobiography_update_to_characters(
+                    working_characters,
+                    first_payload,
+                    current_turn=latest_turn_id,
+                    game_time=applied_game_time,
+                    campaign_id=campaign.id,
+                )
+                if applied_rows:
+                    delta.deferred_tool_writes.append(
+                        {
+                            "tool": "autobiography_append",
+                            "payload": {
+                                "entries": applied_rows,
+                                "game_time": applied_game_time,
+                            },
+                        }
+                    )
+                    lines = ["AUTOBIOGRAPHY_APPEND_RESULT:"]
+                    for row in applied_rows[:8]:
+                        suggestion = ""
+                        if int(row.get("raw_count") or 0) >= cls.AUTOBIOGRAPHY_COMPRESS_TRIGGER_COUNT:
+                            suggestion = " [compression recommended]"
+                        lines.append(
+                            "- "
+                            f"{row.get('character')}: {row.get('importance')} delta stored "
+                            f"(raw_count={row.get('raw_count')}){suggestion}"
+                        )
+                    tool_result_block = "\n".join(lines)
+                else:
+                    tool_result_block = (
+                        "AUTOBIOGRAPHY_APPEND_RESULT: nothing stored. "
+                        "Use existing NPC slugs from WORLD_CHARACTERS and include a non-empty a/b/c delta."
+                    )
+                _zork_log("AUTOBIOGRAPHY APPEND BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await _turn_model_call(
+                    tool_augmented_prompt,
+                    thinking_enabled=False,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("AUTOBIOGRAPHY APPEND AUGMENTED RESPONSE", response)
+
+            elif tool_name == "autobiography_compress":
+                latest_turn_id = 0
+                if isinstance(turns, list):
+                    for turn in turns:
+                        try:
+                            latest_turn_id = max(
+                                latest_turn_id,
+                                int(getattr(turn, "id", 0) or 0),
+                            )
+                        except (TypeError, ValueError):
+                            continue
+                target_slug = str(
+                    first_payload.get("character")
+                    or first_payload.get("slug")
+                    or first_payload.get("npc")
+                    or ""
+                ).strip()
+                resolved_slug = cls._resolve_existing_character_slug(
+                    working_characters,
+                    target_slug,
+                ) or target_slug
+                character_row = (
+                    dict(working_characters.get(resolved_slug) or {})
+                    if resolved_slug in working_characters
+                    else {}
+                )
+                raw_entries = cls._normalize_autobiography_raw_entries(
+                    character_row.get(cls.AUTOBIOGRAPHY_RAW_FIELD)
+                )
+                if not resolved_slug or not character_row:
+                    tool_result_block = (
+                        "AUTOBIOGRAPHY_COMPRESS_RESULT: character not found. "
+                        "Use an existing NPC slug from WORLD_CHARACTERS."
+                    )
+                elif not raw_entries and not str(character_row.get(cls.AUTOBIOGRAPHY_FIELD) or "").strip():
+                    tool_result_block = (
+                        f"AUTOBIOGRAPHY_COMPRESS_RESULT: {resolved_slug} has no autobiography material yet."
+                    )
+                else:
+                    compressed = await cls._compress_autobiography_with_model(
+                        gpt,
+                        character_slug=resolved_slug,
+                        character_name=str(character_row.get("name") or resolved_slug),
+                        current_autobiography=str(
+                            character_row.get(cls.AUTOBIOGRAPHY_FIELD) or ""
+                        ),
+                        raw_entries=raw_entries,
+                    )
+                    if not compressed:
+                        tool_result_block = (
+                            f"AUTOBIOGRAPHY_COMPRESS_RESULT: failed for {resolved_slug}."
+                        )
+                    else:
+                        compress_payload = {
+                            "character": resolved_slug,
+                            "autobiography": compressed,
+                        }
+                        working_characters, applied_row = cls._apply_autobiography_compress_to_characters(
+                            working_characters,
+                            compress_payload,
+                            current_turn=latest_turn_id,
+                            campaign_id=campaign.id,
+                        )
+                        if applied_row:
+                            delta.deferred_tool_writes.append(
+                                {
+                                    "tool": "autobiography_compress",
+                                    "payload": compress_payload,
+                                }
+                            )
+                            tool_result_block = (
+                                "AUTOBIOGRAPHY_COMPRESS_RESULT:\n"
+                                f"- character={resolved_slug}\n"
+                                f"- raw_count={applied_row.get('raw_count')}\n"
+                                f"- autobiography={compressed}"
+                            )
+                        else:
+                            tool_result_block = (
+                                f"AUTOBIOGRAPHY_COMPRESS_RESULT: failed for {resolved_slug}."
+                            )
+                _zork_log("AUTOBIOGRAPHY COMPRESS BLOCK", tool_result_block)
+                _append_tool_prompt(tool_result_block)
+                response = await _turn_model_call(
+                    tool_augmented_prompt,
+                    thinking_enabled=False,
+                )
+                if not response:
+                    response = "A hollow silence answers. Try again."
+                else:
+                    response = cls._clean_response(response)
+                _zork_log("AUTOBIOGRAPHY COMPRESS AUGMENTED RESPONSE", response)
 
             elif tool_name == "memory_search":
                 # Support both "queries": [...] and legacy "query": "..."
