@@ -9,7 +9,7 @@ from PIL import Image
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.jobs.image_generation_job import ImageGenerationJob
 from discord_tron_master.bot import clean_traceback
-from discord_tron_master.classes.zork_emulator import ZorkEmulator
+from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 
 # For queue manager, etc.
 discord = DiscordBot.get_instance()
@@ -96,7 +96,7 @@ class Reactions(commands.Cog):
                     return
 
                 is_admin = await self._is_image_admin_member(user)
-                owner_ok = int(getattr(turn, "user_id", 0) or 0) == int(user.id)
+                owner_ok = str(getattr(turn, "actor_id", "") or "") == str(user.id)
                 if not owner_ok and not is_admin:
                     await reaction.message.channel.send(
                         f"{user.mention} only the turn owner or an Image Admin can do that."
@@ -107,7 +107,7 @@ class Reactions(commands.Cog):
                 with app.app_context():
                     if str(reaction.emoji) == "⏪":
                         result = ZorkEmulator.execute_rewind(
-                            int(turn.campaign_id),
+                            turn.campaign_id,
                             reaction.message.id,
                             channel_id=reaction.message.channel.id,
                             rewind_user_id=user.id if dm_scope else None,
@@ -115,7 +115,7 @@ class Reactions(commands.Cog):
                         )
                     else:
                         result = ZorkEmulator.execute_delete_turn(
-                            int(turn.campaign_id),
+                            turn.campaign_id,
                             reaction.message.id,
                             channel_id=reaction.message.channel.id,
                             delete_user_id=user.id if dm_scope else None,
@@ -131,8 +131,8 @@ class Reactions(commands.Cog):
                     turn_id, deleted_count = result
                     await self._purge_messages_after(reaction.message.channel, reaction.message)
                     if not dm_scope:
-                        ZorkEmulator.cancel_pending_timer(int(turn.campaign_id))
-                        ZorkEmulator.cancel_pending_sms_deliveries(int(turn.campaign_id))
+                        ZorkEmulator.cancel_pending_timer(turn.campaign_id)
+                        ZorkEmulator.cancel_pending_sms_deliveries(turn.campaign_id)
                         await reaction.message.channel.send(
                             f"Rewound to turn {turn_id}. Removed {deleted_count} subsequent turn(s)."
                         )
@@ -166,8 +166,8 @@ class Reactions(commands.Cog):
                     return
 
                 if not dm_scope:
-                    ZorkEmulator.cancel_pending_timer(int(turn.campaign_id))
-                    ZorkEmulator.cancel_pending_sms_deliveries(int(turn.campaign_id))
+                    ZorkEmulator.cancel_pending_timer(turn.campaign_id)
+                    ZorkEmulator.cancel_pending_sms_deliveries(turn.campaign_id)
                 await self._delete_turn_messages(
                     reaction.message.channel,
                     reaction.message,

@@ -16,7 +16,7 @@ from discord_tron_master.classes.jobs.image_generation_job import ImageGeneratio
 from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJob
 from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
-from discord_tron_master.classes.zork_emulator import ZorkEmulator
+from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 
 # For queue manager, etc.
 discord_wrapper = DiscordBot.get_instance()

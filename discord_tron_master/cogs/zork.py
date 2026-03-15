@@ -7,16 +7,8 @@ import discord
 
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
-from discord_tron_master.classes.zork_emulator import ZorkEmulator
+from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 from discord_tron_master.classes.zork_memory import ZorkMemory
-from discord_tron_master.models.base import db
-from discord_tron_master.models.zork import (
-    ZorkCampaign,
-    ZorkChannel,
-    ZorkPlayer,
-    ZorkSnapshot,
-    ZorkTurn,
-)
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -483,10 +475,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -568,7 +560,7 @@ class Zork(commands.Cog):
                 message = f"{summary}\n\n{message}"
             if literary_profiles:
                 with app.app_context():
-                    campaign = ZorkCampaign.query.get(campaign.id)
+                    campaign = ZorkEmulator.query_campaign(campaign.id)
                     state = ZorkEmulator.get_campaign_state(campaign)
                     styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
                     if not isinstance(styles, dict):
@@ -576,8 +568,8 @@ class Zork(commands.Cog):
                     styles.update(literary_profiles)
                     state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
                     campaign.state_json = ZorkEmulator._dump_json(state)
-                    campaign.updated = db.func.now()
-                    db.session.commit()
+                    campaign.updated_at = ZorkEmulator.utcnow()
+                    ZorkEmulator.commit_model(campaign)
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(ctx)
@@ -610,10 +602,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -622,7 +614,7 @@ class Zork(commands.Cog):
 
         if operation == "list":
             with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign.id)
+                campaign = ZorkEmulator.query_campaign(campaign.id)
                 state = ZorkEmulator.get_campaign_state(campaign)
                 styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
             if not isinstance(styles, dict) or not styles:
@@ -645,7 +637,7 @@ class Zork(commands.Cog):
 
         if operation == "clear":
             with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign.id)
+                campaign = ZorkEmulator.query_campaign(campaign.id)
                 state = ZorkEmulator.get_campaign_state(campaign)
                 styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
                 if not isinstance(styles, dict) or not styles:
@@ -654,8 +646,8 @@ class Zork(commands.Cog):
                 count = len(styles)
                 state.pop(ZorkEmulator.LITERARY_STYLES_STATE_KEY, None)
                 campaign.state_json = ZorkEmulator._dump_json(state)
-                campaign.updated = db.func.now()
-                db.session.commit()
+                campaign.updated_at = ZorkEmulator.utcnow()
+                ZorkEmulator.commit_model(campaign)
             await ctx.send(f"Cleared {count} literary style profile(s).")
             return
 
@@ -668,7 +660,7 @@ class Zork(commands.Cog):
                 )
                 return
             with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign.id)
+                campaign = ZorkEmulator.query_campaign(campaign.id)
                 state = ZorkEmulator.get_campaign_state(campaign)
                 styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
                 if not isinstance(styles, dict) or not styles:
@@ -687,8 +679,8 @@ class Zork(commands.Cog):
                 if not styles:
                     state.pop(ZorkEmulator.LITERARY_STYLES_STATE_KEY, None)
                 campaign.state_json = ZorkEmulator._dump_json(state)
-                campaign.updated = db.func.now()
-                db.session.commit()
+                campaign.updated_at = ZorkEmulator.utcnow()
+                ZorkEmulator.commit_model(campaign)
             await ctx.send(
                 f"Removed {len(keys_to_remove)} literary style profile(s): "
                 + ", ".join(f"`{k}`" for k in sorted(keys_to_remove))
@@ -740,7 +732,7 @@ class Zork(commands.Cog):
 
         # Store profiles in campaign_state
         with app.app_context():
-            campaign = ZorkCampaign.query.get(campaign.id)
+            campaign = ZorkEmulator.query_campaign(campaign.id)
             state = ZorkEmulator.get_campaign_state(campaign)
             styles = state.get(ZorkEmulator.LITERARY_STYLES_STATE_KEY)
             if not isinstance(styles, dict):
@@ -748,8 +740,8 @@ class Zork(commands.Cog):
             styles.update(profiles)
             state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
             campaign.state_json = ZorkEmulator._dump_json(state)
-            campaign.updated = db.func.now()
-            db.session.commit()
+            campaign.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(campaign)
 
         keys = sorted(profiles.keys())
         keys_text = ", ".join(f"`{k}`" for k in keys)
@@ -769,10 +761,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -877,11 +869,11 @@ class Zork(commands.Cog):
                 channel_rec = ZorkEmulator.get_or_create_channel(
                     message.guild.id, message.channel.id
                 )
-                if not channel_rec.enabled or channel_rec.active_campaign_id is None:
+                if not channel_rec.enabled or channel_rec.campaign_id is None:
                     await message.channel.send("No active campaign in this channel.")
                     return
-                campaign_id = channel_rec.active_campaign_id
-            campaign = ZorkCampaign.query.get(campaign_id)
+                campaign_id = channel_rec.campaign_id
+            campaign = ZorkEmulator.query_campaign(campaign_id)
             if campaign is None:
                 await message.channel.send("Campaign not found.")
                 return
@@ -962,7 +954,7 @@ class Zork(commands.Cog):
             if binding is None:
                 return
             with app.app_context():
-                campaign = ZorkCampaign.query.get(binding["campaign_id"])
+                campaign = ZorkEmulator.query_campaign(binding["campaign_id"])
                 if campaign is None:
                     self.config.clear_zork_private_dm(message.author.id)
                     await message.channel.send(
@@ -1015,7 +1007,7 @@ class Zork(commands.Cog):
 
         # Setup mode intercept — route to setup handler instead of play_action.
         with app.app_context():
-            _setup_campaign = ZorkCampaign.query.get(campaign_id)
+            _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
             _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
                 _setup_campaign
             )
@@ -1023,7 +1015,7 @@ class Zork(commands.Cog):
             reaction_added = await ZorkEmulator._add_processing_reaction(message)
             try:
                 with app.app_context():
-                    _setup_campaign = ZorkCampaign.query.get(campaign_id)
+                    _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
                     response = await ZorkEmulator.handle_setup_message(
                         message, content, _setup_campaign, command_prefix=self._prefix()
                     )
@@ -1109,8 +1101,8 @@ class Zork(commands.Cog):
                     return
 
                 campaign = (
-                    ZorkCampaign.query.get(channel.active_campaign_id)
-                    if channel.active_campaign_id
+                    ZorkEmulator.query_campaign_for_channel(channel)
+                    if channel.campaign_id
                     else None
                 )
                 if campaign is None:
@@ -1135,7 +1127,7 @@ class Zork(commands.Cog):
 
         # Setup mode intercept
         with app.app_context():
-            _setup_campaign = ZorkCampaign.query.get(campaign_id)
+            _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
             _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
                 _setup_campaign
             )
@@ -1143,7 +1135,7 @@ class Zork(commands.Cog):
             reaction_added = await ZorkEmulator._add_processing_reaction(ctx)
             try:
                 with app.app_context():
-                    _setup_campaign = ZorkCampaign.query.get(campaign_id)
+                    _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
                     response = await ZorkEmulator.handle_setup_message(
                         ctx, action, _setup_campaign, command_prefix=self._prefix()
                     )
@@ -1269,8 +1261,8 @@ class Zork(commands.Cog):
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
             channel.enabled = False
-            channel.updated = db.func.now()
-            db.session.commit()
+            channel.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(channel)
             await ctx.send("Adventure mode disabled for this channel.")
 
     @zork.command(name="campaigns")
@@ -1290,7 +1282,7 @@ class Zork(commands.Cog):
                     f"No campaigns yet. Use `{self._prefix()}zork campaign <name>` to create one."
                 )
                 return
-            active_id = channel.active_campaign_id
+            active_id = channel.campaign_id
             lines = self._format_preset_campaigns(active_id, campaigns)
             if not lines:
                 await ctx.send(
@@ -1311,10 +1303,10 @@ class Zork(commands.Cog):
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
             if name is None:
-                if channel.active_campaign_id is None:
+                if channel.campaign_id is None:
                     await ctx.send("No active campaign in this channel.")
                     return
-                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+                campaign = ZorkEmulator.query_campaign_for_channel(channel)
                 campaign_name = campaign.name if campaign else "unknown"
                 await ctx.send(f"Active campaign: `{campaign_name}`.")
                 return
@@ -1341,10 +1333,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1366,10 +1358,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1387,10 +1379,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1408,10 +1400,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1433,10 +1425,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1454,10 +1446,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1476,10 +1468,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1502,7 +1494,7 @@ class Zork(commands.Cog):
             state["puzzle_mode"] = normalized
             campaign.state_json = ZorkEmulator._dump_json(state)
             from discord_tron_master.classes.app_config import AppConfig as AC
-            db.session.commit()
+            ZorkEmulator.commit_model(campaign)
             await ctx.send(f"Puzzle mode set to `{normalized}` for campaign `{campaign.name}`.")
 
     @zork.group(name="timed-events", invoke_without_command=True)
@@ -1516,10 +1508,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1541,14 +1533,16 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(
+            # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+            # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+            if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(
                 ctx
             ):
                 await ctx.send(
@@ -1569,14 +1563,16 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(
+            # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+            # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+            if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(
                 ctx
             ):
                 await ctx.send(
@@ -1597,10 +1593,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1631,9 +1627,9 @@ class Zork(commands.Cog):
                 campaign.summary = (campaign.summary or "").replace(
                     old_name, character_name
                 )
-                campaign.updated = db.func.now()
-            player.updated = db.func.now()
-            db.session.commit()
+                campaign.updated_at = ZorkEmulator.utcnow()
+            player.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_models(campaign, player)
             await ctx.send(f"Identity set to `{character_name}`.")
 
     @zork.command(name="persona")
@@ -1647,10 +1643,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1680,8 +1676,8 @@ class Zork(commands.Cog):
             persona = persona[:400]
             player_state["persona"] = persona
             player.state_json = ZorkEmulator._dump_json(player_state)
-            player.updated = db.func.now()
-            db.session.commit()
+            player.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(player)
             await ctx.send("Persona updated for your character.")
 
     @zork.command(name="private")
@@ -1712,8 +1708,8 @@ class Zork(commands.Cog):
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
             campaign = (
-                ZorkCampaign.query.get(channel.active_campaign_id)
-                if channel.active_campaign_id
+                ZorkEmulator.query_campaign_for_channel(channel)
+                if channel.campaign_id
                 else None
             )
             player = None
@@ -1799,10 +1795,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -1838,7 +1834,9 @@ class Zork(commands.Cog):
             )
             return
 
-        if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+        # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+        # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+        if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
             await ctx.send(
                 "Only the campaign creator or an Image Admin can change this setting."
             )
@@ -1866,7 +1864,7 @@ class Zork(commands.Cog):
                         "No private DM campaign is bound. Enable it from a campaign channel first."
                     )
                     return
-                campaign = ZorkCampaign.query.get(binding.get("campaign_id"))
+                campaign = ZorkEmulator.query_campaign(binding.get("campaign_id"))
                 if campaign is None:
                     self.config.clear_zork_private_dm(ctx.author.id)
                     await ctx.send(
@@ -1875,10 +1873,10 @@ class Zork(commands.Cog):
                     return
             else:
                 channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-                if channel.active_campaign_id is None:
+                if channel.campaign_id is None:
                     await ctx.send("No active campaign in this channel.")
                     return
-                campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+                campaign = ZorkEmulator.query_campaign_for_channel(channel)
                 if campaign is None:
                     await ctx.send("No active campaign in this channel.")
                     return
@@ -1908,7 +1906,9 @@ class Zork(commands.Cog):
 
         if (
             ctx.guild is not None
-            and campaign.created_by != ctx.author.id
+            # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+            # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+            and campaign.created_by_actor_id != str(ctx.author.id)
             and not await self._is_image_admin(ctx)
         ):
             await ctx.send(
@@ -1968,10 +1968,10 @@ class Zork(commands.Cog):
                     campaign = ZorkEmulator.create_campaign(
                         ctx.guild.id, campaign_name, ctx.author.id
                     )
-                    channel.active_campaign_id = campaign.id
+                    channel.campaign_id = campaign.id
                     channel.enabled = True
-                    channel.updated = db.func.now()
-                    db.session.commit()
+                    channel.updated_at = ZorkEmulator.utcnow()
+                    ZorkEmulator.commit_model(channel)
                 else:
                     channel, campaign = ZorkEmulator.enable_channel(
                         ctx.guild.id, ctx.channel.id, ctx.author.id
@@ -1992,8 +1992,8 @@ class Zork(commands.Cog):
                         styles.update(literary_profiles)
                         campaign_state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
                         campaign.state_json = ZorkEmulator._dump_json(campaign_state)
-                        campaign.updated = db.func.now()
-                        db.session.commit()
+                        campaign.updated_at = ZorkEmulator.utcnow()
+                        ZorkEmulator.commit_model(campaign)
                     if not requested_name and (
                         campaign_state.get("setup_phase")
                         or campaign_state.get("default_persona")
@@ -2001,8 +2001,8 @@ class Zork(commands.Cog):
                         campaign.state_json = "{}"
                         campaign.summary = ""
                         campaign.last_narration = None
-                        campaign.updated = db.func.now()
-                        db.session.commit()
+                        campaign.updated_at = ZorkEmulator.utcnow()
+                        ZorkEmulator.commit_model(campaign)
                         campaign_state = ZorkEmulator.get_campaign_state(campaign)
 
                 if not create_empty and ((has_txt_attachment and requested_name) or (
@@ -2059,10 +2059,10 @@ class Zork(commands.Cog):
                 campaign_name,
                 ctx.author.id,
             )
-            channel.active_campaign_id = campaign.id
+            channel.campaign_id = campaign.id
             channel.enabled = True
-            channel.updated = db.func.now()
-            db.session.commit()
+            channel.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(channel)
             att_summary = None
             if (not create_empty) and any(
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
@@ -2082,8 +2082,8 @@ class Zork(commands.Cog):
                     styles.update(literary_profiles)
                     campaign_state[ZorkEmulator.LITERARY_STYLES_STATE_KEY] = styles
                     campaign.state_json = ZorkEmulator._dump_json(campaign_state)
-                    campaign.updated = db.func.now()
-                    db.session.commit()
+                    campaign.updated_at = ZorkEmulator.utcnow()
+                    ZorkEmulator.commit_model(campaign)
             setup_message = None
             if not create_empty:
                 setup_message = await ZorkEmulator.start_campaign_setup(
@@ -2121,8 +2121,8 @@ class Zork(commands.Cog):
             with app.app_context():
                 channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
                 campaign = (
-                    ZorkCampaign.query.get(channel.active_campaign_id)
-                    if channel.active_campaign_id
+                    ZorkEmulator.query_campaign_for_channel(channel)
+                    if channel.campaign_id
                     else None
                 )
                 campaign_text = (
@@ -2145,29 +2145,29 @@ class Zork(commands.Cog):
 
         with app.app_context():
             target_channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            source_channel = ZorkChannel.query.filter_by(channel_id=source_thread_id).first()
-            if source_channel is None or source_channel.active_campaign_id is None:
+            source_channel = ZorkEmulator.query_channel_by_channel_id(source_thread_id)
+            if source_channel is None or source_channel.campaign_id is None:
                 await ctx.send("That thread/channel is not linked to an active Zork campaign.")
                 return
-            source_campaign = ZorkCampaign.query.get(source_channel.active_campaign_id)
+            source_campaign = ZorkEmulator.query_campaign_for_channel(source_channel)
             if source_campaign is None:
                 await ctx.send("That thread/channel points to a missing Zork campaign.")
                 return
             if (
-                target_channel.active_campaign_id == source_campaign.id
+                target_channel.campaign_id == source_campaign.id
                 and bool(target_channel.enabled)
             ):
                 await ctx.send(
                     f"This thread/channel is already linked to `{source_campaign.name}`."
                 )
                 return
-            target_channel.active_campaign_id = source_campaign.id
+            target_channel.campaign_id = source_campaign.id
             target_channel.enabled = True
-            target_channel.updated = db.func.now()
-            db.session.commit()
+            target_channel.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(target_channel)
             source_guild_text = (
-                f" from guild `{source_campaign.guild_id}`"
-                if source_campaign.guild_id != ctx.guild.id
+                f" from guild `{source_campaign.namespace}`"
+                if str(source_campaign.namespace) != str(ctx.guild.id)
                 else ""
             )
             await ctx.send(
@@ -2199,10 +2199,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2278,10 +2278,10 @@ class Zork(commands.Cog):
 
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2298,7 +2298,7 @@ class Zork(commands.Cog):
             except Exception:
                 status_msg = None
             with app.app_context():
-                campaign = ZorkCampaign.query.get(campaign_id)
+                campaign = ZorkEmulator.query_campaign(campaign_id)
                 if campaign is None:
                     await ctx.send("No active campaign in this channel.")
                     return
@@ -2374,10 +2374,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2430,8 +2430,8 @@ class Zork(commands.Cog):
                 player_state.pop("pending_avatar_prompt", None)
                 player_state.pop("pending_avatar_generated_at", None)
                 player.state_json = ZorkEmulator._dump_json(player_state)
-                player.updated = db.func.now()
-                db.session.commit()
+                player.updated_at = ZorkEmulator.utcnow()
+                ZorkEmulator.commit_model(player)
                 await ctx.send(f"Avatar set: {clean_input}")
                 return
 
@@ -2459,7 +2459,7 @@ class Zork(commands.Cog):
                     f"Adventure mode is disabled. Run `{self._prefix()}zork` first."
                 )
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, "main", ctx.author.id
@@ -2523,10 +2523,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, "main", ctx.author.id
@@ -2568,10 +2568,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, "main", ctx.author.id
@@ -2593,14 +2593,14 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            players = ZorkPlayer.query.filter_by(campaign_id=campaign.id).all()
+            players = ZorkEmulator.query_players_for_campaign(campaign.id)
             if not players:
                 await ctx.send("No players have joined this campaign yet.")
                 return
@@ -2618,11 +2618,13 @@ class Zork(commands.Cog):
                 party_status = player_state.get("party_status")
                 status = (
                     "active"
-                    if player.last_active and player.last_active >= cutoff
+                    if player.last_active_at and player.last_active_at >= cutoff
                     else "inactive"
                 )
                 extra = f" | party: {party_status}" if party_status else ""
-                lines.append(f"- <@{player.user_id}>: {room} ({status}{extra})")
+                # TODO: player.actor_id is a string actor_id, not a Discord int user ID.
+                # Discord mention needs the real Discord user ID; bridge lookup may be needed.
+                lines.append(f"- <@{player.actor_id}>: {room} ({status}{extra})")
             await DiscordBot.send_large_message(ctx, "Locations:\n" + "\n".join(lines))
 
     @zork.command(name="hint")
@@ -2636,10 +2638,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2720,10 +2722,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2734,7 +2736,9 @@ class Zork(commands.Cog):
                     f"Use `{self._prefix()}zork speed <value>` to change (0.1–10.0)."
                 )
                 return
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+            # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+            # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+            if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
                 await ctx.send(
                     "Only the campaign creator or an Image Admin can change the speed multiplier."
                 )
@@ -2761,10 +2765,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2779,7 +2783,9 @@ class Zork(commands.Cog):
                 )
                 return
 
-            if campaign.created_by != ctx.author.id and not await self._is_image_admin(ctx):
+            # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
+            # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
+            if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
                 await ctx.send(
                     "Only the campaign creator or an Image Admin can change the difficulty."
                 )
@@ -2815,10 +2821,10 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
@@ -2898,22 +2904,20 @@ class Zork(commands.Cog):
             return
         with app.app_context():
             channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
-            if channel.active_campaign_id is None:
+            if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            campaign = ZorkCampaign.query.get(channel.active_campaign_id)
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
-                channel.active_campaign_id = None
-                channel.updated = db.func.now()
-                db.session.commit()
+                channel.campaign_id = None
+                channel.updated_at = ZorkEmulator.utcnow()
+                ZorkEmulator.commit_model(channel)
                 await ctx.send("Channel state cleared.")
                 return
 
-            shared_refs = ZorkChannel.query.filter(
-                ZorkChannel.guild_id == ctx.guild.id,
-                ZorkChannel.active_campaign_id == campaign.id,
-                ZorkChannel.channel_id != ctx.channel.id,
-            ).count()
+            shared_refs = ZorkEmulator.count_channels_for_campaign(
+                campaign.id, exclude_channel_id=ctx.channel.id, guild_id=ctx.guild.id
+            )
 
             if shared_refs > 0:
                 # Avoid wiping state for other channels still bound to this campaign.
@@ -2921,45 +2925,29 @@ class Zork(commands.Cog):
                 new_campaign = ZorkEmulator.get_or_create_campaign(
                     ctx.guild.id, reset_name, ctx.author.id
                 )
-                ZorkSnapshot.query.filter_by(campaign_id=new_campaign.id).delete(
-                    synchronize_session=False
-                )
-                ZorkTurn.query.filter_by(campaign_id=new_campaign.id).delete(
-                    synchronize_session=False
-                )
-                ZorkPlayer.query.filter_by(campaign_id=new_campaign.id).delete(
-                    synchronize_session=False
-                )
+                ZorkEmulator.delete_campaign_data(new_campaign.id)
                 new_campaign.summary = ""
                 new_campaign.state_json = "{}"
                 new_campaign.last_narration = None
-                new_campaign.updated = db.func.now()
-                channel.active_campaign_id = new_campaign.id
+                new_campaign.updated_at = ZorkEmulator.utcnow()
+                channel.campaign_id = new_campaign.id
                 channel.enabled = True
-                channel.updated = db.func.now()
-                db.session.commit()
+                channel.updated_at = ZorkEmulator.utcnow()
+                ZorkEmulator.commit_models(channel, new_campaign)
                 ZorkMemory.delete_campaign_embeddings(new_campaign.id)
                 await ctx.send(
                     f"Channel reset to fresh campaign `{new_campaign.name}` (shared campaign left untouched)."
                 )
                 return
 
-            ZorkSnapshot.query.filter_by(campaign_id=campaign.id).delete(
-                synchronize_session=False
-            )
-            ZorkTurn.query.filter_by(campaign_id=campaign.id).delete(
-                synchronize_session=False
-            )
-            ZorkPlayer.query.filter_by(campaign_id=campaign.id).delete(
-                synchronize_session=False
-            )
+            ZorkEmulator.delete_campaign_data(campaign.id)
             campaign.summary = ""
             campaign.state_json = "{}"
             campaign.last_narration = None
-            campaign.updated = db.func.now()
+            campaign.updated_at = ZorkEmulator.utcnow()
             channel.enabled = True
-            channel.updated = db.func.now()
-            db.session.commit()
+            channel.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_models(campaign, channel)
             ZorkMemory.delete_campaign_embeddings(campaign.id)
             ZorkEmulator.cancel_pending_timer(campaign.id)
             ZorkEmulator.cancel_pending_sms_deliveries(campaign.id)

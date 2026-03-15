@@ -201,7 +201,7 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
 
     if not campaign_id:
         return
-    from discord_tron_master.classes.zork_emulator import ZorkEmulator
+    from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 
     scene_stored = False
     if store_scene and isinstance(room_key, str) and room_key.strip():
@@ -274,15 +274,10 @@ def _is_zork_enabled_thread_channel(channel, data) -> bool:
         app = AppConfig.get_flask()
         if app is None:
             return False
-        from discord_tron_master.models.zork import ZorkChannel
+        from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 
         with app.app_context():
-            row = ZorkChannel.query.filter_by(
-                guild_id=int(guild_id),
-                channel_id=int(channel.id),
-                enabled=True,
-            ).first()
-            return row is not None
+            return ZorkEmulator.is_channel_enabled(int(guild_id), int(channel.id))
     except Exception:
         return False
 
