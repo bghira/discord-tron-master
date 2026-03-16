@@ -9,7 +9,7 @@ packages = [{include = "discord_tron_master"}]
 
 [tool.poetry.dependencies]
 python = ">3.10,<3.12"
-pyopenssl = "^23.1.1"
+pyopenssl = "^26.0.0"
 bcrypt = "^4.0.1"
 pillow = "^10.0.1"
 requests = "^2.32.4"
