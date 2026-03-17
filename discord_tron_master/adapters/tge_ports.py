@@ -310,6 +310,13 @@ class ZorkMemoryAdapter:
             pass
         raise ValueError(f"Cannot resolve integer campaign ID for {campaign_id!r}")
 
+    @classmethod
+    def _maybe_int_campaign_id(cls, campaign_id: str) -> int | None:
+        try:
+            return cls._int_campaign_id(campaign_id)
+        except Exception:
+            return None
+
     def search(
         self,
         query: str,
@@ -318,7 +325,9 @@ class ZorkMemoryAdapter:
     ) -> list[tuple[int, str, str, float]]:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
-        cid = self._int_campaign_id(campaign_id)
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return []
         hits = ZorkMemory.search(query, cid, top_k=top_k)
         results: list[tuple[int, str, str, float]] = []
         for hit in hits:
@@ -336,8 +345,11 @@ class ZorkMemoryAdapter:
     def delete_turns_after(self, campaign_id: str, turn_id: int) -> int:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return 0
         return ZorkMemory.delete_turns_after(
-            self._int_campaign_id(campaign_id), turn_id
+            cid, turn_id
         )
 
     def list_terms(
@@ -348,7 +360,9 @@ class ZorkMemoryAdapter:
     ) -> list[dict[str, Any]]:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
-        cid = self._int_campaign_id(campaign_id)
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return []
         if hasattr(ZorkMemory, "list_memory_terms"):
             return ZorkMemory.list_memory_terms(cid, wildcard=wildcard, limit=limit)
         return []
@@ -363,7 +377,9 @@ class ZorkMemoryAdapter:
     ) -> tuple[bool, str]:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
-        cid = self._int_campaign_id(campaign_id)
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return False, "legacy-memory-unavailable"
         return ZorkMemory.store_manual_memory(
             cid,
             category=category,
@@ -381,7 +397,9 @@ class ZorkMemoryAdapter:
     ) -> list[tuple[str, str, float]]:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
-        cid = self._int_campaign_id(campaign_id)
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return []
         return ZorkMemory.search_manual_memories(
             query,
             cid,
@@ -400,7 +418,9 @@ class ZorkMemoryAdapter:
     ) -> None:
         from discord_tron_master.classes.zork_memory import ZorkMemory
 
-        cid = self._int_campaign_id(campaign_id)
+        cid = self._maybe_int_campaign_id(campaign_id)
+        if cid is None:
+            return
         user_id: int | None = None
         if actor_id is not None:
             try:
