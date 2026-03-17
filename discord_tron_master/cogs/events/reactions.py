@@ -72,7 +72,7 @@ class Reactions(commands.Cog):
             return
         async with self._zork_bootstrap_lock:
             with app.app_context():
-                refs = ZorkEmulator.list_recent_turn_message_refs(limit_per_campaign=50)
+                refs = ZorkEmulator.list_recent_turn_message_refs(limit_per_campaign=5)
             for ref in refs:
                 try:
                     channel_id = int(ref.get("channel_id") or 0)

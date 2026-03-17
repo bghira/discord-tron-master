@@ -221,6 +221,16 @@ class EmulatorBridge:
             max_conflict_retries=2,
         )
 
+        # Point TGE's SourceMaterialMemory at ZorkMemory's SQLite database
+        # so source material (lore books) ingested pre-migration are visible.
+        from text_game_engine.core.source_material_memory import SourceMaterialMemory
+        from discord_tron_master.classes.zork_memory import ZorkMemory
+
+        SourceMaterialMemory.configure(
+            db_path=ZorkMemory._DB_PATH,
+            campaign_id_translator=ZorkMemoryAdapter._int_campaign_id,
+        )
+
         cls._emu = TGEZorkEmulator(
             game_engine=game_engine,
             session_factory=cls._session_factory,
@@ -600,7 +610,7 @@ class EmulatorBridge:
             )
 
     @classmethod
-    def list_recent_turn_message_refs(cls, *, limit_per_campaign: int = 50):
+    def list_recent_turn_message_refs(cls, *, limit_per_campaign: int = 5):
         """Return recent narrator-turn Discord message refs for enabled sessions.
 
         Each row contains enough data for Discord startup/bootstrap code to
@@ -610,7 +620,7 @@ class EmulatorBridge:
         try:
             limit = max(1, int(limit_per_campaign))
         except (TypeError, ValueError):
-            limit = 50
+            limit = 5
         from text_game_engine.persistence.sqlalchemy.models import (
             Session as GameSession,
             Turn,
