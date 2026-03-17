@@ -16,15 +16,111 @@ from typing import Any, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
+_ZORK_LOG_STATE = threading.local()
+_ZORK_LOG_RETENTION = 100
+
+
+def _zork_log_component(value: object, label: str = "id") -> str:
+    raw = str(value or label).strip()
+    return raw if raw else label
+
+
+def _zork_log_context_dir(
+    *,
+    guild_id: object = None,
+    channel_id: object = None,
+    user_id: object = None,
+) -> str:
+    if guild_id is not None and channel_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(guild_id, "guild"),
+            _zork_log_component(channel_id, "thread"),
+        )
+    if user_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(user_id, "user"),
+        )
+    if guild_id is not None:
+        return os.path.join(
+            _ZORK_LOG_ROOT,
+            _zork_log_component(guild_id, "guild"),
+            "campaign",
+        )
+    return os.path.join(_ZORK_LOG_ROOT, "global")
+
+
+def _zork_log_rotate(path: str) -> None:
+    """Archive existing latest log before starting a new one."""
+    try:
+        if not os.path.exists(path):
+            return
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        archive = os.path.join(os.path.dirname(path), f"turn-{ts}.log")
+        counter = 0
+        while os.path.exists(archive):
+            counter += 1
+            archive = os.path.join(os.path.dirname(path), f"turn-{ts}-{counter}.log")
+        os.rename(path, archive)
+        # Prune old archives
+        dir_path = os.path.dirname(path)
+        archives = sorted(
+            (f for f in os.listdir(dir_path) if f.startswith("turn-")),
+            reverse=True,
+        )
+        for old in archives[_ZORK_LOG_RETENTION:]:
+            try:
+                os.remove(os.path.join(dir_path, old))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _zork_log_begin(
+    *,
+    guild_id: object = None,
+    channel_id: object = None,
+    user_id: object = None,
+    is_dm: bool = False,
+) -> Optional[str]:
+    """Push a contextual log scope; returns a token for _zork_log_end."""
+    dir_path = _zork_log_context_dir(
+        guild_id=None if is_dm else guild_id,
+        channel_id=None if is_dm else channel_id,
+        user_id=user_id if is_dm else None,
+    )
+    os.makedirs(dir_path, exist_ok=True)
+    if is_dm:
+        latest_name = "latest.log"
+    else:
+        latest_name = f"latest-{_zork_log_component(user_id, 'user')}.log"
+    log_path = os.path.join(dir_path, latest_name)
+    _zork_log_rotate(log_path)
+    prev = getattr(_ZORK_LOG_STATE, "path", None)
+    _ZORK_LOG_STATE.path = log_path
+    return prev
+
+
+def _zork_log_end(token: Optional[str]) -> None:
+    """Pop the contextual log scope."""
+    if token:
+        _ZORK_LOG_STATE.path = token
+    elif hasattr(_ZORK_LOG_STATE, "path"):
+        delattr(_ZORK_LOG_STATE, "path")
 
 
 def _zork_log(section: str, body: str = "") -> None:
-    """Append a timestamped section to the global Zork event log."""
+    """Append a timestamped section to the active log file."""
     try:
+        log_path = getattr(_ZORK_LOG_STATE, "path", None)
+        if log_path is None:
+            log_dir = os.path.join(_ZORK_LOG_ROOT, "global")
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "event.log")
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_dir = os.path.join(_ZORK_LOG_ROOT, "global")
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "event.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "a") as fh:
             fh.write(f"\n{'=' * 72}\n[{ts}] {section}\n{'=' * 72}\n")
             if body:
@@ -263,12 +359,39 @@ class EmulatorBridge:
     @classmethod
     async def play_action(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu.play_action(*args, **kwargs)
+        # Push contextual log scope from the Discord ctx (first arg).
+        ctx = args[0] if args else None
+        guild = getattr(ctx, "guild", None)
+        channel = getattr(ctx, "channel", None)
+        author = getattr(ctx, "author", None)
+        log_token = _zork_log_begin(
+            guild_id=getattr(guild, "id", None) if guild else None,
+            channel_id=getattr(channel, "id", None) if channel else None,
+            user_id=getattr(author, "id", None) if author else None,
+            is_dm=guild is None,
+        )
+        try:
+            return await cls._emu.play_action(*args, **kwargs)
+        finally:
+            _zork_log_end(log_token)
 
     @classmethod
     async def handle_setup_message(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu.handle_setup_message(*args, **kwargs)
+        ctx = args[0] if args else None
+        guild = getattr(ctx, "guild", None)
+        channel = getattr(ctx, "channel", None)
+        author = getattr(ctx, "author", None)
+        log_token = _zork_log_begin(
+            guild_id=getattr(guild, "id", None) if guild else None,
+            channel_id=getattr(channel, "id", None) if channel else None,
+            user_id=getattr(author, "id", None) if author else None,
+            is_dm=guild is None,
+        )
+        try:
+            return await cls._emu.handle_setup_message(*args, **kwargs)
+        finally:
+            _zork_log_end(log_token)
 
     @classmethod
     def end_turn(cls, campaign_id, user_id):
