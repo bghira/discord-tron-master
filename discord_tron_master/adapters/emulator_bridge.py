@@ -544,12 +544,23 @@ class EmulatorBridge:
     @classmethod
     def execute_rewind(cls, *args, **kwargs):
         cls._ensure_init()
-        return cls._emu.execute_rewind(*args, **kwargs)
+        fn = cls._emu.execute_rewind
+        return fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
 
     @classmethod
     def execute_delete_turn(cls, *args, **kwargs):
         cls._ensure_init()
-        return cls._emu.execute_delete_turn(*args, **kwargs)
+        mapped_kwargs = dict(kwargs)
+        channel_id = mapped_kwargs.pop("channel_id", None)
+        delete_user_id = mapped_kwargs.pop("delete_user_id", None)
+        if delete_user_id is not None and "delete_actor_id" not in mapped_kwargs:
+            mapped_kwargs["delete_actor_id"] = str(delete_user_id)
+        if channel_id is not None and "session_id" not in mapped_kwargs:
+            session_obj = cls.query_channel_by_channel_id(channel_id)
+            if session_obj is not None and getattr(session_obj, "id", None):
+                mapped_kwargs["session_id"] = str(session_obj.id)
+        fn = cls._emu.execute_delete_turn
+        return fn(*args, **cls._filter_supported_kwargs(fn, mapped_kwargs))
 
     @classmethod
     def get_turn_for_message(cls, message_id):
