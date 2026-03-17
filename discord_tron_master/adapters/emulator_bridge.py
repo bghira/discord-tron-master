@@ -139,9 +139,9 @@ class EmulatorBridge:
         return cls._emu.get_or_create_channel(guild_id, channel_id)
 
     @classmethod
-    def enable_channel(cls, guild_id, channel_id, campaign_id=None):
+    def enable_channel(cls, guild_id, channel_id, actor_id=None):
         cls._ensure_init()
-        return cls._emu.enable_channel(guild_id, channel_id, campaign_id=campaign_id)
+        return cls._emu.enable_channel(guild_id, channel_id, str(actor_id) if actor_id else "0")
 
     @classmethod
     def is_channel_enabled(cls, *args, **kwargs):
@@ -230,7 +230,7 @@ class EmulatorBridge:
     # -- Player Management -----------------------------------------------------
 
     @classmethod
-    def get_or_create_player(cls, campaign_id, user_id):
+    def get_or_create_player(cls, campaign_id, user_id, *, campaign=None):
         cls._ensure_init()
         return cls._emu.get_or_create_player(str(campaign_id), str(user_id))
 
@@ -519,9 +519,9 @@ class EmulatorBridge:
         return cls._emu._source_material_format_heuristic(text)
 
     @classmethod
-    def _extract_attachment_label(cls, text):
+    def _extract_attachment_label(cls, attachments, fallback="source-material"):
         cls._ensure_init()
-        return cls._emu._extract_attachment_label(text)
+        return cls._emu._extract_attachment_label(attachments, fallback=fallback)
 
     @classmethod
     def _chunk_text_by_tokens(cls, *args, **kwargs):
