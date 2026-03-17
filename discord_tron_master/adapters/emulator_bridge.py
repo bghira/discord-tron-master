@@ -214,7 +214,12 @@ class EmulatorBridge:
         def _uow_factory():
             return SQLAlchemyUnitOfWork(cls._session_factory)
 
-        game_engine = GameEngine(uow_factory=_uow_factory, llm=llm)
+        game_engine = GameEngine(
+            uow_factory=_uow_factory,
+            llm=llm,
+            lease_ttl_seconds=300,
+            max_conflict_retries=2,
+        )
 
         cls._emu = TGEZorkEmulator(
             game_engine=game_engine,
