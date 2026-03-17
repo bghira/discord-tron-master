@@ -389,6 +389,33 @@ class ZorkMemoryAdapter:
             top_k=top_k,
         )
 
+    def store_turn_embedding(
+        self,
+        turn_id: int,
+        campaign_id: str,
+        actor_id: str | None,
+        kind: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        from discord_tron_master.classes.zork_memory import ZorkMemory
+
+        cid = self._int_campaign_id(campaign_id)
+        user_id: int | None = None
+        if actor_id is not None:
+            try:
+                user_id = int(actor_id)
+            except (TypeError, ValueError):
+                user_id = None
+        ZorkMemory.store_turn_embedding(
+            turn_id,
+            cid,
+            user_id,
+            kind,
+            content,
+            metadata=metadata,
+        )
+
 
 # ---------------------------------------------------------------------------
 # IMDBLookupAdapter

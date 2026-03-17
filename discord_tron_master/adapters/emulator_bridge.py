@@ -252,6 +252,26 @@ class EmulatorBridge:
         allowed = set(sig.parameters.keys())
         return {key: value for key, value in kwargs.items() if key in allowed}
 
+    @staticmethod
+    def _trim_supported_args(fn, args: tuple[Any, ...]) -> tuple[Any, ...]:
+        if not args:
+            return ()
+        try:
+            sig = inspect.signature(fn)
+        except Exception:
+            return args
+        positional_params = [
+            param
+            for param in sig.parameters.values()
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in sig.parameters.values()):
+            return args
+        return args[: len(positional_params)]
+
     # -- Persistence helpers ---------------------------------------------------
 
     @classmethod
@@ -713,13 +733,19 @@ class EmulatorBridge:
     async def _generate_campaign_export_artifacts(cls, *args, **kwargs):
         cls._ensure_init()
         fn = cls._emu._generate_campaign_export_artifacts
-        return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
+        return await fn(
+            *cls._trim_supported_args(fn, args),
+            **cls._filter_supported_kwargs(fn, kwargs),
+        )
 
     @classmethod
     async def _generate_campaign_raw_export_artifacts(cls, *args, **kwargs):
         cls._ensure_init()
         fn = cls._emu._generate_campaign_raw_export_artifacts
-        return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
+        return await fn(
+            *cls._trim_supported_args(fn, args),
+            **cls._filter_supported_kwargs(fn, kwargs),
+        )
 
     @classmethod
     async def start_campaign_setup(cls, *args, **kwargs):
