@@ -282,11 +282,13 @@ class Zork(commands.Cog):
         binding = self.config.get_zork_private_dm(user_id)
         if not isinstance(binding, dict) or not binding.get("enabled"):
             return None
-        try:
-            campaign_id = int(binding.get("campaign_id") or 0)
-        except (TypeError, ValueError):
-            campaign_id = 0
-        if campaign_id <= 0:
+        raw_cid = binding.get("campaign_id")
+        if not raw_cid:
+            return None
+        # campaign_id may be a UUID string (new TGE) or an old integer.
+        # Keep it as a string in both cases — the bridge resolves it.
+        campaign_id = str(raw_cid)
+        if not campaign_id or campaign_id == "0":
             return None
         result = dict(binding)
         result["campaign_id"] = campaign_id
@@ -486,8 +488,9 @@ class Zork(commands.Cog):
 
         if operation == "clear":
             with app.app_context():
-                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
-                removed_rows = ZorkMemory.clear_source_material_documents(campaign.id)
+                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
+                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
+                removed_rows = ZorkMemory.clear_source_material_documents(_mcid)
             if not docs:
                 await ctx.send("No source-material documents are stored for this campaign.")
                 return
@@ -506,7 +509,8 @@ class Zork(commands.Cog):
                 )
                 return
             with app.app_context():
-                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
+                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
                 requested_norm = ZorkMemory._normalize_source_document_key(requested)
                 match = None
                 for row in docs:
@@ -526,7 +530,7 @@ class Zork(commands.Cog):
                 row_key = str(match.get("document_key") or "").strip()
                 row_label = str(match.get("document_label") or "").strip() or row_key
                 removed_rows = ZorkMemory.delete_source_material_document(
-                    campaign.id,
+                    _mcid,
                     row_key,
                 )
             if removed_rows <= 0:
@@ -864,7 +868,7 @@ class Zork(commands.Cog):
                 if dm_binding is None:
                     await message.channel.send("No active campaign in this DM.")
                     return
-                campaign_id = int(dm_binding["campaign_id"])
+                campaign_id = dm_binding["campaign_id"]
             else:
                 channel_rec = ZorkEmulator.get_or_create_channel(
                     message.guild.id, message.channel.id
@@ -877,6 +881,8 @@ class Zork(commands.Cog):
             if campaign is None:
                 await message.channel.send("Campaign not found.")
                 return
+            # Normalize to the campaign's real UUID in case we resolved a legacy ID.
+            campaign_id = campaign.id
             if ZorkEmulator.is_in_setup_mode(campaign):
                 await message.channel.send("Cannot rewind during campaign setup.")
                 return
@@ -2206,7 +2212,8 @@ class Zork(commands.Cog):
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+            _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
+            docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
             export_rows: list[tuple[str, str, str]] = []
             used_names: set[str] = set()
             for row in docs:
@@ -2215,7 +2222,7 @@ class Zork(commands.Cog):
                 if not document_key:
                     continue
                 units = ZorkMemory.get_source_material_document_units(
-                    campaign.id,
+                    _mcid,
                     document_key,
                 )
                 export_text = self._source_material_export_text(document_key, units)
@@ -2319,7 +2326,8 @@ class Zork(commands.Cog):
                     status_msg,
                     "Campaign export: packaging stored source-material documents...",
                 )
-                docs = ZorkMemory.list_source_material_documents(campaign.id, limit=200)
+                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
+                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
                 source_export_files: dict[str, str] = {}
                 used_names = set(export_files.keys())
                 for row in docs:
@@ -2328,7 +2336,7 @@ class Zork(commands.Cog):
                     if not document_key:
                         continue
                     units = ZorkMemory.get_source_material_document_units(
-                        campaign.id,
+                        _mcid,
                         document_key,
                     )
                     export_text = self._source_material_export_text(document_key, units)
@@ -2927,28 +2935,37 @@ class Zork(commands.Cog):
                 )
                 ZorkEmulator.delete_campaign_data(new_campaign.id)
                 new_campaign.summary = ""
-                new_campaign.state_json = "{}"
+                new_campaign.state_json = ZorkEmulator._preserve_legacy_state_keys(new_campaign)
                 new_campaign.last_narration = None
                 new_campaign.updated_at = ZorkEmulator.utcnow()
                 channel.campaign_id = new_campaign.id
                 channel.enabled = True
                 channel.updated_at = ZorkEmulator.utcnow()
                 ZorkEmulator.commit_models(channel, new_campaign)
-                ZorkMemory.delete_campaign_embeddings(new_campaign.id)
+                try:
+                    _mcid = ZorkEmulator.legacy_memory_campaign_id(new_campaign)
+                    ZorkMemory.delete_campaign_embeddings(_mcid)
+                except (ValueError, TypeError):
+                    pass
                 await ctx.send(
                     f"Channel reset to fresh campaign `{new_campaign.name}` (shared campaign left untouched)."
                 )
                 return
 
+            try:
+                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
+            except (ValueError, TypeError):
+                _mcid = None
             ZorkEmulator.delete_campaign_data(campaign.id)
             campaign.summary = ""
-            campaign.state_json = "{}"
+            campaign.state_json = ZorkEmulator._preserve_legacy_state_keys(campaign)
             campaign.last_narration = None
             campaign.updated_at = ZorkEmulator.utcnow()
             channel.enabled = True
             channel.updated_at = ZorkEmulator.utcnow()
             ZorkEmulator.commit_models(campaign, channel)
-            ZorkMemory.delete_campaign_embeddings(campaign.id)
+            if _mcid is not None:
+                ZorkMemory.delete_campaign_embeddings(_mcid)
             ZorkEmulator.cancel_pending_timer(campaign.id)
             ZorkEmulator.cancel_pending_sms_deliveries(campaign.id)
             await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")

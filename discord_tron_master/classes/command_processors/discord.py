@@ -184,9 +184,10 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
         _find_first_key(arguments, "zork_store_avatar")
     ) or _is_truthy(_find_first_key(data, "zork_store_avatar"))
 
-    try:
-        campaign_id = int(campaign_id) if campaign_id is not None else None
-    except Exception:
+    # campaign_id may be a UUID string (TGE) or legacy integer — keep as-is.
+    if campaign_id is not None:
+        campaign_id = str(campaign_id)
+    else:
         campaign_id = None
     try:
         avatar_user_id = int(avatar_user_id) if avatar_user_id is not None else None

@@ -5,6 +5,7 @@ Usage:
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import threading
@@ -103,6 +104,19 @@ class EmulatorBridge:
         )
         logger.info("EmulatorBridge: TGE ZorkEmulator initialized")
 
+    @staticmethod
+    def _filter_supported_kwargs(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
+        if not kwargs:
+            return {}
+        try:
+            sig = inspect.signature(fn)
+        except Exception:
+            return dict(kwargs)
+        if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()):
+            return dict(kwargs)
+        allowed = set(sig.parameters.keys())
+        return {key: value for key, value in kwargs.items() if key in allowed}
+
     # -- Persistence helpers ---------------------------------------------------
 
     @classmethod
@@ -198,9 +212,19 @@ class EmulatorBridge:
         return await cls._emu.begin_turn(*args, **kwargs)
 
     @classmethod
-    async def begin_turn_for_campaign(cls, *args, **kwargs):
+    async def begin_turn_for_campaign(cls, message, campaign_id, **kwargs):
+        """Begin a turn for a DM-bound campaign.
+
+        TGE's begin_turn(campaign_id, actor_id) expects UUID campaign IDs.
+        This method resolves legacy integer campaign IDs before forwarding.
+        """
         cls._ensure_init()
-        return await cls._emu.begin_turn_for_campaign(*args, **kwargs)
+        # Resolve legacy campaign IDs from DM bindings
+        campaign = cls.query_campaign(campaign_id)
+        if campaign is None:
+            return None, "Campaign not found."
+        actor_id = str(getattr(getattr(message, "author", None), "id", ""))
+        return await cls._emu.begin_turn(campaign.id, actor_id, **kwargs)
 
     @classmethod
     async def play_action(cls, *args, **kwargs):
@@ -410,12 +434,14 @@ class EmulatorBridge:
     @classmethod
     async def _generate_campaign_export_artifacts(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu._generate_campaign_export_artifacts(*args, **kwargs)
+        fn = cls._emu._generate_campaign_export_artifacts
+        return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
 
     @classmethod
     async def _generate_campaign_raw_export_artifacts(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu._generate_campaign_raw_export_artifacts(*args, **kwargs)
+        fn = cls._emu._generate_campaign_raw_export_artifacts
+        return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
 
     @classmethod
     async def start_campaign_setup(cls, *args, **kwargs):
@@ -566,12 +592,33 @@ class EmulatorBridge:
     @classmethod
     async def _edit_progress_message(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu._edit_progress_message(*args, **kwargs)
+        fn = getattr(cls._emu, "_edit_progress_message", None)
+        if callable(fn):
+            return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
+        status_message = args[0] if args else kwargs.get("status_message")
+        content = args[1] if len(args) > 1 else kwargs.get("content")
+        if status_message is None:
+            return None
+        try:
+            await status_message.edit(content=str(content or "").strip()[:3900] or "Working...")
+        except Exception:
+            return None
+        return None
 
     @classmethod
     async def _delete_progress_message(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu._delete_progress_message(*args, **kwargs)
+        fn = getattr(cls._emu, "_delete_progress_message", None)
+        if callable(fn):
+            return await fn(*args, **cls._filter_supported_kwargs(fn, kwargs))
+        status_message = args[0] if args else kwargs.get("status_message")
+        if status_message is None:
+            return None
+        try:
+            await status_message.delete()
+        except Exception:
+            return None
+        return None
 
     @classmethod
     def _get_lock(cls, *args, **kwargs):
@@ -588,13 +635,38 @@ class EmulatorBridge:
 
         Returns a TGE Campaign detached from session (expire_on_commit=False),
         so callers can read/write attributes freely.
+
+        Supports both UUID string IDs (new TGE) and legacy integer IDs
+        (from old DM bindings or cached references). Legacy IDs are found
+        via the ``_legacy_campaign_id`` marker stored in state_json during
+        the data migration.
         """
         if campaign_id is None:
             return None
         cls._ensure_init()
         from text_game_engine.persistence.sqlalchemy.models import Campaign
+        cid = str(campaign_id)
         with cls._session_factory() as session:
-            return session.get(Campaign, str(campaign_id))
+            campaign = session.get(Campaign, cid)
+            if campaign is not None:
+                return campaign
+            # Fallback: the caller may have an old integer campaign ID
+            # (e.g. from a saved DM binding). Search state_json for the
+            # legacy marker planted by the data migration.
+            try:
+                legacy_int = int(cid)
+            except (TypeError, ValueError):
+                return None
+            # Match precisely: the legacy_id is always followed by } or ,
+            # to avoid false positives (e.g. id=1 matching id=10).
+            from sqlalchemy import or_
+            result = session.query(Campaign).filter(
+                or_(
+                    Campaign.state_json.contains(f'"_legacy_campaign_id":{legacy_int}}}'),
+                    Campaign.state_json.contains(f'"_legacy_campaign_id":{legacy_int},'),
+                )
+            ).first()
+            return result
 
     @classmethod
     def query_campaign_for_channel(cls, channel_session):
@@ -699,6 +771,64 @@ class EmulatorBridge:
         """Return UTC now() as a naive datetime, for setting updated_at fields."""
         from datetime import datetime, timezone
         return datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # -- State preservation helper -----------------------------------------------
+
+    @classmethod
+    def _preserve_legacy_state_keys(cls, campaign) -> str:
+        """Return a minimal state_json that preserves internal migration keys.
+
+        Called when resetting a campaign's state — ensures ``_legacy_campaign_id``
+        survives the wipe so ZorkMemory lookups keep working.
+        """
+        import json as _json
+        preserved = {}
+        try:
+            old_state = _json.loads(getattr(campaign, "state_json", "{}") or "{}")
+        except Exception:
+            old_state = {}
+        if "_legacy_campaign_id" in old_state:
+            preserved["_legacy_campaign_id"] = old_state["_legacy_campaign_id"]
+        return _json.dumps(preserved) if preserved else "{}"
+
+    # -- ZorkMemory integer campaign ID resolver --------------------------------
+
+    @classmethod
+    def legacy_memory_campaign_id(cls, campaign_id_or_obj) -> int:
+        """Convert a TGE campaign UUID (or Campaign object) to the legacy
+        integer campaign ID used by ZorkMemory's SQLite database.
+
+        Accepts:
+          - A Campaign model object (reads ``state_json._legacy_campaign_id``)
+          - A UUID string (looks up the Campaign, then extracts the legacy ID)
+          - An integer or int-string (returned as-is for backwards compat)
+        """
+        import json as _json
+
+        raw = campaign_id_or_obj
+        # If given a Campaign object, extract directly
+        if hasattr(raw, "state_json"):
+            state = _json.loads(getattr(raw, "state_json", "{}") or "{}")
+            legacy = state.get("_legacy_campaign_id")
+            if legacy is not None:
+                return int(legacy)
+            raw = getattr(raw, "id", raw)
+
+        cid = str(raw)
+        # Fast path: already an integer string
+        try:
+            return int(cid)
+        except (TypeError, ValueError):
+            pass
+
+        # UUID path: look up the campaign
+        campaign = cls.query_campaign(cid)
+        if campaign is not None:
+            state = _json.loads(getattr(campaign, "state_json", "{}") or "{}")
+            legacy = state.get("_legacy_campaign_id")
+            if legacy is not None:
+                return int(legacy)
+        raise ValueError(f"Cannot resolve legacy memory campaign ID for {cid!r}")
 
     # -- Fallback for any method not explicitly bridged ------------------------
 
