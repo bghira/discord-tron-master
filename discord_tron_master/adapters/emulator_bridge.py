@@ -224,10 +224,10 @@ class EmulatorBridge:
         # Point TGE's SourceMaterialMemory at ZorkMemory's SQLite database
         # so source material (lore books) ingested pre-migration are visible.
         from text_game_engine.core.source_material_memory import SourceMaterialMemory
-        from discord_tron_master.classes.zork_memory import ZorkMemory
+        from discord_tron_master.classes import zork_memory as _zm_mod
 
         SourceMaterialMemory.configure(
-            db_path=ZorkMemory._DB_PATH,
+            db_path=_zm_mod._DB_PATH,
             campaign_id_translator=ZorkMemoryAdapter._int_campaign_id,
         )
 
