@@ -25,6 +25,7 @@ class EmulatorBridge:
     _session_factory = None
     _init_lock = threading.Lock()
     _initialized = False
+    _inflight_turns: dict[str, object] = {}
 
     @classmethod
     def _ensure_init(cls):
@@ -624,12 +625,20 @@ class EmulatorBridge:
     @classmethod
     def request_shutdown(cls):
         cls._ensure_init()
-        return cls._emu.request_shutdown()
+        fn = getattr(cls._emu, "request_shutdown", None)
+        if callable(fn):
+            return fn()
+        logger.info("EmulatorBridge: request_shutdown noop for backend without lifecycle hooks")
+        return None
 
     @classmethod
     async def wait_for_drain(cls, timeout=120):
         cls._ensure_init()
-        return await cls._emu.wait_for_drain(timeout=timeout)
+        fn = getattr(cls._emu, "wait_for_drain", None)
+        if callable(fn):
+            return await fn(timeout=timeout)
+        logger.info("EmulatorBridge: wait_for_drain treated as already drained for backend without lifecycle hooks")
+        return True
 
     # -- Utility / Processing --------------------------------------------------
 
