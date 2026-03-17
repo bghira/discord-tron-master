@@ -76,7 +76,20 @@ class EmulatorBridge:
         memory_port = ZorkMemoryAdapter()
         imdb_port = IMDBLookupAdapter()
 
-        game_engine = GameEngine()
+        from text_game_engine.tool_aware_llm import ToolAwareZorkLLM
+        from text_game_engine.persistence.sqlalchemy.uow import SQLAlchemyUnitOfWork
+
+        llm = ToolAwareZorkLLM(
+            session_factory=cls._session_factory,
+            completion_port=completion_port,
+            temperature=0.85,
+            max_tokens=16384,
+        )
+
+        def _uow_factory():
+            return SQLAlchemyUnitOfWork(cls._session_factory)
+
+        game_engine = GameEngine(uow_factory=_uow_factory, llm=llm)
 
         cls._emu = TGEZorkEmulator(
             game_engine=game_engine,
