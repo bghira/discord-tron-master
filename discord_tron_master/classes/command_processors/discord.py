@@ -356,7 +356,9 @@ async def send_message(
                         f"<@{mention_id}>" if mention_id else "Scene updated."
                     )
             # If "arguments" contains "image", it is base64 encoded. We can send that in the message.
+            is_dm = isinstance(channel, (discord.DMChannel, discord.GroupChannel))
             file = None
+            dm_files = []
             embeds = None
             wants_variations = False
             if "image" in arguments:
@@ -384,19 +386,29 @@ async def send_message(
                         )
 
                     logger.debug(f"Incoming message to send, has an image url list.")
-                    embeds = []
                     wants_variations = len(arguments["image_url_list"])
-                    for image_url in arguments["image_url_list"]:
-                        if "mp4" in image_url:
-                            if not suppress_body:
+                    if is_dm:
+                        dm_files, embeds = _build_dm_image_files_and_embeds(
+                            arguments["image_url_list"]
+                        )
+                        for image_url in arguments["image_url_list"]:
+                            if "mp4" in image_url and not suppress_body:
                                 arguments[
                                     "message"
                                 ] = f"{arguments['message']}\nVideo URL: {image_url}"
-                        else:
-                            logger.debug(f"Adding {image_url} to embed")
-                            embed = discord.Embed(url="http://tripleback.net")
-                            embed.set_image(url=image_url)
-                            embeds.append(embed)
+                    else:
+                        embeds = []
+                        for image_url in arguments["image_url_list"]:
+                            if "mp4" in image_url:
+                                if not suppress_body:
+                                    arguments[
+                                        "message"
+                                    ] = f"{arguments['message']}\nVideo URL: {image_url}"
+                            else:
+                                logger.debug(f"Adding {image_url} to embed")
+                                embed = discord.Embed(url="http://tripleback.net")
+                                embed.set_image(url=image_url)
+                                embeds.append(embed)
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
             if "audio_url" in arguments:
@@ -429,9 +441,16 @@ async def send_message(
             content_to_send = arguments.get("message")
             if suppress_body and (file is not None or embeds is not None):
                 content_to_send = None
-            message = await channel.send(
-                content=content_to_send, file=file, embeds=embeds
-            )
+            send_kwargs = {"content": content_to_send, "embeds": embeds}
+            # discord.py doesn't allow file= and files= together;
+            # consolidate into files= when DM downloads are present.
+            if dm_files and file is not None:
+                send_kwargs["files"] = [file] + dm_files
+            elif dm_files:
+                send_kwargs["files"] = dm_files
+            elif file is not None:
+                send_kwargs["file"] = file
+            message = await channel.send(**send_kwargs)
             await _record_zork_generated_image(channel, arguments, data)
             # List of number emojis
             number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
@@ -627,12 +646,14 @@ async def create_thread(
                         f"<@{mention_id}>" if mention_id else "Scene updated."
                     )
             # Maybe channel is already a thread.
+            is_dm = False
             if isinstance(channel, discord.Thread):
                 logger.debug(f"Channel is already a thread. Using it.")
                 thread = channel
             elif isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
                 logger.debug(f"Channel is a DM/group channel. Sending directly (no threads in DMs).")
                 thread = channel
+                is_dm = True
             elif isinstance(channel, discord.TextChannel):
                 logger.debug(f"Channel is a text channel. Creating thread.")
                 thread = await channel.create_thread(
@@ -644,6 +665,7 @@ async def create_thread(
                 )
             embed = None
             embeds = None
+            dm_files = []
             if "image" in arguments:
                 logger.debug(f"Found image inside message")
                 # We want to send any image data into the thread we create.
@@ -667,8 +689,19 @@ async def create_thread(
                 logger.debug(
                     f"Found image URL inside arguments: {arguments['image_url']}"
                 )
-                embed = discord.Embed(url="https://tripleback.net")
-                embed.set_image(url=arguments["image_url"])
+                if is_dm:
+                    try:
+                        file, fname = _download_image_as_file(arguments["image_url"])
+                        dm_files.append(file)
+                        embed = discord.Embed(url="https://tripleback.net")
+                        embed.set_image(url=f"attachment://{fname}")
+                    except Exception as e:
+                        logger.error(f"Failed to download image for DM: {e}")
+                        embed = discord.Embed(url="https://tripleback.net")
+                        embed.set_image(url=arguments["image_url"])
+                else:
+                    embed = discord.Embed(url="https://tripleback.net")
+                    embed.set_image(url=arguments["image_url"])
                 wants_variations = 1
             if "image_url_list" in arguments:
                 if arguments["image_url_list"] is not None:
@@ -698,21 +731,35 @@ async def create_thread(
                             )
                         except Exception as e:
                             logger.error(f"Error comparing images: {e}")
-                    embeds = []
                     wants_variations = len(arguments["image_url_list"])
-                    for image_url in arguments["image_url_list"]:
-                        if "mp4" in image_url:
-                            if not suppress_body:
+                    if is_dm:
+                        dm_files, embeds = _build_dm_image_files_and_embeds(
+                            arguments["image_url_list"]
+                        )
+                        # Handle mp4 URLs that the helper skips
+                        for image_url in arguments["image_url_list"]:
+                            if "mp4" in image_url and not suppress_body:
                                 arguments[
                                     "message"
                                 ] = f"{arguments['message']}\nVideo URL: {image_url}"
-                        else:
-                            logger.debug(f"Adding {image_url} to embed")
-                            new_embed = discord.Embed(url="http://tripleback.net")
-                            new_embed.set_image(url=image_url)
-                            embeds.append(new_embed)
+                    else:
+                        embeds = []
+                        for image_url in arguments["image_url_list"]:
+                            if "mp4" in image_url:
+                                if not suppress_body:
+                                    arguments[
+                                        "message"
+                                    ] = f"{arguments['message']}\nVideo URL: {image_url}"
+                            else:
+                                logger.debug(f"Adding {image_url} to embed")
+                                new_embed = discord.Embed(url="http://tripleback.net")
+                                new_embed.set_image(url=image_url)
+                                embeds.append(new_embed)
                 else:
                     logger.debug(f"Incoming message to send, has zero image url list.")
+            # Merge singular embed into embeds list if both aren't set.
+            if embed is not None and embeds is None:
+                embeds = [embed]
             logger.debug(f"Sending message to thread: {arguments['message']}")
             if not suppress_body and "mention" in arguments:
                 logger.debug(f"Mentioning user: {arguments['mention']}")
@@ -722,7 +769,10 @@ async def create_thread(
             content_to_send = arguments.get("message")
             if suppress_body and embeds is not None:
                 content_to_send = None
-            message = await thread.send(content=content_to_send, embeds=embeds)
+            send_kwargs = {"content": content_to_send, "embeds": embeds}
+            if dm_files:
+                send_kwargs["files"] = dm_files
+            message = await thread.send(**send_kwargs)
             await _record_zork_generated_image(thread, arguments, data)
 
             # List of number emojis
@@ -777,6 +827,45 @@ async def send_message_to_thread(
                 f"Error sending message to thread in {label}: {e}"
             )
     return {"success": True, "result": "Message sent."}
+
+
+def _download_image_as_file(image_url: str) -> tuple:
+    """Download an image URL and return (discord.File, filename).
+
+    Used for DM channels where URL-based embeds don't render.
+    """
+    resp = requests.get(image_url, timeout=15)
+    resp.raise_for_status()
+    ext = "png"
+    if "." in image_url.split("/")[-1]:
+        ext = image_url.split(".")[-1].split("?")[0]
+    fname = f"{hashlib.md5(resp.content).hexdigest()}.{ext}"
+    return discord.File(BytesIO(resp.content), filename=fname), fname
+
+
+def _build_dm_image_files_and_embeds(image_urls: list) -> tuple:
+    """For DM channels, download images and build file-backed embeds.
+
+    Returns (files_list, embeds_list) where embeds reference attachment:// URIs.
+    """
+    files = []
+    embeds = []
+    for image_url in image_urls:
+        if "mp4" in image_url:
+            continue
+        try:
+            file, fname = _download_image_as_file(image_url)
+            files.append(file)
+            embed = discord.Embed(url="https://tripleback.net")
+            embed.set_image(url=f"attachment://{fname}")
+            embeds.append(embed)
+        except Exception as e:
+            logger.error(f"Failed to download image for DM embed: {e}")
+            # Fall back to URL embed
+            embed = discord.Embed(url="https://tripleback.net")
+            embed.set_image(url=image_url)
+            embeds.append(embed)
+    return files, embeds
 
 
 async def get_image_embed(image_data, pnginfo=None, create_embed: bool = True):

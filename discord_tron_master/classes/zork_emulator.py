@@ -4973,10 +4973,12 @@ class ZorkEmulator:
         gpt = cls._new_gpt()
         prompt = (
             f"The campaign is titled: '{campaign_name}'.\n"
-            f"If this references a known movie, book, show, or story, create a persona for the MAIN CHARACTER/PROTAGONIST of that work. "
-            f"Use their canonical personality, traits, and disposition.\n"
-            f"If it's an original setting, create a fitting persona for a protagonist in that world.\n"
-            f"Return ONLY a brief persona (1-2 sentences, max 140 chars). No quotes or explanation."
+            f"If this references a known movie, book, show, or story, describe the MAIN CHARACTER as a person — "
+            f"age, vibe, background, and what makes them tick. Not how they speak or narrate.\n"
+            f"If it's an original setting, describe a fitting protagonist the same way.\n"
+            f"Write it like a casting brief: '28-year-old ambitious junior associate at a top law firm, "
+            f"smart but naive about office politics' — not a voice direction or writing style.\n"
+            f"Return ONLY the persona (1-2 sentences, max 140 chars). No quotes or explanation."
         )
         try:
             response = await gpt.turbo_completion(
