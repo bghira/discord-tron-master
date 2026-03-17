@@ -68,7 +68,13 @@ class EmulatorBridge:
 
         def _gpt_factory():
             from discord_tron_master.classes.openai.text import GPT
-            return GPT()
+            gpt = GPT()
+            backend_config = config.get_zork_backend_config(default_backend="zai")
+            gpt.backend = str(backend_config.get("backend") or "zai").strip() or "zai"
+            model = str(backend_config.get("model") or "").strip()
+            if model:
+                gpt.engine = model
+            return gpt
 
         completion_port = TextCompletionAdapter(gpt_factory=_gpt_factory)
         timer_effects_port = TimerEffectsAdapter()
@@ -102,6 +108,9 @@ class EmulatorBridge:
             media_port=media_port,
             notification_port=notification_port,
         )
+        # Critical: bind the emulator to the LLM so complete_turn() can
+        # build prompts via ZorkEmulator instead of falling back to DeterministicLLM.
+        llm.bind_emulator(cls._emu)
         logger.info("EmulatorBridge: TGE ZorkEmulator initialized")
 
     @staticmethod
@@ -391,13 +400,118 @@ class EmulatorBridge:
 
     @classmethod
     def get_turn_for_message(cls, message_id):
+        """Query TGE Turn by external_message_id (was discord_message_id)."""
         cls._ensure_init()
-        return cls._emu.get_turn_for_message(str(message_id))
+        try:
+            mid = str(int(message_id))
+        except (TypeError, ValueError):
+            return None
+        from text_game_engine.persistence.sqlalchemy.models import Turn
+        with cls._session_factory() as session:
+            return (
+                session.query(Turn)
+                .filter(Turn.external_message_id == mid, Turn.kind == "narrator")
+                .order_by(Turn.id.desc())
+                .first()
+            )
 
     @classmethod
-    def get_turn_info_text_for_message(cls, *args, **kwargs):
+    def get_turn_info_text_for_message(cls, message_id):
+        """Build turn info text from TGE Turn + snapshot data."""
         cls._ensure_init()
-        return cls._emu.get_turn_info_text_for_message(*args, **kwargs)
+        try:
+            mid = str(int(message_id))
+        except (TypeError, ValueError):
+            return None
+        from text_game_engine.persistence.sqlalchemy.models import (
+            Campaign, Player, Snapshot, Turn,
+        )
+        with cls._session_factory() as session:
+            turn = (
+                session.query(Turn)
+                .filter(Turn.external_message_id == mid, Turn.kind == "narrator")
+                .order_by(Turn.id.desc())
+                .first()
+            )
+            if turn is None:
+                return None
+            campaign = session.get(Campaign, turn.campaign_id) if turn.campaign_id else None
+            player = None
+            if turn.campaign_id and turn.actor_id:
+                player = session.query(Player).filter_by(
+                    campaign_id=turn.campaign_id,
+                    actor_id=turn.actor_id,
+                ).first()
+
+            # Load meta from turn
+            meta = cls._emu._safe_turn_meta(turn) if hasattr(cls._emu, "_safe_turn_meta") else {}
+            campaign_state = cls._emu.get_campaign_state(campaign) if campaign else {}
+            player_state = {}
+            inventory_line = "Inventory: empty"
+
+            snapshot = session.query(Snapshot).filter_by(turn_id=turn.id).first()
+            if snapshot is not None:
+                snapshot_cs = cls._emu._load_json(
+                    getattr(snapshot, "campaign_state_json", "{}") or "{}", {}
+                )
+                if isinstance(snapshot_cs, dict) and snapshot_cs:
+                    campaign_state = snapshot_cs
+                try:
+                    players_data = json.loads(
+                        getattr(snapshot, "players_json", "[]") or "[]"
+                    )
+                except Exception:
+                    players_data = []
+                for row in players_data:
+                    if not isinstance(row, dict):
+                        continue
+                    p_actor = str(row.get("player_id") or row.get("actor_id") or "")
+                    if p_actor == str(turn.actor_id or ""):
+                        raw_state = row.get("state_json")
+                        if isinstance(raw_state, dict):
+                            player_state = raw_state
+                        else:
+                            player_state = cls._emu._load_json(raw_state or "{}", {})
+                        inventory_line = (
+                            cls._emu._format_inventory(player_state) or "Inventory: empty"
+                        )
+                        break
+
+            if not player_state and player is not None:
+                player_state = cls._emu.get_player_state(player)
+                inventory_line = (
+                    cls._emu._format_inventory(player_state) or "Inventory: empty"
+                )
+
+            # Build info lines
+            lines = []
+            # Location
+            location = player_state.get("current_location") or player_state.get("look") or ""
+            if location:
+                lines.append(f"Location: {location}")
+            # Calendar/time
+            game_time = campaign_state.get("game_time") or campaign_state.get("_game_time") or {}
+            if isinstance(game_time, dict) and game_time:
+                day = game_time.get("day", "?")
+                hour = game_time.get("hour", "?")
+                minute = game_time.get("minute", "?")
+                period = game_time.get("period", "")
+                lines.append(f"Time: Day {day}, {hour}:{str(minute).zfill(2)} {period}".strip())
+            # Character
+            char_name = player_state.get("character_name") or ""
+            if char_name:
+                lines.append(f"Character: {char_name}")
+            if player is not None:
+                lines.append(f"Level: {getattr(player, 'level', 1)} | XP: {getattr(player, 'xp', 0)}")
+            # Inventory
+            lines.append(inventory_line)
+            # Reasoning (spoiler)
+            reasoning = meta.get("reasoning") if isinstance(meta, dict) else None
+            if reasoning:
+                lines.append(f"||Reasoning: {reasoning}||")
+            else:
+                lines.append("Reasoning: unavailable.")
+            return "\n".join(lines)
 
     # -- Source Material & Export -----------------------------------------------
 
