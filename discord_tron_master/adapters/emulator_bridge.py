@@ -5,13 +5,34 @@ Usage:
 """
 from __future__ import annotations
 
+import datetime
 import inspect
 import json
 import logging
+import os
 import threading
 from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
+
+
+def _zork_log(section: str, body: str = "") -> None:
+    """Append a timestamped section to the global Zork event log."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_dir = os.path.join(_ZORK_LOG_ROOT, "global")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "event.log")
+        with open(log_path, "a") as fh:
+            fh.write(f"\n{'=' * 72}\n[{ts}] {section}\n{'=' * 72}\n")
+            if body:
+                fh.write(body)
+                if not body.endswith("\n"):
+                    fh.write("\n")
+    except Exception:
+        pass
 
 
 class EmulatorBridge:
@@ -112,6 +133,9 @@ class EmulatorBridge:
         # Critical: bind the emulator to the LLM so complete_turn() can
         # build prompts via ZorkEmulator instead of falling back to DeterministicLLM.
         llm.bind_emulator(cls._emu)
+        llm.set_log_callback(_zork_log)
+        # DTM shows inventory only on reaction/command, not in every narration.
+        cls._emu.append_inventory_to_narration = False
         logger.info("EmulatorBridge: TGE ZorkEmulator initialized")
 
     @staticmethod
