@@ -600,6 +600,76 @@ class EmulatorBridge:
             )
 
     @classmethod
+    def list_recent_turn_message_refs(cls, *, limit_per_campaign: int = 50):
+        """Return recent narrator-turn Discord message refs for enabled sessions.
+
+        Each row contains enough data for Discord startup/bootstrap code to
+        refetch the message and restore control reactions after reconnect.
+        """
+        cls._ensure_init()
+        try:
+            limit = max(1, int(limit_per_campaign))
+        except (TypeError, ValueError):
+            limit = 50
+        from text_game_engine.persistence.sqlalchemy.models import (
+            Session as GameSession,
+            Turn,
+        )
+
+        refs = []
+        seen: set[tuple[str, str]] = set()
+        with cls._session_factory() as session:
+            sessions = (
+                session.query(GameSession)
+                .filter(
+                    GameSession.enabled == True,  # noqa: E712
+                    GameSession.campaign_id.isnot(None),
+                )
+                .all()
+            )
+            for sess in sessions:
+                surface_channel_id = (
+                    str(
+                        getattr(sess, "surface_thread_id", None)
+                        or getattr(sess, "surface_channel_id", None)
+                        or ""
+                    ).strip()
+                )
+                if not surface_channel_id:
+                    continue
+                turns = (
+                    session.query(Turn)
+                    .filter(
+                        Turn.campaign_id == str(sess.campaign_id),
+                        Turn.session_id == str(sess.id),
+                        Turn.kind == "narrator",
+                        Turn.external_message_id.isnot(None),
+                    )
+                    .order_by(Turn.id.desc())
+                    .limit(limit)
+                    .all()
+                )
+                for turn in turns:
+                    message_id = str(getattr(turn, "external_message_id", "") or "").strip()
+                    if not message_id:
+                        continue
+                    dedupe_key = (surface_channel_id, message_id)
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    refs.append(
+                        {
+                            "campaign_id": str(sess.campaign_id),
+                            "session_id": str(sess.id),
+                            "channel_id": surface_channel_id,
+                            "message_id": message_id,
+                            "turn_id": int(getattr(turn, "id", 0) or 0),
+                        }
+                    )
+        refs.sort(key=lambda row: int(row.get("turn_id") or 0), reverse=True)
+        return refs
+
+    @classmethod
     def get_turn_info_text_for_message(cls, message_id):
         """Build turn info text from TGE Turn + snapshot data."""
         cls._ensure_init()
