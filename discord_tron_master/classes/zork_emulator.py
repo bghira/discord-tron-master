@@ -22314,6 +22314,53 @@ class ZorkEmulator:
             )
             if not first_payload:
                 break
+            if (
+                isinstance(first_payload, dict)
+                and not cls._is_tool_call(first_payload)
+                and current_prompt_stage == cls.PROMPT_STAGE_RESEARCH
+            ):
+                _zork_log(
+                    "RESEARCH PHASE PROTOCOL VIOLATION",
+                    "Model returned final JSON during research; requesting ready_to_write restage.",
+                )
+                _restaged_payload = None
+                for _restage_attempt in range(2):
+                    _restage_prompt = (
+                        f"{tool_augmented_prompt}\n"
+                        "RESEARCH_PHASE_PROTOCOL_VIOLATION: You returned final narration/state JSON during research.\n"
+                        'Do NOT narrate yet. Return ONLY {"tool_call":"ready_to_write","speakers":[...],"listeners":[...]} now.\n'
+                        "speakers = only characters who will actually speak or take meaningful visible action.\n"
+                        "listeners = only the direct recipients/observers whose shared knowledge matters for those beats.\n"
+                    )
+                    _restage_response = await _turn_model_call(
+                        _restage_prompt,
+                        thinking_enabled=False,
+                    )
+                    if not _restage_response:
+                        continue
+                    _restage_response = cls._clean_response(_restage_response)
+                    _zork_log(
+                        f"RESEARCH RESTAGE RESPONSE #{_restage_attempt + 1}",
+                        _restage_response,
+                    )
+                    _candidate = await _parse_research_phase_payload(
+                        _restage_response,
+                        current_tool_name="ready_to_write",
+                    )
+                    if (
+                        isinstance(_candidate, dict)
+                        and cls._is_tool_call(_candidate)
+                        and str(_candidate.get("tool_call") or "").strip().lower()
+                        == "ready_to_write"
+                    ):
+                        _restaged_payload = _candidate
+                        break
+                if not _restaged_payload:
+                    response = "A hollow silence answers. Try again."
+                    first_payload = None
+                    break
+                first_payload = _restaged_payload
+                continue
 
         # Hard-stop infinite tool loops
         if first_payload and cls._is_tool_call(first_payload) and tool_chain_steps >= max_tool_chain_steps:
