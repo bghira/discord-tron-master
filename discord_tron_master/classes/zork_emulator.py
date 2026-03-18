@@ -22876,122 +22876,136 @@ class ZorkEmulator:
                     f"player_state_keys={list((player_state_update or {}).keys()) if isinstance(player_state_update, dict) else []}"
                 ),
             )
-            _repair_prompt = (
-                f"{tool_augmented_prompt}\n"
-                "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
-                "Return final JSON now (no tool_call), including:\n"
-                "- reasoning string grounded in evidence/context used\n"
-                "- narration with one concrete scene development\n"
-                '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
-                "- summary_update string (REQUIRED — one sentence of lasting change or current dramatic state)\n"
-                "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
-            )
-            _repair_response = await gpt.turbo_completion(
-                system_prompt,
-                _repair_prompt,
-                temperature=0.75,
-                max_tokens=2048,
-            )
-            if _repair_response:
+            for _empty_attempt in range(2):
+                _repair_prompt = (
+                    f"{tool_augmented_prompt}\n"
+                    "OUTPUT_VALIDATION_FAILED: previous response was too empty.\n"
+                    "Return final JSON now (no tool_call), including:\n"
+                    "- reasoning string grounded in evidence/context used\n"
+                    "- narration with one concrete scene development\n"
+                    '- state_update object with "game_time", "current_chapter", and "current_scene" explicitly included\n'
+                    "- summary_update string (REQUIRED — one sentence of lasting change or current dramatic state)\n"
+                    "Advance game_time plausibly and restate current_chapter/current_scene even if unchanged.\n"
+                )
+                _repair_response = await gpt.turbo_completion(
+                    system_prompt,
+                    _repair_prompt,
+                    temperature=0.75,
+                    max_tokens=2048,
+                )
+                if not _repair_response:
+                    continue
                 _repair_response = cls._clean_response(_repair_response)
                 _repair_json = cls._extract_json(_repair_response)
-                if _repair_json:
-                    try:
-                        _repair_payload = cls._parse_json_lenient(
-                            _repair_json
-                        )
-                        # Guard: if repair returned a tool_call, re-prompt
-                        if isinstance(_repair_payload, dict) and cls._is_tool_call(_repair_payload):
-                            _zork_log(
-                                "EMPTY PAYLOAD REPAIR returned tool_call (rejected)",
-                                _repair_response[:300],
-                            )
-                            _repair2_resp = await gpt.turbo_completion(
-                                system_prompt,
-                                (
-                                    f"{tool_augmented_prompt}\n"
-                                    "Your previous responses were NOT player-facing narration. "
-                                    "Do NOT return a tool_call. Return the final in-character "
-                                    "narration JSON with reasoning, scene_output, narration, "
-                                    "state_update, summary_update. Write the scene NOW.\n"
-                                ),
-                                temperature=0.8,
-                                max_tokens=2048,
-                            )
-                            if _repair2_resp:
-                                _repair2_resp = cls._clean_response(_repair2_resp)
-                                _repair2_json = cls._extract_json(_repair2_resp)
-                                if _repair2_json:
-                                    _repair2_payload = cls._parse_json_lenient(_repair2_json)
-                                    if isinstance(_repair2_payload, dict) and not cls._is_tool_call(_repair2_payload):
-                                        _repair_payload = _repair2_payload
-                                        _repair_response = _repair2_resp
-                                    else:
-                                        _zork_log(
-                                            "EMPTY PAYLOAD REPAIR 2nd attempt still tool_call (giving up)",
-                                            str(_repair2_resp or "")[:300],
-                                        )
-                                        raise ValueError("repair returned tool_call twice")
-
-                        scene_output_raw = _repair_payload.get(
-                            "scene_output"
-                        )
-                        _repair_narration = str(
-                            _repair_payload.get("narration") or ""
-                        ).strip()
-                        if not _repair_narration:
-                            _repair_narration = cls._scene_output_text_from_raw(
-                                scene_output_raw
-                            )
-                        if not _repair_narration:
-                            _repair_narration = (
-                                cls._fallback_narration_from_payload(
-                                    _repair_payload
-                                )
-                            )
-                        if _repair_narration:
-                            narration = _repair_narration
-                        reasoning = cls._sanitize_reasoning(
-                            _repair_payload.get("reasoning")
-                        )
-                        state_update = (
-                            _repair_payload.get("state_update", {}) or {}
-                        )
-                        summary_update = _repair_payload.get(
-                            "summary_update"
-                        )
-                        xp_awarded = (
-                            _repair_payload.get("xp_awarded", 0) or 0
-                        )
-                        player_state_update = (
-                            _repair_payload.get("player_state_update", {})
-                            or {}
-                        )
-                        co_located_player_slugs = cls._normalize_co_located_player_slugs(
-                            _repair_payload.get("co_located_player_slugs"),
-                            actor_slug=player_state.get("character_name"),
-                        )
-                        story_progression = cls._normalize_story_progression(
-                            _repair_payload.get("story_progression")
-                        )
-                        turn_visibility = _repair_payload.get("turn_visibility")
-                        scene_image_prompt = _repair_payload.get(
-                            "scene_image_prompt"
-                        )
-                        character_updates = (
-                            _repair_payload.get("character_updates", {})
-                            or {}
-                        )
-                        give_item = _repair_payload.get("give_item")
-                        calendar_update = _repair_payload.get(
-                            "calendar_update"
-                        )
+                if not _repair_json:
+                    continue
+                try:
+                    _repair_payload = cls._parse_json_lenient(
+                        _repair_json
+                    )
+                    # Guard: if repair returned a tool_call, re-prompt
+                    if isinstance(_repair_payload, dict) and cls._is_tool_call(_repair_payload):
                         _zork_log(
-                            "EMPTY PAYLOAD REPAIR RESPONSE",
-                            _repair_response[:1200],
+                            "EMPTY PAYLOAD REPAIR returned tool_call (rejected)",
+                            _repair_response[:300],
                         )
-                    except Exception:
-                        pass
+                        _repair2_resp = await gpt.turbo_completion(
+                            system_prompt,
+                            (
+                                f"{tool_augmented_prompt}\n"
+                                "Your previous responses were NOT player-facing narration. "
+                                "Do NOT return a tool_call. Return the final in-character "
+                                "narration JSON with reasoning, scene_output, narration, "
+                                "state_update, summary_update. Write the scene NOW.\n"
+                            ),
+                            temperature=0.8,
+                            max_tokens=2048,
+                        )
+                        if _repair2_resp:
+                            _repair2_resp = cls._clean_response(_repair2_resp)
+                            _repair2_json = cls._extract_json(_repair2_resp)
+                            if _repair2_json:
+                                _repair2_payload = cls._parse_json_lenient(_repair2_json)
+                                if isinstance(_repair2_payload, dict) and not cls._is_tool_call(_repair2_payload):
+                                    _repair_payload = _repair2_payload
+                                    _repair_response = _repair2_resp
+                                else:
+                                    _zork_log(
+                                        "EMPTY PAYLOAD REPAIR 2nd attempt still tool_call (giving up)",
+                                        str(_repair2_resp or "")[:300],
+                                    )
+                                    raise ValueError("repair returned tool_call twice")
+
+                    scene_output_raw = _repair_payload.get(
+                        "scene_output"
+                    )
+                    _repair_narration = str(
+                        _repair_payload.get("narration") or ""
+                    ).strip()
+                    if not _repair_narration:
+                        _repair_narration = cls._scene_output_text_from_raw(
+                            scene_output_raw
+                        )
+                    if not _repair_narration:
+                        _repair_narration = (
+                            cls._fallback_narration_from_payload(
+                                _repair_payload
+                            )
+                        )
+                    if _repair_narration:
+                        narration = _repair_narration
+                    reasoning = cls._sanitize_reasoning(
+                        _repair_payload.get("reasoning")
+                    )
+                    state_update = (
+                        _repair_payload.get("state_update", {}) or {}
+                    )
+                    summary_update = _repair_payload.get(
+                        "summary_update"
+                    )
+                    xp_awarded = (
+                        _repair_payload.get("xp_awarded", 0) or 0
+                    )
+                    player_state_update = (
+                        _repair_payload.get("player_state_update", {})
+                        or {}
+                    )
+                    co_located_player_slugs = cls._normalize_co_located_player_slugs(
+                        _repair_payload.get("co_located_player_slugs"),
+                        actor_slug=player_state.get("character_name"),
+                    )
+                    story_progression = cls._normalize_story_progression(
+                        _repair_payload.get("story_progression")
+                    )
+                    turn_visibility = _repair_payload.get("turn_visibility")
+                    scene_image_prompt = _repair_payload.get(
+                        "scene_image_prompt"
+                    )
+                    character_updates = (
+                        _repair_payload.get("character_updates", {})
+                        or {}
+                    )
+                    give_item = _repair_payload.get("give_item")
+                    calendar_update = _repair_payload.get(
+                        "calendar_update"
+                    )
+                    _zork_log(
+                        f"EMPTY PAYLOAD REPAIR RESPONSE attempt={_empty_attempt + 1}",
+                        _repair_response[:1200],
+                    )
+                    if not cls._is_emptyish_turn_payload(
+                        narration=narration,
+                        state_update=state_update if isinstance(state_update, dict) else {},
+                        player_state_update=player_state_update if isinstance(player_state_update, dict) else {},
+                        summary_update=summary_update,
+                        xp_awarded=xp_awarded,
+                        scene_image_prompt=scene_image_prompt,
+                        character_updates=character_updates if isinstance(character_updates, dict) else {},
+                        calendar_update=calendar_update,
+                    ):
+                        break
+                except Exception:
+                    pass
 
         # Clock drift retry
         if (
