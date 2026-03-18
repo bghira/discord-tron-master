@@ -17198,6 +17198,39 @@ class ZorkEmulator:
         return "\n".join(part for part in parts if part)
 
     @classmethod
+    def _strip_recent_turns_prompt_sections(cls, text: object) -> str:
+        value = str(text or "")
+        if not value:
+            return ""
+        lines = value.splitlines()
+        kept: List[str] = []
+        skipping_recent_body = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("RECENT_TURNS_LOADED:"):
+                skipping_recent_body = False
+                continue
+            if stripped.startswith("RECENT_TURNS_NOTE:"):
+                continue
+            if stripped.startswith("RECENT_TURNS_LOCATIONS:"):
+                continue
+            if stripped.startswith("RECENT_TURNS_RECEIVERS:"):
+                continue
+            if stripped == "RECENT_TURNS:":
+                skipping_recent_body = True
+                continue
+            if skipping_recent_body:
+                if (
+                    re.match(r"^[A-Z][A-Z0-9_ ]*:", stripped)
+                    or stripped.startswith("PLAYER_ACTION ")
+                ):
+                    skipping_recent_body = False
+                else:
+                    continue
+            kept.append(line)
+        return "\n".join(kept).strip()
+
+    @classmethod
     def cancel_pending_timer(cls, campaign_id: int) -> Optional[dict]:
         """Cancel a pending timer and return its context dict (or None)."""
         ctx_dict = cls._pending_timers.pop(campaign_id, None)
