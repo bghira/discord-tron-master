@@ -3486,6 +3486,34 @@ class ZorkEmulator:
         return True
 
     @classmethod
+    def _beat_visible_to_all_scene_npcs(
+        cls,
+        beat: Dict[str, object],
+        npc_slugs: set[str],
+    ) -> bool:
+        """Return True only if ALL listed NPCs would plausibly know this beat."""
+        if not npc_slugs:
+            return True
+        beat_visibility = str(beat.get("visibility") or "").strip().lower()
+        if beat_visibility in {"", "public"}:
+            return True
+        beat_npc_slugs = {
+            cls._player_slug_key(entry)
+            for entry in (
+                list(beat.get("actors") or [])
+                + list(beat.get("listeners") or [])
+                + list(beat.get("aware_npc_slugs") or [])
+                + [beat.get("speaker")]
+            )
+            if cls._player_slug_key(entry)
+        }
+        return all(
+            cls._player_slug_key(npc_slug) in beat_npc_slugs
+            for npc_slug in npc_slugs
+            if cls._player_slug_key(npc_slug)
+        )
+
+    @classmethod
     def _active_scene_npc_slugs(
         cls,
         campaign: ZorkCampaign,
@@ -3691,6 +3719,7 @@ class ZorkEmulator:
             if (
                 not visible
                 and (requested_player_slugs or requested_npc_slugs)
+                and not scene_npc_slugs
                 and turn.user_id == viewer_user_id
                 and cls._turn_relevant_to_scene_receivers(
                     turn,
@@ -3702,6 +3731,7 @@ class ZorkEmulator:
             if (
                 not visible
                 and requested_npc_slugs
+                and not scene_npc_slugs
                 and cls._turn_relevant_to_requested_npc_history(
                     turn,
                     requested_npc_slugs=requested_npc_slugs,
@@ -4290,7 +4320,7 @@ class ZorkEmulator:
         visibility = meta.get("visibility")
         if isinstance(visibility, dict):
             header["visibility"] = str(visibility.get("scope") or "").strip().lower() or None
-        lines = [json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
+        beat_lines: List[str] = []
         meta_location_key_norm = cls._normalize_location_key(meta.get("location_key"))
         fallback_location_key = cls._normalize_location_key(
             scene_output.get("location_key")
@@ -4346,7 +4376,7 @@ class ZorkEmulator:
                         and viewer_private_context_key_norm == beat_context_key
                     )
                 )
-            if not beat_visible and requested_npc_slugs:
+            if not beat_visible and requested_npc_slugs and not scene_npc_slugs:
                 beat_npc_slugs = {
                     cls._player_slug_key(e)
                     for e in (
@@ -4366,26 +4396,12 @@ class ZorkEmulator:
                     beat_visible = True
             if not beat_visible:
                 continue
-            # LCD beat filter: same-room local beats are included by default
-            # for the current scene. Keep stricter participant checks for
-            # private/limited beats.
-            if scene_npc_slugs and beat_visibility not in {"", "public", "local"}:
-                beat_npc_slugs = {
-                    cls._player_slug_key(e)
-                    for e in (
-                        list(beat.get("actors") or [])
-                        + list(beat.get("listeners") or [])
-                        + list(beat.get("aware_npc_slugs") or [])
-                        + [beat.get("speaker")]
-                    )
-                    if cls._player_slug_key(e)
-                }
-                if not all(
-                    cls._player_slug_key(npc) in beat_npc_slugs
-                    for npc in scene_npc_slugs
-                ):
-                    continue
-            lines.append(
+            if scene_npc_slugs and not cls._beat_visible_to_all_scene_npcs(
+                beat,
+                scene_npc_slugs,
+            ):
+                continue
+            beat_lines.append(
                 json.dumps(
                     {
                         "kind": "beat",
@@ -4407,7 +4423,9 @@ class ZorkEmulator:
                     separators=(",", ":"),
                 )
             )
-        return lines
+        if not beat_lines:
+            return []
+        return [json.dumps(header, ensure_ascii=False, separators=(",", ":")), *beat_lines]
 
     @classmethod
     def _recent_turn_fallback_lines(
