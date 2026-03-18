@@ -143,6 +143,7 @@ class EmulatorBridge:
     _init_lock = threading.Lock()
     _initialized = False
     _inflight_turns: dict[str, object] = {}
+    _shutdown_requested = False
 
     @classmethod
     def _ensure_init(cls):
@@ -394,6 +395,8 @@ class EmulatorBridge:
     @classmethod
     async def play_action(cls, *args, **kwargs):
         cls._ensure_init()
+        if cls._shutdown_requested:
+            return "Restart in progress. New turns are temporarily disabled."
         # Push contextual log scope from the Discord ctx (first arg).
         ctx = args[0] if args else None
         guild = getattr(ctx, "guild", None)
@@ -897,7 +900,11 @@ class EmulatorBridge:
         fn = getattr(cls._emu, "request_shutdown", None)
         if callable(fn):
             return fn()
-        logger.info("EmulatorBridge: request_shutdown noop for backend without lifecycle hooks")
+        cls._shutdown_requested = True
+        backend_inflight = getattr(cls._emu, "_inflight_turns", None)
+        if backend_inflight is not None:
+            cls._inflight_turns = backend_inflight
+        logger.info("EmulatorBridge: using bridge-local shutdown/drain fallback")
         return None
 
     @classmethod
@@ -906,8 +913,35 @@ class EmulatorBridge:
         fn = getattr(cls._emu, "wait_for_drain", None)
         if callable(fn):
             return await fn(timeout=timeout)
-        logger.info("EmulatorBridge: wait_for_drain treated as already drained for backend without lifecycle hooks")
-        return True
+        backend_inflight = getattr(cls._emu, "_inflight_turns", None)
+        backend_lock = getattr(cls._emu, "_inflight_turns_lock", None)
+        if backend_inflight is None:
+            logger.info("EmulatorBridge: bridge-local drain fallback found no backend inflight tracker")
+            return True
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, float(timeout))
+        while loop.time() < deadline:
+            try:
+                if backend_lock is not None:
+                    with backend_lock:
+                        active = set(backend_inflight)
+                else:
+                    active = set(backend_inflight)
+            except Exception:
+                active = set()
+            cls._inflight_turns = active
+            if not active:
+                return True
+            await asyncio.sleep(0.25)
+        try:
+            if backend_lock is not None:
+                with backend_lock:
+                    cls._inflight_turns = set(backend_inflight)
+            else:
+                cls._inflight_turns = set(backend_inflight)
+        except Exception:
+            pass
+        return False
 
     # -- Utility / Processing --------------------------------------------------
 
