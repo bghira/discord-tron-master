@@ -713,15 +713,16 @@ class ZorkEmulator:
         "RECENT_TURNS has already been loaded for the acting player.\n"
         "Do NOT narrate yet unless the system explicitly says to finalize.\n"
         "Your job in this phase is to gather any deeper continuity, canon, SMS, plot, chapter, or consequence context that materially matters for this turn.\n"
-        "When research is sufficient, return {\"tool_call\": \"ready_to_write\", \"speakers\": [...], \"listeners\": [...]} with all scene participant NPC/player slugs.\n"
+        "When research is sufficient, return {\"tool_call\": \"ready_to_write\", \"speakers\": [...], \"listeners\": [...]}.\n"
     )
     READY_TO_WRITE_TOOL_PROMPT = (
         "\nYou have a ready_to_write tool for ending the research phase.\n"
         "When you have enough context to write the turn, return:\n"
         '{"tool_call": "ready_to_write", "speakers": ["npc-slug-1"], "listeners": ["npc-slug-2", "player-slug"]}\n'
-        "speakers = characters who will speak or act this turn. listeners = characters who observe/overhear.\n"
-        "Include ALL NPCs and players present in the upcoming scene. The harness uses this to filter context to the\n"
-        "LOWEST COMMON DENOMINATOR — only events that all scene participants could plausibly know about.\n"
+        "speakers = only the characters who will actually speak or take a meaningful visible action this turn.\n"
+        "listeners = only the direct recipients or observers whose knowledge should constrain shared context for those beats.\n"
+        "Do NOT include every person present in the room by default. Silent bystanders do not need to be named unless their awareness materially matters.\n"
+        "If a character needs private continuity in order to decide what to say or withhold, include that character in speakers. The harness will give shared LCD context for named participants plus extra speaker-specific continuity for the named speakers.\n"
         "Do not narrate in the same response as ready_to_write.\n"
         "If the player's communication mode/substance matters before narration, you may first request only the relevant communication rules:\n"
         '{"tool_call": "communication_rules", "keys": ["GM-RULE-COMMUNICATION-SOFTENING", "GM-RULE-SUBSTANCE-EXTRACTION"]}\n'
@@ -17124,7 +17125,7 @@ class ZorkEmulator:
                 ),
                 (
                     'When research is sufficient, return {"tool_call": "ready_to_write", "speakers": [...], "listeners": [...]} '
-                    'with ALL scene participant slugs. Do not narrate yet.'
+                    'with only the characters who will actually speak/act and the listeners who materially constrain shared knowledge. Do not narrate yet.'
                 ),
             )
         return cls._turn_response_style_note(
@@ -20647,6 +20648,12 @@ class ZorkEmulator:
 
             elif tool_name == "ready_to_write":
                 _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
+                tool_prompt_blocks[:] = [
+                    block
+                    for block in tool_prompt_blocks
+                    if not str(block or "").strip().startswith("RECENT_TURNS_LOADED:")
+                ]
+                _rebuild_tool_prompt()
 
                 # Extract scene participants for LCD filtering
                 _rtw_speakers = first_payload.get("speakers") or []
@@ -20655,20 +20662,41 @@ class ZorkEmulator:
                     _rtw_speakers = [_rtw_speakers]
                 if isinstance(_rtw_listeners, str):
                     _rtw_listeners = [_rtw_listeners]
-                _rtw_npc_slugs: set[str] = set()
+                _party_player_slugs = {
+                    cls._player_slug_key(p.get("player_slug") or p.get("name") or "")
+                    for p in party_snapshot
+                    if isinstance(p, dict)
+                    and cls._player_slug_key(p.get("player_slug") or p.get("name") or "")
+                }
+                _rtw_speaker_npc_slugs: set[str] = set()
+                _rtw_listener_npc_slugs: set[str] = set()
                 _viewer_slug_norm = cls._player_slug_key(viewer_slug)
-                for raw_slug in list(_rtw_speakers) + list(_rtw_listeners):
+                for raw_slug in list(_rtw_speakers):
                     slug = cls._player_slug_key(raw_slug)
-                    # Exclude the acting player — they're the viewer,
-                    # not an NPC whose knowledge we need to constrain.
-                    if slug and slug != _viewer_slug_norm:
-                        _rtw_npc_slugs.add(slug)
+                    if (
+                        slug
+                        and slug != _viewer_slug_norm
+                        and slug not in _party_player_slugs
+                    ):
+                        _rtw_speaker_npc_slugs.add(slug)
+                for raw_slug in list(_rtw_listeners):
+                    slug = cls._player_slug_key(raw_slug)
+                    if (
+                        slug
+                        and slug != _viewer_slug_norm
+                        and slug not in _party_player_slugs
+                    ):
+                        _rtw_listener_npc_slugs.add(slug)
+                _rtw_scene_npc_slugs = _rtw_speaker_npc_slugs.union(
+                    _rtw_listener_npc_slugs
+                )
 
                 # LCD-filtered WORLD_SUMMARY: only events ALL scene
                 # participants (player + NPCs) would know about.
                 _lcd_summary = ""
                 _lcd_recent = ""
-                if _rtw_npc_slugs:
+                _speaker_continuity_blocks: List[str] = []
+                if _rtw_scene_npc_slugs:
                     _lcd_summary = cls._compose_world_summary(
                         campaign,
                         cls.get_campaign_state(campaign),
@@ -20677,7 +20705,7 @@ class ZorkEmulator:
                         viewer_slug=viewer_slug,
                         viewer_location_key=viewer_location_key,
                         viewer_private_context_key=viewer_private_context_key,
-                        scene_npc_slugs=_rtw_npc_slugs,
+                        scene_npc_slugs=_rtw_scene_npc_slugs,
                         max_chars=cls.MAX_SUMMARY_CHARS,
                     )
                     _lcd_recent_turns = cls.get_recent_turns(
@@ -20692,9 +20720,31 @@ class ZorkEmulator:
                         viewer_location_key=viewer_location_key,
                         viewer_private_context_key=viewer_private_context_key,
                         requested_player_slugs=set(),
-                        requested_npc_slugs=_rtw_npc_slugs,
-                        scene_npc_slugs=_rtw_npc_slugs,
+                        requested_npc_slugs=_rtw_scene_npc_slugs,
+                        scene_npc_slugs=_rtw_scene_npc_slugs,
                     )
+                if _rtw_speaker_npc_slugs:
+                    _speaker_recent_turns = cls.get_recent_turns(
+                        campaign.id,
+                        limit=cls.MAX_RECENT_TURNS,
+                    )
+                    for _speaker_slug in sorted(_rtw_speaker_npc_slugs):
+                        _speaker_recent = cls._recent_turns_text_for_viewer(
+                            campaign,
+                            _speaker_recent_turns,
+                            viewer_user_id=user_id,
+                            viewer_slug=viewer_slug,
+                            viewer_location_key=viewer_location_key,
+                            viewer_private_context_key=viewer_private_context_key,
+                            requested_player_slugs=set(),
+                            requested_npc_slugs={_speaker_slug},
+                            scene_npc_slugs=None,
+                        )
+                        if _speaker_recent and _speaker_recent != "None":
+                            _speaker_continuity_blocks.append(
+                                f"SPEAKER_CONTINUITY[{_speaker_slug}]:\n"
+                                f"{_speaker_recent}\n"
+                            )
 
                 # Build PC name list for the dialogue restriction reminder
                 _pc_names_for_reminder = [
@@ -20712,14 +20762,22 @@ class ZorkEmulator:
                         f"\nPLAYER_CHARACTERS (real humans — do NOT write their dialogue, actions, decisions, "
                         f"emotional reactions, facial expressions, or movement): {', '.join(_pc_names_for_reminder)}\n"
                     )
-                if _rtw_npc_slugs:
+                if _rtw_scene_npc_slugs:
                     tool_result_block += (
                         f"\nSCENE_PARTICIPANTS_LCD: speakers={sorted(_rtw_speakers)} listeners={sorted(_rtw_listeners)}\n"
                         "The following WORLD_SUMMARY and RECENT_TURNS are filtered to the LOWEST COMMON DENOMINATOR — "
-                        "only events that ALL scene participants (including NPCs) would plausibly know about. "
-                        "Use ONLY this context for writing. Do not reference events that an NPC participant could not know.\n"
+                        "only events that ALL named participants would plausibly know about. "
+                        "Use this as the shared pool for common knowledge in the scene.\n"
                         f"\nWORLD_SUMMARY_LCD: {_lcd_summary or '(empty)'}\n"
                         f"\nRECENT_TURNS_LCD:\n{_lcd_recent}\n"
+                    )
+                if _speaker_continuity_blocks:
+                    tool_result_block += (
+                        "\nSPEAKER_CONTINUITY_RULES:\n"
+                        "Each SPEAKER_CONTINUITY block is extra continuity for that named speaker only. "
+                        "That speaker may use it to decide what to reveal, conceal, or emphasize. "
+                        "Do NOT let listeners or silent bystanders act on a speaker's private continuity unless they were independently involved in those same events.\n\n"
+                        + "\n".join(_speaker_continuity_blocks)
                     )
                 tool_result_block += cls.WRITING_CRAFT_PROMPT
                 _zork_log("READY TO WRITE", tool_result_block)
