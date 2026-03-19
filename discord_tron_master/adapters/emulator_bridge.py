@@ -472,6 +472,50 @@ class EmulatorBridge:
         scene_output = meta.get("scene_output") if isinstance(meta, dict) else None
         return scene_output if isinstance(scene_output, dict) else None
 
+    @classmethod
+    def get_calendar_text(cls, campaign_id):
+        cls._ensure_init()
+        campaign = cls.query_campaign(campaign_id)
+        if campaign is None:
+            return "No active campaign in this channel."
+        campaign_state = cls._emu.get_campaign_state(campaign)
+        game_time = campaign_state.get("game_time", {})
+        calendar_entries = cls._emu._calendar_for_prompt(campaign_state)
+        date_label = game_time.get("date_label")
+        if not date_label:
+            day = game_time.get("day", "?")
+            period = str(game_time.get("period", "?")).title()
+            date_label = f"Day {day}, {period}"
+        lines = [f"**Game Time:** {date_label}"]
+        if calendar_entries:
+            lines.append("**Upcoming Events:**")
+            for event in calendar_entries:
+                hours_remaining = int(
+                    event.get("hours_remaining", int(event.get("days_remaining", 0)) * 24)
+                )
+                fire_day = int(event.get("fire_day", 1))
+                fire_hour = max(0, min(23, int(event.get("fire_hour", 23))))
+                desc = str(event.get("description", "") or "")
+                if hours_remaining < 0:
+                    eta = f"overdue by {abs(hours_remaining)} hour(s)"
+                elif hours_remaining == 0:
+                    eta = "fires now"
+                elif hours_remaining < 48:
+                    eta = f"fires in {hours_remaining} hour(s)"
+                else:
+                    eta_days = (hours_remaining + 23) // 24
+                    eta = f"fires in {eta_days} day(s)"
+                line = (
+                    f"- **{event.get('name', 'Unknown')}** - "
+                    f"Day {fire_day}, {fire_hour:02d}:00 ({eta})"
+                )
+                if desc:
+                    line += f" ({desc})"
+                lines.append(line)
+        else:
+            lines.append("No upcoming events.")
+        return "\n".join(lines)
+
     # -- Player Management -----------------------------------------------------
 
     @classmethod

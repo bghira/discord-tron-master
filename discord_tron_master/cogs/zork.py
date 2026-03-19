@@ -1286,6 +1286,23 @@ class Zork(commands.Cog):
         )
         await DiscordBot.send_large_message(ctx, message)
 
+    @zork.command(name="calendar", aliases=["cal", "events"])
+    async def zork_calendar(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            text = ZorkEmulator.get_calendar_text(channel.campaign_id)
+        await DiscordBot.send_large_message(ctx, text)
+
     @zork.command(name="enable")
     async def zork_enable(self, ctx):
         if not self._ensure_guild(ctx):
