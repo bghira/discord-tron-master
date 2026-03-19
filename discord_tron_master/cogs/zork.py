@@ -1281,6 +1281,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
             f"- `{prefix}zork disable` disable adventure mode in this channel\n"
             f"\n**In-game shortcuts** (type directly, no prefix):\n"
+            f"- `{prefix}zork chapters` / `outline` — view chapter outline & progress\n"
             f"- `calendar` / `cal` / `events` — view game time & upcoming events\n"
             f"- `roster` / `characters` / `npcs` — view the NPC roster\n"
         )
@@ -1302,6 +1303,50 @@ class Zork(commands.Cog):
                 return
             text = ZorkEmulator.get_calendar_text(channel.campaign_id)
         await DiscordBot.send_large_message(ctx, text)
+
+    @zork.command(name="chapters", aliases=["outline"])
+    async def zork_chapters(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign(channel.campaign_id)
+            if campaign is None:
+                await ctx.send("Campaign not found.")
+                return
+            chapter_data = ZorkEmulator.get_chapter_list(campaign)
+        chapters = chapter_data.get("chapters", [])
+        if not chapters:
+            await ctx.send("No chapters found for this campaign.")
+            return
+        lines = [f"__**Chapter Outline**__ ({len(chapters)} chapters)\n"]
+        for ch in chapters:
+            if ch.get("is_current"):
+                icon = "\u25B6"
+            elif ch.get("status") in ("completed", "resolved"):
+                icon = "\u2713"
+            else:
+                icon = "\u25CB"
+            title = ch.get("title", "Untitled")
+            summary = ch.get("summary", "")
+            lines.append(f"{icon} **{title}**")
+            if summary and ch.get("is_current"):
+                lines.append(f"   {summary}")
+            if ch.get("is_current") and ch.get("scenes"):
+                for sc in ch["scenes"]:
+                    marker = "\u25B8 " if sc.get("is_current") else "  "
+                    sc_title = sc.get("title", "Untitled")
+                    bold = f"**{sc_title}**" if sc.get("is_current") else sc_title
+                    lines.append(f"   {marker}{bold}")
+        await DiscordBot.send_large_message(ctx, "\n".join(lines))
 
     @zork.command(name="enable")
     async def zork_enable(self, ctx):
