@@ -201,6 +201,16 @@ class MediaGenerationAdapter:
         generator = self._get_generator()
         if generator is None:
             return False
+        channel = None
+        if channel_id is not None:
+            try:
+                from discord_tron_master.bot import DiscordBot
+
+                bot_instance = DiscordBot.get_instance()
+                if bot_instance is not None:
+                    channel = await bot_instance.find_channel(int(channel_id))
+            except Exception:
+                channel = None
         try:
             from discord_tron_master.classes.app_config import AppConfig
 
@@ -218,11 +228,12 @@ class MediaGenerationAdapter:
         job_metadata.setdefault("suppress_image_details", True)
         try:
             await generator.generate_from_user_config(
-                ctx=None,
+                ctx=channel,
                 user_config=user_config,
                 user_id=int(actor_id),
                 prompt=prompt,
                 job_metadata=job_metadata,
+                image_data=reference_images if reference_images else None,
             )
             return True
         except Exception as exc:
