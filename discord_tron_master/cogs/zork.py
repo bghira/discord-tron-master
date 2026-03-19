@@ -340,6 +340,47 @@ class Zork(commands.Cog):
         ]
         return "\n".join(filtered)
 
+    @staticmethod
+    def _format_scene_speaker_name(raw: object) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "narrator"
+        if text.startswith("<@"):
+            return text
+        if text.lower() == "narrator":
+            return "narrator"
+        if text.lower() == text and "-" in text:
+            parts = [part for part in text.split("-") if part]
+            if parts:
+                return " ".join(part.capitalize() for part in parts)
+        return text
+
+    @classmethod
+    def _format_scene_output_for_discord(
+        cls,
+        narration: str,
+        scene_output: object,
+    ) -> str:
+        if not isinstance(scene_output, dict):
+            return str(narration or "").strip()
+        beats = scene_output.get("beats")
+        if not isinstance(beats, list) or not beats:
+            return str(narration or "").strip()
+
+        rendered_beats: list[str] = []
+        for beat in beats:
+            if not isinstance(beat, dict):
+                continue
+            text = str(beat.get("text") or "").strip()
+            if not text:
+                continue
+            speaker = cls._format_scene_speaker_name(beat.get("speaker"))
+            rendered_beats.append(f"-# speaker: {speaker}\n{text}")
+
+        if rendered_beats:
+            return "\n\n".join(rendered_beats)
+        return str(narration or "").strip()
+
     @classmethod
     def _format_preset_campaigns(
         cls, active_campaign_id: int | None, campaigns
@@ -368,6 +409,13 @@ class Zork(commands.Cog):
     ):
         for notice in notices or []:
             await DiscordBot.send_large_message(ctx_like, f"[Notice] {notice}")
+        if campaign_id is not None:
+            actor_id = getattr(getattr(ctx_like, "author", None), "id", None)
+            scene_output = ZorkEmulator.get_latest_scene_output_for_actor(
+                campaign_id,
+                actor_id,
+            )
+            narration = self._format_scene_output_for_discord(narration, scene_output)
         narration = self._filter_narration(narration)
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:

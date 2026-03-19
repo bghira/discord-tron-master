@@ -447,6 +447,31 @@ class EmulatorBridge:
         cls._ensure_init()
         return cls._emu.record_turn_message_ids(*args, **kwargs)
 
+    @classmethod
+    def get_latest_scene_output_for_actor(cls, campaign_id, actor_id):
+        cls._ensure_init()
+        campaign = cls.query_campaign(campaign_id)
+        if campaign is None or actor_id is None:
+            return None
+        from text_game_engine.persistence.sqlalchemy.models import Turn
+
+        with cls._session_factory() as session:
+            turn = (
+                session.query(Turn)
+                .filter(
+                    Turn.campaign_id == str(campaign.id),
+                    Turn.actor_id == str(actor_id),
+                    Turn.kind == "narrator",
+                )
+                .order_by(Turn.id.desc())
+                .first()
+            )
+            if turn is None:
+                return None
+            meta = cls._emu._safe_turn_meta(turn) if hasattr(cls._emu, "_safe_turn_meta") else {}
+        scene_output = meta.get("scene_output") if isinstance(meta, dict) else None
+        return scene_output if isinstance(scene_output, dict) else None
+
     # -- Player Management -----------------------------------------------------
 
     @classmethod
