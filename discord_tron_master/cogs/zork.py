@@ -436,6 +436,102 @@ class Zork(commands.Cog):
                 logger.debug("Failed adding Zork turn reactions", exc_info=True)
         return msg
 
+    @staticmethod
+    def _bare_shortcut_kind(raw: object) -> str | None:
+        text = " ".join(str(raw or "").strip().lower().split())
+        if text in {"calendar", "cal", "events"}:
+            return "calendar"
+        if text in {"chapters", "outline"}:
+            return "chapters"
+        if text in {"roster", "characters", "npcs"}:
+            return "roster"
+        if text in {"inventory", "inv", "i"}:
+            return "inventory"
+        return None
+
+    @staticmethod
+    def _render_chapter_outline_text(chapter_data: dict[str, object]) -> str:
+        chapters = chapter_data.get("chapters", []) if isinstance(chapter_data, dict) else []
+        if not chapters:
+            return "No chapters found for this campaign."
+        lines = [f"__**Chapter Outline**__ ({len(chapters)} chapters)\n"]
+        for ch in chapters:
+            if ch.get("is_current"):
+                icon = "\u25B6"
+            elif ch.get("status") in ("completed", "resolved"):
+                icon = "\u2713"
+            else:
+                icon = "\u25CB"
+            title = ch.get("title", "Untitled")
+            summary = ch.get("summary", "")
+            lines.append(f"{icon} **{title}**")
+            if summary and ch.get("is_current"):
+                lines.append(f"   {summary}")
+            if ch.get("is_current") and ch.get("scenes"):
+                for sc in ch["scenes"]:
+                    marker = "\u25B8 " if sc.get("is_current") else "  "
+                    sc_title = sc.get("title", "Untitled")
+                    bold = f"**{sc_title}**" if sc.get("is_current") else sc_title
+                    lines.append(f"   {marker}{bold}")
+        return "\n".join(lines)
+
+    def _resolve_active_campaign(self, ctx_like, campaign_id: str | None = None):
+        if campaign_id is not None:
+            return ZorkEmulator.query_campaign(campaign_id)
+        if getattr(ctx_like, "guild", None) is None:
+            return None
+        channel = ZorkEmulator.get_or_create_channel(
+            ctx_like.guild.id,
+            ctx_like.channel.id,
+        )
+        if channel.campaign_id is None:
+            return None
+        return ZorkEmulator.query_campaign_for_channel(channel)
+
+    async def _send_bare_shortcut_reply(
+        self,
+        ctx_like,
+        *,
+        shortcut_kind: str,
+        campaign_id: str | None = None,
+    ) -> bool:
+        app = AppConfig.get_flask()
+        if app is None:
+            return False
+        with app.app_context():
+            campaign = self._resolve_active_campaign(ctx_like, campaign_id=campaign_id)
+            if campaign is None:
+                await DiscordBot.send_large_message(
+                    ctx_like,
+                    "No active campaign in this channel.",
+                )
+                return True
+            if shortcut_kind == "calendar":
+                text = ZorkEmulator.get_calendar_text(campaign.id)
+            elif shortcut_kind == "chapters":
+                text = self._render_chapter_outline_text(
+                    ZorkEmulator.get_chapter_list(campaign)
+                )
+            elif shortcut_kind == "roster":
+                text = ZorkEmulator.format_roster(
+                    ZorkEmulator.get_campaign_characters(campaign)
+                )
+            elif shortcut_kind == "inventory":
+                actor_id = getattr(getattr(ctx_like, "author", None), "id", None)
+                if actor_id is None:
+                    return False
+                player = ZorkEmulator.get_or_create_player(
+                    campaign.id,
+                    actor_id,
+                    campaign=campaign,
+                )
+                player_state = ZorkEmulator.get_player_state(player)
+                text = ZorkEmulator._format_inventory(player_state) or "Inventory: empty"
+            else:
+                return False
+        await DiscordBot.send_large_message(ctx_like, text)
+        return True
+
     async def _prepare_thread_source_material(
         self,
         ctx,
@@ -1081,6 +1177,17 @@ class Zork(commands.Cog):
                 ZorkEmulator.end_turn(campaign_id, message.author.id)
             return
 
+        shortcut_kind = self._bare_shortcut_kind(content)
+        if shortcut_kind is not None:
+            handled = await self._send_bare_shortcut_reply(
+                message,
+                shortcut_kind=shortcut_kind,
+                campaign_id=campaign_id,
+            )
+            if handled:
+                ZorkEmulator.end_turn(campaign_id, message.author.id)
+                return
+
         reaction_added = await ZorkEmulator._add_processing_reaction(message)
         try:
             narration = await ZorkEmulator.play_action(
@@ -1277,6 +1384,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork hint` view your currently visible imminent plot hints\n"
             f"- `{prefix}zork puzzles [none|light|moderate|full]` view or set puzzle encounter mode\n"
             f"- `{prefix}zork level` level up if you have enough XP\n"
+            f"- `{prefix}zork inventory` view your current inventory\n"
             f"- `{prefix}zork map` draw an ASCII map for your location\n"
             f"- `{prefix}zork reset` reset this channel's Zork state (Image Admin only)\n"
             f"- `{prefix}zork disable` disable adventure mode in this channel\n"
@@ -1284,6 +1392,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork chapters` / `outline` — view chapter outline & progress\n"
             f"- `calendar` / `cal` / `events` — view game time & upcoming events\n"
             f"- `roster` / `characters` / `npcs` — view the NPC roster\n"
+            f"- `inventory` / `inv` / `i` — view your inventory\n"
         )
         await DiscordBot.send_large_message(ctx, message)
 
@@ -1323,30 +1432,22 @@ class Zork(commands.Cog):
                 await ctx.send("Campaign not found.")
                 return
             chapter_data = ZorkEmulator.get_chapter_list(campaign)
-        chapters = chapter_data.get("chapters", [])
-        if not chapters:
-            await ctx.send("No chapters found for this campaign.")
+        await DiscordBot.send_large_message(
+            ctx,
+            self._render_chapter_outline_text(chapter_data),
+        )
+
+    @zork.command(name="inventory", aliases=["inv", "i"])
+    async def zork_inventory(self, ctx):
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
             return
-        lines = [f"__**Chapter Outline**__ ({len(chapters)} chapters)\n"]
-        for ch in chapters:
-            if ch.get("is_current"):
-                icon = "\u25B6"
-            elif ch.get("status") in ("completed", "resolved"):
-                icon = "\u2713"
-            else:
-                icon = "\u25CB"
-            title = ch.get("title", "Untitled")
-            summary = ch.get("summary", "")
-            lines.append(f"{icon} **{title}**")
-            if summary and ch.get("is_current"):
-                lines.append(f"   {summary}")
-            if ch.get("is_current") and ch.get("scenes"):
-                for sc in ch["scenes"]:
-                    marker = "\u25B8 " if sc.get("is_current") else "  "
-                    sc_title = sc.get("title", "Untitled")
-                    bold = f"**{sc_title}**" if sc.get("is_current") else sc_title
-                    lines.append(f"   {marker}{bold}")
-        await DiscordBot.send_large_message(ctx, "\n".join(lines))
+        handled = await self._send_bare_shortcut_reply(
+            ctx,
+            shortcut_kind="inventory",
+        )
+        if not handled:
+            await ctx.send("No active campaign in this channel.")
 
     @zork.command(name="enable")
     async def zork_enable(self, ctx):
