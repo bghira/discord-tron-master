@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,45 @@ class NotificationAdapter:
 class MediaGenerationAdapter:
     """Wraps DTM's Generate cog / QueueManager behind ``MediaGenerationPort``."""
 
+    async def _build_generation_context(
+        self,
+        *,
+        actor_id: str,
+        channel_id: str | None,
+    ):
+        if channel_id is None:
+            return None
+        try:
+            from discord_tron_master.bot import DiscordBot
+
+            bot_instance = DiscordBot.get_instance()
+            if bot_instance is None:
+                return None
+            channel = await bot_instance.find_channel(int(channel_id))
+            if channel is None:
+                return None
+            guild = getattr(channel, "guild", None)
+            member = None
+            try:
+                if guild is not None:
+                    member = guild.get_member(int(actor_id))
+            except Exception:
+                member = None
+            author = SimpleNamespace(
+                id=int(actor_id),
+                name=getattr(member, "name", f"user-{actor_id}"),
+                discriminator=str(getattr(member, "discriminator", "0")),
+            )
+            return SimpleNamespace(
+                id=getattr(channel, "id", int(actor_id)),
+                author=author,
+                channel=channel,
+                guild=guild,
+                message=None,
+            )
+        except Exception:
+            return None
+
     def gpu_worker_available(self) -> bool:
         try:
             from discord_tron_master.bot import DiscordBot
@@ -200,16 +240,12 @@ class MediaGenerationAdapter:
         generator = self._get_generator()
         if generator is None:
             return False
-        channel = None
-        if channel_id is not None:
-            try:
-                from discord_tron_master.bot import DiscordBot
-
-                bot_instance = DiscordBot.get_instance()
-                if bot_instance is not None:
-                    channel = await bot_instance.find_channel(int(channel_id))
-            except Exception:
-                channel = None
+        ctx = await self._build_generation_context(
+            actor_id=actor_id,
+            channel_id=channel_id,
+        )
+        if ctx is None:
+            return False
         try:
             from discord_tron_master.classes.app_config import AppConfig
 
@@ -227,7 +263,7 @@ class MediaGenerationAdapter:
         job_metadata.setdefault("suppress_image_details", True)
         try:
             await generator.generate_from_user_config(
-                ctx=channel,
+                ctx=ctx,
                 user_config=user_config,
                 user_id=int(actor_id),
                 prompt=prompt,
@@ -251,16 +287,12 @@ class MediaGenerationAdapter:
         generator = self._get_generator()
         if generator is None:
             return False
-        channel = None
-        if channel_id is not None:
-            try:
-                from discord_tron_master.bot import DiscordBot
-
-                bot_instance = DiscordBot.get_instance()
-                if bot_instance is not None:
-                    channel = await bot_instance.find_channel(int(channel_id))
-            except Exception:
-                channel = None
+        ctx = await self._build_generation_context(
+            actor_id=actor_id,
+            channel_id=channel_id,
+        )
+        if ctx is None:
+            return False
         try:
             from discord_tron_master.classes.app_config import AppConfig
 
@@ -279,7 +311,7 @@ class MediaGenerationAdapter:
         job_metadata.setdefault("zork_store_avatar", True)
         try:
             await generator.generate_from_user_config(
-                ctx=channel,
+                ctx=ctx,
                 user_config=user_config,
                 user_id=int(actor_id),
                 prompt=prompt,
