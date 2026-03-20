@@ -170,13 +170,12 @@ class MediaGenerationAdapter:
 
     def gpu_worker_available(self) -> bool:
         try:
-            from discord_tron_master.classes.worker_manager import WorkerManager
+            from discord_tron_master.bot import DiscordBot
 
-            workers = WorkerManager.get_workers()
-            return any(
-                getattr(w, "gpu", False) or getattr(w, "has_gpu", False)
-                for w in (workers or [])
-            )
+            bot_instance = DiscordBot.get_instance()
+            if bot_instance is None or bot_instance.worker_manager is None:
+                return False
+            return bot_instance.worker_manager.find_first_worker("gpu") is not None
         except Exception:
             return False
 
