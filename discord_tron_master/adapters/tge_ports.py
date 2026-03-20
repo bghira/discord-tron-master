@@ -251,6 +251,16 @@ class MediaGenerationAdapter:
         generator = self._get_generator()
         if generator is None:
             return False
+        channel = None
+        if channel_id is not None:
+            try:
+                from discord_tron_master.bot import DiscordBot
+
+                bot_instance = DiscordBot.get_instance()
+                if bot_instance is not None:
+                    channel = await bot_instance.find_channel(int(channel_id))
+            except Exception:
+                channel = None
         try:
             from discord_tron_master.classes.app_config import AppConfig
 
@@ -269,7 +279,7 @@ class MediaGenerationAdapter:
         job_metadata.setdefault("zork_store_avatar", True)
         try:
             await generator.generate_from_user_config(
-                ctx=None,
+                ctx=channel,
                 user_config=user_config,
                 user_id=int(actor_id),
                 prompt=prompt,
