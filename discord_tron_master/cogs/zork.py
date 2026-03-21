@@ -3096,14 +3096,32 @@ class Zork(commands.Cog):
 
     @zork.command(name="map")
     async def zork_map(self, ctx):
-        if not self._ensure_guild(ctx):
-            await ctx.send("Zork is only available in servers.")
-            return
         app = AppConfig.get_flask()
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
             return
-        ascii_map = await ZorkEmulator.generate_map(ctx, command_prefix=self._prefix())
+        if ctx.guild is None:
+            with app.app_context():
+                binding = self._get_private_dm_binding(ctx.author.id)
+                if binding is None:
+                    await ctx.send(
+                        "No private DM campaign is bound. Enable it from a campaign channel first."
+                    )
+                    return
+                campaign = ZorkEmulator.query_campaign(binding.get("campaign_id"))
+                if campaign is None:
+                    self.config.clear_zork_private_dm(ctx.author.id)
+                    await ctx.send(
+                        "Your private DM binding is stale. Re-enable it from the campaign channel."
+                    )
+                    return
+            ascii_map = await ZorkEmulator.generate_map(
+                campaign.id,
+                actor_id=ctx.author.id,
+                command_prefix=self._prefix(),
+            )
+        else:
+            ascii_map = await ZorkEmulator.generate_map(ctx, command_prefix=self._prefix())
         if ascii_map.startswith("```") and ascii_map.endswith("```"):
             await DiscordBot.send_large_message(ctx, ascii_map)
             return
