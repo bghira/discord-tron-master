@@ -1839,14 +1839,17 @@ class Zork(commands.Cog):
             character_name = character_name[:64]
             old_name = player_state.get("character_name")
             player_state["character_name"] = character_name
-            player.state_json = ZorkEmulator._dump_json(player_state)
+            ZorkEmulator._persist_player_state_for_campaign_actor(
+                campaign.id,
+                ctx.author.id,
+                player_state,
+            )
             if old_name and isinstance(old_name, str) and old_name != character_name:
                 campaign.summary = (campaign.summary or "").replace(
                     old_name, character_name
                 )
                 campaign.updated_at = ZorkEmulator.utcnow()
-            player.updated_at = ZorkEmulator.utcnow()
-            ZorkEmulator.commit_models(campaign, player)
+                ZorkEmulator.commit_model(campaign)
             await ctx.send(f"Identity set to `{character_name}`.")
 
     @zork.command(name="persona")
