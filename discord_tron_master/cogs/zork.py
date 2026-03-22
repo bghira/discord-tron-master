@@ -9,6 +9,7 @@ from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
 from discord_tron_master.classes.zork_memory import ZorkMemory
+from text_game_engine.core.source_material_memory import SourceMaterialMemory
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -632,9 +633,13 @@ class Zork(commands.Cog):
 
         if operation == "clear":
             with app.app_context():
-                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
-                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
-                removed_rows = ZorkMemory.clear_source_material_documents(_mcid)
+                docs = SourceMaterialMemory.list_source_material_documents(
+                    campaign.id,
+                    limit=200,
+                )
+                removed_rows = SourceMaterialMemory.clear_source_material_documents(
+                    campaign.id
+                )
             if not docs:
                 await ctx.send("No source-material documents are stored for this campaign.")
                 return
@@ -653,8 +658,10 @@ class Zork(commands.Cog):
                 )
                 return
             with app.app_context():
-                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
-                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
+                docs = SourceMaterialMemory.list_source_material_documents(
+                    campaign.id,
+                    limit=200,
+                )
                 requested_norm = ZorkMemory._normalize_source_document_key(requested)
                 match = None
                 for row in docs:
@@ -673,8 +680,8 @@ class Zork(commands.Cog):
                     return
                 row_key = str(match.get("document_key") or "").strip()
                 row_label = str(match.get("document_label") or "").strip() or row_key
-                removed_rows = ZorkMemory.delete_source_material_document(
-                    _mcid,
+                removed_rows = SourceMaterialMemory.delete_source_material_document(
+                    campaign.id,
                     row_key,
                 )
             if removed_rows <= 0:
@@ -2429,8 +2436,10 @@ class Zork(commands.Cog):
             if campaign is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
-            docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
+            docs = SourceMaterialMemory.list_source_material_documents(
+                campaign.id,
+                limit=200,
+            )
             export_rows: list[tuple[str, str, str]] = []
             used_names: set[str] = set()
             for row in docs:
@@ -2438,8 +2447,8 @@ class Zork(commands.Cog):
                 document_label = str(row.get("document_label") or "").strip()
                 if not document_key:
                     continue
-                units = ZorkMemory.get_source_material_document_units(
-                    _mcid,
+                units = SourceMaterialMemory.get_source_material_document_units(
+                    campaign.id,
                     document_key,
                 )
                 export_text = self._source_material_export_text(document_key, units)
@@ -2543,8 +2552,10 @@ class Zork(commands.Cog):
                     status_msg,
                     "Campaign export: packaging stored source-material documents...",
                 )
-                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
-                docs = ZorkMemory.list_source_material_documents(_mcid, limit=200)
+                docs = SourceMaterialMemory.list_source_material_documents(
+                    campaign.id,
+                    limit=200,
+                )
                 source_export_files: dict[str, str] = {}
                 used_names = set(export_files.keys())
                 for row in docs:
@@ -2552,8 +2563,8 @@ class Zork(commands.Cog):
                     document_label = str(row.get("document_label") or "").strip()
                     if not document_key:
                         continue
-                    units = ZorkMemory.get_source_material_document_units(
-                        _mcid,
+                    units = SourceMaterialMemory.get_source_material_document_units(
+                        campaign.id,
                         document_key,
                     )
                     export_text = self._source_material_export_text(document_key, units)
