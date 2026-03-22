@@ -363,7 +363,24 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     @classmethod
     def create_campaign(cls, *args, **kwargs):
         cls._ensure_init()
-        return cls._emu.create_campaign(*args, **kwargs)
+        if args:
+            namespace = args[0]
+            name = args[1] if len(args) > 1 else kwargs.get("name")
+            created_by_actor_id = (
+                args[2] if len(args) > 2 else kwargs.get("created_by_actor_id")
+            )
+            campaign_id = args[3] if len(args) > 3 else kwargs.get("campaign_id")
+        else:
+            namespace = kwargs.get("namespace")
+            name = kwargs.get("name")
+            created_by_actor_id = kwargs.get("created_by_actor_id")
+            campaign_id = kwargs.get("campaign_id")
+        return cls._emu.get_or_create_campaign(
+            namespace,
+            name,
+            str(created_by_actor_id) if created_by_actor_id is not None else "system",
+            campaign_id=campaign_id,
+        )
 
     @classmethod
     def get_or_create_campaign(cls, *args, **kwargs):
