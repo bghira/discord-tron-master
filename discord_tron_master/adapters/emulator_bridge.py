@@ -354,6 +354,29 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return cls._emu.enable_channel(guild_id, channel_id, str(actor_id) if actor_id else "0")
 
     @classmethod
+    def bind_channel_campaign(cls, channel_session, campaign_id, *, enabled=None):
+        cls._ensure_init()
+        if channel_session is None:
+            return None
+        from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
+
+        channel_id = getattr(channel_session, "id", channel_session)
+        with cls._session_factory() as session:
+            row = session.get(GameSession, channel_id)
+            if row is None:
+                return None
+            meta = cls._emu._load_session_metadata(row)
+            resolved_campaign_id = str(campaign_id) if campaign_id is not None else None
+            meta["active_campaign_id"] = resolved_campaign_id
+            row.campaign_id = resolved_campaign_id
+            if enabled is not None:
+                row.enabled = bool(enabled)
+            row.updated_at = cls.utcnow()
+            cls._emu._store_session_metadata(row, meta)
+            session.commit()
+            return row
+
+    @classmethod
     def is_channel_enabled(cls, *args, **kwargs):
         cls._ensure_init()
         return cls._emu.is_channel_enabled(*args, **kwargs)

@@ -2188,10 +2188,11 @@ class Zork(commands.Cog):
                     campaign = ZorkEmulator.create_campaign(
                         ctx.guild.id, campaign_name, ctx.author.id
                     )
-                    channel.campaign_id = campaign.id
-                    channel.enabled = True
-                    channel.updated_at = ZorkEmulator.utcnow()
-                    ZorkEmulator.commit_model(channel)
+                    channel = ZorkEmulator.bind_channel_campaign(
+                        channel,
+                        campaign.id,
+                        enabled=True,
+                    )
                 else:
                     channel, campaign = ZorkEmulator.enable_channel(
                         ctx.guild.id, ctx.channel.id, ctx.author.id
@@ -2279,10 +2280,11 @@ class Zork(commands.Cog):
                 campaign_name,
                 ctx.author.id,
             )
-            channel.campaign_id = campaign.id
-            channel.enabled = True
-            channel.updated_at = ZorkEmulator.utcnow()
-            ZorkEmulator.commit_model(channel)
+            channel = ZorkEmulator.bind_channel_campaign(
+                channel,
+                campaign.id,
+                enabled=True,
+            )
             att_summary = None
             if (not create_empty) and any(
                 str(getattr(att, "filename", "")).lower().endswith(".txt")
@@ -2381,10 +2383,11 @@ class Zork(commands.Cog):
                     f"This thread/channel is already linked to `{source_campaign.name}`."
                 )
                 return
-            target_channel.campaign_id = source_campaign.id
-            target_channel.enabled = True
-            target_channel.updated_at = ZorkEmulator.utcnow()
-            ZorkEmulator.commit_model(target_channel)
+            target_channel = ZorkEmulator.bind_channel_campaign(
+                target_channel,
+                source_campaign.id,
+                enabled=True,
+            )
             source_guild_text = (
                 f" from guild `{source_campaign.namespace}`"
                 if str(source_campaign.namespace) != str(ctx.guild.id)
@@ -3149,9 +3152,7 @@ class Zork(commands.Cog):
                 return
             campaign = ZorkEmulator.query_campaign_for_channel(channel)
             if campaign is None:
-                channel.campaign_id = None
-                channel.updated_at = ZorkEmulator.utcnow()
-                ZorkEmulator.commit_model(channel)
+                ZorkEmulator.bind_channel_campaign(channel, None)
                 await ctx.send("Channel state cleared.")
                 return
 
@@ -3170,10 +3171,12 @@ class Zork(commands.Cog):
                 new_campaign.state_json = ZorkEmulator._preserve_legacy_state_keys(new_campaign)
                 new_campaign.last_narration = None
                 new_campaign.updated_at = ZorkEmulator.utcnow()
-                channel.campaign_id = new_campaign.id
-                channel.enabled = True
-                channel.updated_at = ZorkEmulator.utcnow()
-                ZorkEmulator.commit_models(channel, new_campaign)
+                channel = ZorkEmulator.bind_channel_campaign(
+                    channel,
+                    new_campaign.id,
+                    enabled=True,
+                )
+                ZorkEmulator.commit_model(new_campaign)
                 try:
                     _mcid = ZorkEmulator.legacy_memory_campaign_id(new_campaign)
                     ZorkMemory.delete_campaign_embeddings(_mcid)
