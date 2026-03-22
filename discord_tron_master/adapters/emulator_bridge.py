@@ -132,7 +132,36 @@ def _zork_log(section: str, body: str = "") -> None:
         pass
 
 
-class EmulatorBridge:
+class _EmulatorBridgeMeta(type):
+    """Delegate missing class attributes and helpers to TGE's emulator."""
+
+    def __getattr__(cls, name):
+        try:
+            from text_game_engine import ZorkEmulator as TGEZorkEmulator
+        except Exception:
+            TGEZorkEmulator = None
+
+        if TGEZorkEmulator is not None and hasattr(TGEZorkEmulator, name):
+            class_attr = getattr(TGEZorkEmulator, name)
+            if not callable(class_attr):
+                return class_attr
+
+            def _class_proxy(*args, **kwargs):
+                cls._ensure_init()
+                target = getattr(cls._emu, name)
+                return target(*args, **kwargs)
+
+            _class_proxy.__name__ = name
+            return _class_proxy
+
+        cls._ensure_init()
+        target = getattr(cls._emu, name, None)
+        if target is not None:
+            return target
+        raise AttributeError(f"EmulatorBridge has no attribute {name!r}")
+
+
+class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     """Singleton classmethod facade over TGE's instance-based ZorkEmulator.
 
     Every public/private method the cog calls is forwarded to the TGE instance.
@@ -1334,12 +1363,3 @@ class EmulatorBridge:
     def __class_getitem__(cls, name):
         """Not used, but prevents TypeError on subscript access."""
         raise TypeError(f"EmulatorBridge is not subscriptable")
-
-    @classmethod
-    def __getattr__(cls, name):
-        """Catch-all for any method not explicitly defined above."""
-        cls._ensure_init()
-        attr = getattr(cls._emu, name, None)
-        if attr is not None:
-            return attr
-        raise AttributeError(f"EmulatorBridge has no attribute {name!r}")
