@@ -397,8 +397,19 @@ class ZorkEmulator:
     XP_PER_LEVEL = 50
     MAX_INVENTORY_CHANGES_PER_TURN = 10
     MAX_CHARACTERS_CHARS = 8000
-    IMMUTABLE_CHARACTER_FIELDS: set = set()  # slug is the dict key, not a field
+    IMMUTABLE_CHARACTER_FIELDS: set = {
+        "name",
+        "age",
+        "personality",
+        "background",
+        "appearance",
+        "speech_style",
+        "created",
+    }  # slug is the dict key, not a field
     MAX_CHARACTERS_IN_PROMPT = 20
+    MAX_CHARACTER_CARDS_CHARS = 8000
+    MAX_CHARACTER_CARDS_IN_PROMPT = 8
+    MAX_CHARACTER_CARD_COMPACT_VALUE_CHARS = 160
     AUTOBIOGRAPHY_FIELD = "autobiography"
     AUTOBIOGRAPHY_RAW_FIELD = "autobiography_raw"
     AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD = "autobiography_last_compressed_turn"
@@ -857,15 +868,18 @@ class ZorkEmulator:
         # ── CHARACTER UPDATES ──
         "CHARACTER UPDATES:\n"
         "Scope: NPCs only. NEVER create, update, or remove CAMPAIGN_PLAYERS entries.\n"
-        "On create: Provide all fields: name, personality, background, speech_style, location, current_status, "
+        "On create: Provide all fields: name, age, personality, background, speech_style, location, current_status, "
         "allegiance, relationship. "
+        "age: exact years when known; otherwise a short stable descriptor like 'young adult', 'middle-aged', or 'elderly'.\n"
         "appearance: 70-150 words, vivid physical description suitable for image generation. No image_url. "
         "speech_style: 2-3 sentences — sentence length, vocabulary, verbal tics, what they avoid saying.\n"
         "On update: Only mutable fields accepted: location, current_status, allegiance, relationship, relationships, "
         "literary_style, deceased_reason.\n"
-        "Foundational: name, personality, background, appearance, speech_style — set at creation, not overwritten by state updates. "
+        "Foundational: name, age, personality, background, appearance, speech_style — set at creation, not overwritten by state updates. "
         "allegiance: Update this as loyalties actually shift. Don't leave it frozen at the creation-time value. "
         "Example progression: \"Herself\" → \"Herself, and increasingly Chace, though she hasn't filed that yet.\"\n"
+        "created: harness-managed introduction metadata. Do NOT provide or edit it in character_updates. "
+        "The harness writes {day, hour, loc, source}, where source is scene, a player slug, an NPC slug, or setup.\n"
         "Character card writing rule: describe what the character DOES, not what they don't. "
         "Negation traits ('won't perform,' 'doesn't chase,' 'refuses to show') become prohibitions the narrator enforces as absolute gates. "
         "Instead write positive behaviors the narrator can generate toward. "
@@ -879,9 +893,10 @@ class ZorkEmulator:
         "Name generation: ALWAYS call name_generate before creating a new original NPC. Do not invent names from training data. "
         "Avoid generic defaults: Morgan, Chen, Mendoza, Rollins, Nakamura, Kai, River unless canon requires them.\n"
         "Set deceased_reason to a string when a character dies.\n"
-        "WORLD_CHARACTERS in the prompt shows the current NPC roster — use it for continuity.\n"
+        "WORLD_CHARACTERS in the prompt is the lightweight NPC roster — use it for continuity, locations, and roster identity.\n"
+        "CHARACTER_CARDS, when present, are the deep writing cards for the current scene's NPC speakers/listeners; use them for voice, personality, appearance, and relationship texture.\n"
         "Examples:\n"
-        "  Create: {\"character_updates\": {\"wren\": {\"name\": \"Wren\", \"personality\": \"Guarded, observant, dry.\", "
+        "  Create: {\"character_updates\": {\"wren\": {\"name\": \"Wren\", \"age\": 41, \"personality\": \"Guarded, observant, dry.\", "
         "\"background\": \"Former hotel manager pulled into the expedition.\", "
         "\"appearance\": \"Lean woman in a weather-stained blazer, dark braid, sharp eyes, practical shoes, realistic style.\", "
         "\"speech_style\": \"Short sentences. Dry humor. Avoids sentiment.\", "
@@ -7427,7 +7442,7 @@ class ZorkEmulator:
             f"{source_tool_instructions}"
             "Return ONLY valid JSON with these keys:\n"
             '- "characters": object keyed by slug-id (lowercase-hyphenated). Each character has: '
-            "name, personality, background, appearance, location, current_status, allegiance, relationship.\n"
+            "name, age, personality, background, appearance, location, current_status, allegiance, relationship.\n"
             '- "story_outline": object with "chapters" array. Each chapter has: slug, title, summary, '
             "scenes (array of: slug, title, summary, setting, key_characters).\n"
             '- "summary": string (2-4 sentence world summary)\n'
@@ -7515,10 +7530,31 @@ class ZorkEmulator:
         # Populate characters_json
         characters = world.get("characters", {})
         if isinstance(characters, dict) and characters:
-            for _char in characters.values():
+            prepared_characters: Dict[str, dict] = {}
+            setup_creation_context = {
+                "campaign_state": {
+                    "game_time": {
+                        "day": 1,
+                        "hour": 8,
+                        "minute": 0,
+                    }
+                },
+                "source_hint": "setup",
+            }
+            for _slug, _char in characters.items():
                 if isinstance(_char, dict):
                     _char["_enriched"] = True
-            campaign.characters_json = cls._dump_json(characters)
+                    prepared_characters[str(_slug)] = cls._prepare_new_character_entry(
+                        str(_slug),
+                        _char,
+                        existing=characters,
+                        campaign_id=campaign.id,
+                        creation_context={
+                            **setup_creation_context,
+                            "fallback_location": _char.get("location"),
+                        },
+                    )
+            campaign.characters_json = cls._dump_json(prepared_characters)
 
         # Populate campaign state
         story_outline = world.get("story_outline", {})
@@ -13103,12 +13139,231 @@ class ZorkEmulator:
         return out
 
     @classmethod
+    def _sanitize_character_age(cls, value: object) -> object:
+        if isinstance(value, bool):
+            return "unknown"
+        if isinstance(value, int):
+            return value if value >= 0 else "unknown"
+        if isinstance(value, float):
+            if value >= 0 and float(value).is_integer():
+                return int(value)
+            value = str(value)
+        text = " ".join(str(value or "").strip().split())
+        if not text:
+            return "unknown"
+        if re.fullmatch(r"\d{1,4}", text):
+            try:
+                return int(text)
+            except (TypeError, ValueError):
+                return "unknown"
+        return text[:40]
+
+    @classmethod
+    def _normalize_character_creation_source_token(
+        cls,
+        raw_value: object,
+        *,
+        existing: Dict[str, dict],
+        player_registry: Optional[Dict[str, Dict[object, Dict[str, object]]]] = None,
+        actor_player_slug: str = "",
+        new_slug: str = "",
+    ) -> Optional[str]:
+        text = " ".join(str(raw_value or "").strip().split())
+        if not text:
+            return None
+        lowered = text.lower()
+        if lowered in {"scene", "setup"}:
+            return lowered
+        if lowered in {"player", "acting-player", "acting player", "acting_player", "viewer"}:
+            return actor_player_slug or None
+        mention_match = cls._MENTION_RE.search(text)
+        if mention_match and player_registry:
+            try:
+                mentioned_user_id = int(mention_match.group(1))
+            except (TypeError, ValueError):
+                mentioned_user_id = None
+            if mentioned_user_id is not None:
+                entry = (player_registry.get("by_user_id") or {}).get(mentioned_user_id)
+                if isinstance(entry, dict):
+                    return str(entry.get("slug") or "").strip() or None
+        canonical = cls._player_slug_key(text)
+        if not canonical:
+            return None
+        if canonical == cls._player_slug_key(new_slug):
+            return None
+        if canonical in existing:
+            return canonical
+        if player_registry:
+            by_slug = player_registry.get("by_slug") or {}
+            if canonical in by_slug:
+                return canonical
+        return None
+
+    @classmethod
+    def _infer_character_creation_source(
+        cls,
+        *,
+        new_slug: str,
+        existing: Dict[str, dict],
+        campaign_id: Optional[int],
+        scene_output_raw: object,
+        actor_player_slug: str,
+        player_state: Optional[Dict[str, object]],
+        new_location: str,
+        source_hint: object = None,
+    ) -> str:
+        player_registry = (
+            cls._campaign_player_registry(campaign_id)
+            if campaign_id is not None
+            else {"by_user_id": {}, "by_slug": {}}
+        )
+        scene_output = scene_output_raw if isinstance(scene_output_raw, dict) else {}
+        beats = scene_output.get("beats")
+        if isinstance(beats, list):
+            for beat in beats:
+                if not isinstance(beat, dict):
+                    continue
+                speaker = cls._normalize_character_creation_source_token(
+                    beat.get("speaker"),
+                    existing=existing,
+                    player_registry=player_registry,
+                    actor_player_slug=actor_player_slug,
+                    new_slug=new_slug,
+                )
+                participants: List[str] = []
+                for field_name in ("actors", "listeners", "aware_npc_slugs"):
+                    raw_items = beat.get(field_name)
+                    if not isinstance(raw_items, list):
+                        continue
+                    for item in raw_items:
+                        token = cls._normalize_character_creation_source_token(
+                            item,
+                            existing=existing,
+                            player_registry=player_registry,
+                            actor_player_slug=actor_player_slug,
+                            new_slug=new_slug,
+                        )
+                        if token and token not in participants:
+                            participants.append(token)
+                new_is_present = speaker == new_slug or new_slug in participants
+                if not new_is_present:
+                    continue
+                for candidate in [speaker] + participants:
+                    if candidate and candidate != new_slug:
+                        return candidate
+                return "scene"
+        normalized_hint = cls._normalize_character_creation_source_token(
+            source_hint,
+            existing=existing,
+            player_registry=player_registry,
+            actor_player_slug=actor_player_slug,
+            new_slug=new_slug,
+        )
+        if normalized_hint:
+            return normalized_hint
+        player_location = str((player_state or {}).get("location") or "").strip().lower()
+        if new_location and player_location and new_location.lower() == player_location:
+            return "scene"
+        if actor_player_slug:
+            return actor_player_slug
+        return "scene"
+
+    @classmethod
+    def _build_character_created_metadata(
+        cls,
+        campaign_state: Optional[Dict[str, object]],
+        *,
+        location: object,
+        source: object,
+    ) -> Dict[str, object]:
+        snapshot = cls._extract_game_time_snapshot(campaign_state or {})
+        created = {
+            "day": cls._coerce_non_negative_int(snapshot.get("day", 1), default=1) or 1,
+            "hour": min(
+                23,
+                max(0, cls._coerce_non_negative_int(snapshot.get("hour", 0), default=0)),
+            ),
+            "source": str(source or "scene").strip() or "scene",
+        }
+        loc_text = " ".join(str(location or "").strip().split())
+        if loc_text:
+            created["loc"] = loc_text[:160]
+        return created
+
+    @classmethod
+    def _character_birthday_hint_for_prompt(
+        cls,
+        campaign_state: Optional[Dict[str, object]],
+        character_row: object,
+    ) -> Optional[str]:
+        if not isinstance(character_row, dict):
+            return None
+        created = character_row.get("created")
+        if not isinstance(created, dict):
+            return None
+        created_day = cls._coerce_non_negative_int(created.get("day"), default=0)
+        if created_day <= 0:
+            return None
+        current_snapshot = cls._extract_game_time_snapshot(campaign_state or {})
+        current_day = cls._coerce_non_negative_int(current_snapshot.get("day"), default=0)
+        if current_day < created_day:
+            return None
+        days_in_game = current_day - created_day
+        if days_in_game % 365 != 0:
+            return None
+        return "It is this character's birthday today."
+
+    @classmethod
+    def _prepare_new_character_entry(
+        cls,
+        slug: str,
+        fields: Dict[str, object],
+        *,
+        existing: Dict[str, dict],
+        campaign_id: Optional[int] = None,
+        creation_context: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        row = dict(fields or {})
+        row.pop("created", None)
+        row["age"] = cls._sanitize_character_age(row.get("age"))
+        context = creation_context if isinstance(creation_context, dict) else {}
+        fallback_location = " ".join(
+            str(context.get("fallback_location") or "").strip().split()
+        )[:160]
+        location = " ".join(str(row.get("location") or "").strip().split())[:160]
+        if not location and fallback_location:
+            location = fallback_location
+        if location:
+            row["location"] = location
+        source = cls._infer_character_creation_source(
+            new_slug=slug,
+            existing=existing,
+            campaign_id=campaign_id,
+            scene_output_raw=context.get("scene_output_raw"),
+            actor_player_slug=str(context.get("actor_player_slug") or "").strip(),
+            player_state=context.get("player_state")
+            if isinstance(context.get("player_state"), dict)
+            else None,
+            new_location=location,
+            source_hint=context.get("source_hint"),
+        )
+        row["created"] = cls._build_character_created_metadata(
+            context.get("campaign_state")
+            if isinstance(context.get("campaign_state"), dict)
+            else {},
+            location=location,
+            source=source,
+        )
+        return row
+
+    @classmethod
     def _apply_character_updates(
         cls,
         existing: Dict[str, dict],
         updates: Dict[str, object],
         on_rails: bool = False,
         campaign_id: Optional[int] = None,
+        creation_context: Optional[Dict[str, object]] = None,
     ) -> Dict[str, dict]:
         """Merge character updates into existing characters dict.
 
@@ -13236,8 +13491,14 @@ class ZorkEmulator:
                 if on_rails:
                     logger.info("On-rails: rejected new character slug %r", slug)
                     continue
-                # New character — store everything.
-                existing[slug] = dict(fields)
+                # New character — store model fields plus harness-owned metadata.
+                existing[slug] = cls._prepare_new_character_entry(
+                    slug,
+                    fields,
+                    existing=existing,
+                    campaign_id=campaign_id,
+                    creation_context=creation_context,
+                )
         if campaign_id is not None:
             return cls._sanitize_npc_roster_against_players(campaign_id, existing)
         return existing
@@ -16306,6 +16567,7 @@ class ZorkEmulator:
         lines = ["**Character Roster:**"]
         for slug, char in characters.items():
             name = char.get("name", slug)
+            age = char.get("age")
             loc = char.get("location", "unknown")
             status = char.get("current_status", "")
             bg = char.get("background", "")
@@ -16316,6 +16578,8 @@ class ZorkEmulator:
                 entry += f" [DECEASED: {deceased}]"
             else:
                 entry += f" — {loc}"
+                if age not in (None, "", [], {}):
+                    entry += f" | age {age}"
                 if status:
                     entry += f" | {status}"
             if origin:
@@ -16687,18 +16951,21 @@ class ZorkEmulator:
         for char in characters_for_prompt or []:
             if not isinstance(char, dict):
                 continue
-            slug = str(char.get("_slug") or "").strip()
+            expanded = char.get("expanded")
+            if not isinstance(expanded, dict):
+                expanded = {}
+            slug = str(char.get("_slug") or char.get("slug") or expanded.get("_slug") or "").strip()
             if not slug:
                 continue
             autobiography = cls._sanitize_autobiography_text(
-                char.get(cls.AUTOBIOGRAPHY_FIELD),
+                char.get(cls.AUTOBIOGRAPHY_FIELD) or expanded.get(cls.AUTOBIOGRAPHY_FIELD),
                 max_chars=cls.MAX_AUTOBIOGRAPHY_TEXT_CHARS,
             )
             if not autobiography:
                 continue
             row = {
                 "slug": slug,
-                "name": str(char.get("name") or slug).strip(),
+                "name": str(char.get("name") or expanded.get("name") or slug).strip(),
                 "autobiography": autobiography,
             }
             line = json.dumps(row, ensure_ascii=True)
@@ -16720,12 +16987,7 @@ class ZorkEmulator:
         player_state: Dict[str, object],
         recent_text: str,
     ) -> list:
-        """Build a tiered character list for the prompt.
-
-        - Nearby (same location as player): full record
-        - Recently mentioned in recent_text: condensed
-        - Distant/deceased: minimal
-        """
+        """Build the lightweight WORLD_CHARACTERS roster for the prompt."""
         if not characters:
             return []
         player_location = str(player_state.get("location") or "").strip().lower()
@@ -16739,6 +17001,18 @@ class ZorkEmulator:
         }
         hidden_prompt_keys = {
             "image_url",
+            "personality",
+            "background",
+            "appearance",
+            "speech_style",
+            "goals",
+            "skills",
+            "hobbies",
+            "cultural_touchstones",
+            "childhood_memories",
+            "relationships_history",
+            "escalation_behavior",
+            "confrontation_style",
             cls.AUTOBIOGRAPHY_FIELD,
             cls.AUTOBIOGRAPHY_RAW_FIELD,
             cls.AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD,
@@ -16761,36 +17035,36 @@ class ZorkEmulator:
             char_name = str(effective_char.get("name") or slug).strip().lower()
             is_deceased = bool(effective_char.get("deceased_reason"))
 
+            entry = {
+                "_slug": slug,
+                "name": effective_char.get("name", slug),
+            }
+            for key in ("age", "created"):
+                value = effective_char.get(key)
+                if value not in (None, "", [], {}):
+                    entry[key] = value
+            if is_deceased:
+                entry["deceased_reason"] = effective_char.get("deceased_reason")
+            else:
+                for key in (
+                    "location",
+                    "current_status",
+                    "allegiance",
+                    "relationship",
+                    "relationships",
+                    "literary_style",
+                ):
+                    value = effective_char.get(key)
+                    if value not in (None, "", [], {}):
+                        entry[key] = value
+            for key in list(entry.keys()):
+                if key in hidden_prompt_keys:
+                    entry.pop(key, None)
             if not is_deceased and player_location and char_location == player_location:
-                # Full record for nearby characters (strip image_url — harness-managed).
-                entry = {
-                    k: v
-                    for k, v in effective_char.items()
-                    if k not in hidden_prompt_keys
-                }
-                entry["_slug"] = slug
                 nearby.append(entry)
             elif char_name in recent_lower or slug in recent_lower:
-                # Condensed for recently mentioned.
-                entry = {
-                    "_slug": slug,
-                    "name": effective_char.get("name", slug),
-                    "speech_style": effective_char.get("speech_style"),
-                    "literary_style": effective_char.get("literary_style"),
-                    "location": effective_char.get("location"),
-                    "current_status": effective_char.get("current_status"),
-                    "allegiance": effective_char.get("allegiance"),
-                }
-                if is_deceased:
-                    entry["deceased_reason"] = effective_char.get("deceased_reason")
                 mentioned.append(entry)
             else:
-                # Minimal for distant/deceased.
-                entry = {"_slug": slug, "name": effective_char.get("name", slug)}
-                if is_deceased:
-                    entry["deceased_reason"] = effective_char.get("deceased_reason")
-                else:
-                    entry["location"] = effective_char.get("location")
                 distant.append(entry)
 
         result = nearby + mentioned + distant
@@ -16805,6 +17079,106 @@ class ZorkEmulator:
                 return characters_list
             characters_list = characters_list[:-1]
         return []
+
+    @classmethod
+    def _compact_character_card_value(cls, value: object) -> object:
+        if value in (None, "", [], {}):
+            return value
+        if isinstance(value, str):
+            text = " ".join(value.split()).strip()
+        elif isinstance(value, (dict, list)):
+            text = cls._dump_json(value)
+        else:
+            text = str(value)
+        return cls._trim_text(text, cls.MAX_CHARACTER_CARD_COMPACT_VALUE_CHARS)
+
+    @classmethod
+    def _character_card_priority(cls, key: str) -> str:
+        if key in {
+            "name",
+            "age",
+            "created",
+            "birthday_hint",
+            "location",
+            "current_status",
+            "allegiance",
+            "relationship",
+            "relationships",
+            "speech_style",
+        }:
+            return "critical"
+        if key in {"personality", "background", "appearance", "literary_style"}:
+            return "scene"
+        return "low"
+
+    @classmethod
+    def _build_character_cards_for_prompt(
+        cls,
+        characters: Dict[str, dict],
+        campaign_state: Dict[str, object],
+        selected_slugs: Optional[List[str]] = None,
+    ) -> list:
+        if not characters or not selected_slugs:
+            return []
+        overlay_keys = {
+            "location",
+            "current_status",
+            "room_title",
+            "room_summary",
+            "room_id",
+        }
+        hidden_prompt_keys = {
+            "image_url",
+            cls.AUTOBIOGRAPHY_RAW_FIELD,
+            cls.AUTOBIOGRAPHY_LAST_COMPRESSED_TURN_FIELD,
+            "evolving_personality",
+        }
+        cards: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for raw_slug in selected_slugs:
+            slug = str(raw_slug or "").strip()
+            if not slug or slug in seen or slug not in characters:
+                continue
+            seen.add(slug)
+            effective_char = dict(characters.get(slug) or {})
+            raw_overlay = campaign_state.get(slug) if isinstance(campaign_state, dict) else None
+            if isinstance(raw_overlay, dict):
+                for key in overlay_keys:
+                    if key in raw_overlay and raw_overlay.get(key) is not None:
+                        effective_char[key] = raw_overlay.get(key)
+            birthday_hint = cls._character_birthday_hint_for_prompt(
+                campaign_state,
+                effective_char,
+            )
+            if birthday_hint:
+                effective_char["birthday_hint"] = birthday_hint
+            expanded: dict[str, object] = {}
+            compact: dict[str, object] = {}
+            priority: dict[str, str] = {}
+            available_keys: list[str] = []
+            for key, value in effective_char.items():
+                if key in hidden_prompt_keys or key.startswith("_") or value in (None, "", [], {}):
+                    continue
+                expanded[key] = value
+                available_keys.append(key)
+                compact_value = cls._compact_character_card_value(value)
+                if compact_value not in (None, "", [], {}):
+                    compact[key] = compact_value
+                priority[key] = cls._character_card_priority(key)
+            card = {
+                "slug": slug,
+                "name": str(effective_char.get("name") or slug).strip(),
+                "location": effective_char.get("location"),
+                "current_status": effective_char.get("current_status"),
+                "available_keys": available_keys,
+                "compact": compact,
+                "expanded": expanded,
+                "priority": priority,
+            }
+            cards.append(card)
+            if len(cards) >= cls.MAX_CHARACTER_CARDS_IN_PROMPT:
+                break
+        return cls._fit_characters_to_budget(cards, cls.MAX_CHARACTER_CARDS_CHARS)
 
     @classmethod
     def _literary_styles_for_prompt(
@@ -16825,7 +17199,10 @@ class ZorkEmulator:
         for char in characters_for_prompt or []:
             if not isinstance(char, dict):
                 continue
-            ref = char.get("literary_style")
+            expanded = char.get("expanded")
+            if not isinstance(expanded, dict):
+                expanded = {}
+            ref = char.get("literary_style") or expanded.get("literary_style")
             if ref:
                 active_refs.add(str(ref).strip())
 
@@ -17708,6 +18085,7 @@ class ZorkEmulator:
         tail_extra_lines: Optional[List[str]] = None,
         prompt_stage: str = PROMPT_STAGE_FINAL,
         channel_id: Optional[int] = None,
+        character_card_slugs: Optional[List[str]] = None,
     ) -> Tuple[str, str]:
         stage = str(prompt_stage or cls.PROMPT_STAGE_FINAL).strip().lower()
         if stage not in {
@@ -17821,6 +18199,7 @@ class ZorkEmulator:
             requested_npc_slugs=set(),
         )
         rails_context = cls._build_rails_context(player_state, party_snapshot)
+        _active_scene_npc_slugs = cls._active_scene_npc_slugs(campaign, player_state)
 
         characters = cls.get_campaign_characters(campaign)
         characters_for_prompt = cls._build_characters_for_prompt(
@@ -17829,6 +18208,20 @@ class ZorkEmulator:
         characters_for_prompt = cls._fit_characters_to_budget(
             characters_for_prompt, cls.MAX_CHARACTERS_CHARS
         )
+        character_cards_for_prompt: List[Dict[str, object]] = []
+        if stage == cls.PROMPT_STAGE_FINAL:
+            selected_character_card_slugs = [
+                str(slug or "").strip()
+                for slug in (character_card_slugs or [])
+                if str(slug or "").strip()
+            ]
+            if not selected_character_card_slugs:
+                selected_character_card_slugs = sorted(_active_scene_npc_slugs)
+            character_cards_for_prompt = cls._build_character_cards_for_prompt(
+                characters,
+                state,
+                selected_character_card_slugs,
+            )
 
         story_context = cls._build_story_context(state)
         on_rails = bool(state.get("on_rails", False))
@@ -17849,6 +18242,7 @@ class ZorkEmulator:
             _difficulty,
             stage,
             campaign=campaign,
+            channel_id=channel_id,
         )
         _calendar_state_before = json.dumps(
             state.get("calendar") or [],
@@ -17897,7 +18291,6 @@ class ZorkEmulator:
         )
         _viewer_player_slug = cls._player_slug_key(player_state.get("character_name"))
         _viewer_location_key = cls._room_key_from_player_state(player_state).lower()
-        _active_scene_npc_slugs = cls._active_scene_npc_slugs(campaign, player_state)
         _active_plot_threads = cls._plot_threads_for_prompt(
             state,
             campaign=campaign,
@@ -17973,8 +18366,11 @@ class ZorkEmulator:
             f"MEMORY_LOOKUP_ENABLED: {str(_memory_lookup_enabled).lower()}\n"
             "RECENT_TURNS_LOADED: false\n"
         )
-        _literary_styles_text = cls._literary_styles_for_prompt(state, characters_for_prompt)
-        _autobiographies_text = cls._autobiographies_for_prompt(characters_for_prompt)
+        _character_depth_prompt = (
+            character_cards_for_prompt if character_cards_for_prompt else characters_for_prompt
+        )
+        _literary_styles_text = cls._literary_styles_for_prompt(state, _character_depth_prompt)
+        _autobiographies_text = cls._autobiographies_for_prompt(_character_depth_prompt)
         if _literary_styles_text:
             user_prompt += f"LITERARY_STYLES:\n{_literary_styles_text}\n"
         if _autobiographies_text:
@@ -17987,6 +18383,12 @@ class ZorkEmulator:
             f"PLAYER_CARD: {cls._dump_json(player_card)}\n"
             f"PARTY_SNAPSHOT: {cls._dump_json(party_snapshot)}\n"
         )
+        if character_cards_for_prompt:
+            user_prompt += (
+                "CHARACTER_CARDS are deep NPC cards for the final writing pass. "
+                "WORLD_CHARACTERS remains the lightweight roster.\n"
+                f"CHARACTER_CARDS: {cls._dump_json(character_cards_for_prompt)}\n"
+            )
         if stage in {cls.PROMPT_STAGE_RESEARCH, cls.PROMPT_STAGE_FINAL}:
             if story_context:
                 user_prompt += f"STORY_CONTEXT:\n{story_context}\n"
@@ -19564,6 +19966,24 @@ class ZorkEmulator:
                 character_updates,
                 on_rails=_on_rails,
                 campaign_id=campaign.id,
+                creation_context={
+                    "campaign_state": campaign_state,
+                    "player_state": player_state,
+                    "scene_output_raw": scene_output
+                    if isinstance(scene_output, dict)
+                    else scene_output_raw,
+                    "actor_player_slug": str(
+                        turn_visibility.get("actor_player_slug")
+                        or cls._player_slug_key(player_state.get("character_name"))
+                        or ""
+                    ).strip(),
+                    "fallback_location": (
+                        player_state_update.get("location")
+                        if isinstance(player_state_update, dict)
+                        else None
+                    )
+                    or player_state.get("location"),
+                },
             )
             campaign.characters_json = cls._dump_json(existing_chars)
             _zork_log(
@@ -20415,14 +20835,43 @@ class ZorkEmulator:
                 return f"TOOL_BUDGET: 1 call(s) remaining. Return ready_to_write or final JSON now."
             return f"TOOL_BUDGET: {remaining} call(s) remaining."
 
-        def _switch_prompt_stage(next_stage: str) -> None:
+        final_stage_character_card_slugs: List[str] = []
+
+        def _switch_prompt_stage(
+            next_stage: str,
+            *,
+            character_card_slugs: Optional[List[str]] = None,
+        ) -> None:
             nonlocal current_prompt_stage
             nonlocal system_prompt
             nonlocal user_prompt
             nonlocal base_user_prompt
             nonlocal turn_prompt_tail
+            nonlocal final_stage_character_card_slugs
             if next_stage == current_prompt_stage:
-                return
+                if (
+                    next_stage == cls.PROMPT_STAGE_FINAL
+                    and character_card_slugs is not None
+                    and sorted(final_stage_character_card_slugs)
+                    != sorted(
+                        [
+                            str(slug or "").strip()
+                            for slug in character_card_slugs
+                            if str(slug or "").strip()
+                        ]
+                    )
+                ):
+                    pass
+                else:
+                    return
+            if next_stage == cls.PROMPT_STAGE_FINAL:
+                final_stage_character_card_slugs = [
+                    str(slug or "").strip()
+                    for slug in (character_card_slugs or [])
+                    if str(slug or "").strip()
+                ]
+            elif character_card_slugs is not None:
+                final_stage_character_card_slugs = []
             current_prompt_stage = next_stage
             _player_ns = SimpleNamespace(
                 user_id=user_id,
@@ -20443,6 +20892,7 @@ class ZorkEmulator:
                 tail_extra_lines=turn_tail_extra_lines,
                 prompt_stage=current_prompt_stage,
                 channel_id=channel_id,
+                character_card_slugs=final_stage_character_card_slugs,
             )
             base_user_prompt = user_prompt
             turn_prompt_tail = cls._build_turn_prompt_tail(
@@ -20680,14 +21130,6 @@ class ZorkEmulator:
                 _zork_log("RECENT TURNS AUGMENTED RESPONSE", response)
 
             elif tool_name == "ready_to_write":
-                _switch_prompt_stage(cls.PROMPT_STAGE_FINAL)
-                tool_prompt_blocks[:] = [
-                    block
-                    for block in tool_prompt_blocks
-                    if not str(block or "").strip().startswith("RECENT_TURNS_LOADED:")
-                ]
-                _rebuild_tool_prompt()
-
                 # Extract scene participants for LCD filtering
                 _rtw_speakers = first_payload.get("speakers") or []
                 _rtw_listeners = first_payload.get("listeners") or []
@@ -20723,6 +21165,16 @@ class ZorkEmulator:
                 _rtw_scene_npc_slugs = _rtw_speaker_npc_slugs.union(
                     _rtw_listener_npc_slugs
                 )
+                _switch_prompt_stage(
+                    cls.PROMPT_STAGE_FINAL,
+                    character_card_slugs=sorted(_rtw_scene_npc_slugs),
+                )
+                tool_prompt_blocks[:] = [
+                    block
+                    for block in tool_prompt_blocks
+                    if not str(block or "").strip().startswith("RECENT_TURNS_LOADED:")
+                ]
+                _rebuild_tool_prompt()
 
                 # LCD-filtered WORLD_SUMMARY: only events ALL scene
                 # participants (player + NPCs) would know about.
@@ -23864,6 +24316,20 @@ class ZorkEmulator:
                             character_updates,
                             on_rails=_on_rails,
                             campaign_id=campaign.id,
+                            creation_context={
+                                "campaign_state": campaign_state,
+                                "player_state": player_state,
+                                "scene_output_raw": scene_output_raw,
+                                "actor_player_slug": cls._player_slug_key(
+                                    player_state.get("character_name")
+                                ),
+                                "fallback_location": (
+                                    player_state_update.get("location")
+                                    if isinstance(player_state_update, dict)
+                                    else None
+                                )
+                                or player_state.get("location"),
+                            },
                         )
                         campaign.characters_json = cls._dump_json(existing_chars)
                         _zork_log(
