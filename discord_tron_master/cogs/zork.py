@@ -508,7 +508,10 @@ class Zork(commands.Cog):
                 )
                 return True
             if shortcut_kind == "calendar":
-                text = ZorkEmulator.get_calendar_text(campaign.id)
+                text = ZorkEmulator.get_calendar_text(
+                    campaign.id,
+                    getattr(getattr(ctx_like, "author", None), "id", None),
+                )
             elif shortcut_kind == "chapters":
                 text = self._render_chapter_outline_text(
                     ZorkEmulator.get_chapter_list(campaign)
@@ -1417,7 +1420,7 @@ class Zork(commands.Cog):
             if channel.campaign_id is None:
                 await ctx.send("No active campaign in this channel.")
                 return
-            text = ZorkEmulator.get_calendar_text(channel.campaign_id)
+            text = ZorkEmulator.get_calendar_text(channel.campaign_id, ctx.author.id)
         await DiscordBot.send_large_message(ctx, text)
 
     @zork.command(name="chapters", aliases=["outline"])

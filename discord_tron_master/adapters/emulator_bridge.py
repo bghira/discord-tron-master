@@ -542,7 +542,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return scene_output if isinstance(scene_output, dict) else None
 
     @classmethod
-    def get_calendar_text(cls, campaign_id):
+    def get_calendar_text(cls, campaign_id, actor_id=None):
         cls._ensure_init()
         campaign = cls.query_campaign(campaign_id)
         if campaign is None:
@@ -550,6 +550,13 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         campaign_state = cls._emu.get_campaign_state(campaign)
         game_time = campaign_state.get("game_time", {})
         calendar_entries = cls._emu._calendar_for_prompt(campaign_state)
+        player_calendar_lines = []
+        if actor_id is not None:
+            player = cls._emu.get_or_create_player(str(campaign.id), str(actor_id))
+            player_state = cls._emu.get_player_state(player)
+            player_calendar_lines = cls._emu._player_calendar_events_for_display(
+                player_state
+            )
         date_label = game_time.get("date_label")
         if not date_label:
             day = game_time.get("day", "?")
@@ -583,6 +590,9 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
                 lines.append(line)
         else:
             lines.append("No upcoming events.")
+        if player_calendar_lines:
+            lines.append("**Personal Events:**")
+            lines.extend(player_calendar_lines)
         return "\n".join(lines)
 
     # -- Player Management -----------------------------------------------------
