@@ -107,6 +107,9 @@ class TimerEffectsAdapter:
         narration: str,
     ) -> None:
         from discord_tron_master.bot import DiscordBot
+        from discord_tron_master.adapters.emulator_bridge import (
+            EmulatorBridge as ZorkEmulator,
+        )
 
         bot_instance = DiscordBot.get_instance()
         if bot_instance is None:
@@ -120,6 +123,7 @@ class TimerEffectsAdapter:
         text = str(narration or "").strip()
         if not text:
             return
+        text = ZorkEmulator.prepend_world_time_header(text, campaign_id)
         try:
             await DiscordBot.send_large_message(channel, text)
         except Exception as exc:

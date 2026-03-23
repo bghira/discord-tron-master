@@ -595,6 +595,42 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             lines.extend(player_calendar_lines)
         return "\n".join(lines)
 
+    @classmethod
+    def get_world_time_text(cls, campaign_id):
+        cls._ensure_init()
+        campaign = cls.query_campaign(campaign_id)
+        if campaign is None:
+            return None
+        campaign_state = cls._emu.get_campaign_state(campaign)
+        game_time = campaign_state.get("game_time", {}) if isinstance(campaign_state, dict) else {}
+        if not isinstance(game_time, dict):
+            game_time = {}
+        date_label = str(game_time.get("date_label") or "").strip()
+        hour = game_time.get("hour")
+        minute = game_time.get("minute")
+        if not date_label:
+            day = game_time.get("day", "?")
+            period = str(game_time.get("period", "?")).title()
+            date_label = f"Day {day}, {period}"
+        try:
+            hour_int = max(0, min(23, int(hour)))
+            minute_int = max(0, min(59, int(minute)))
+            return f"{date_label} ({hour_int:02d}:{minute_int:02d})"
+        except (TypeError, ValueError):
+            return date_label or None
+
+    @classmethod
+    def prepend_world_time_header(cls, text, campaign_id):
+        body = str(text or "").strip()
+        if not body:
+            return body
+        if body.startswith("-# world time:"):
+            return body
+        label = cls.get_world_time_text(campaign_id)
+        if not label:
+            return body
+        return f"-# world time: {label}\n{body}"
+
     # -- Player Management -----------------------------------------------------
 
     @classmethod

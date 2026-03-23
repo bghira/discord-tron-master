@@ -15,6 +15,23 @@ logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
 
 
+class _WorldTimeSendProxy:
+    def __init__(self, target, formatter):
+        self._target = target
+        self._formatter = formatter
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+    async def send(self, content=None, *args, **kwargs):
+        if content is not None:
+            content = self._formatter(content)
+            return await self._target.send(content, *args, **kwargs)
+        if "content" in kwargs and kwargs["content"] is not None:
+            kwargs["content"] = self._formatter(kwargs["content"])
+        return await self._target.send(*args, **kwargs)
+
+
 class Zork(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -27,6 +44,83 @@ class Zork(commands.Cog):
         if ctx.guild is None:
             return False
         return True
+
+    def _infer_campaign_id(self, ctx_like) -> str | int | None:
+        if ctx_like is None:
+            return None
+        app = AppConfig.get_flask()
+        if app is None:
+            return None
+        with app.app_context():
+            guild = getattr(ctx_like, "guild", None)
+            channel = getattr(ctx_like, "channel", None)
+            if channel is None and getattr(ctx_like, "id", None) is not None:
+                channel = ctx_like
+            guild_id = getattr(guild, "id", None)
+            channel_id = getattr(channel, "id", None)
+            if guild_id is not None and channel_id is not None:
+                channel_rec = ZorkEmulator.get_or_create_channel(guild_id, channel_id)
+                if getattr(channel_rec, "campaign_id", None):
+                    return channel_rec.campaign_id
+            if guild is None:
+                author = getattr(ctx_like, "author", None)
+                actor_id = getattr(author, "id", None)
+                if actor_id is not None:
+                    binding = self._get_private_dm_binding(actor_id)
+                    if binding and binding.get("enabled") and binding.get("campaign_id"):
+                        return binding.get("campaign_id")
+        return None
+
+    def _with_world_time(
+        self,
+        text: str,
+        campaign_id: str | int | None = None,
+        *,
+        ctx_like=None,
+    ) -> str:
+        resolved_campaign_id = campaign_id
+        if resolved_campaign_id is None:
+            resolved_campaign_id = self._infer_campaign_id(ctx_like)
+        if resolved_campaign_id is None:
+            return str(text or "").strip()
+        return ZorkEmulator.prepend_world_time_header(text, resolved_campaign_id)
+
+    def _wrap_send(self, target, *, campaign_id: str | int | None = None):
+        resolved_campaign_id = campaign_id
+        if resolved_campaign_id is None:
+            resolved_campaign_id = self._infer_campaign_id(target)
+        return _WorldTimeSendProxy(
+            target,
+            lambda text: self._with_world_time(text, resolved_campaign_id),
+        )
+
+    async def _send_large_message(
+        self,
+        ctx_like,
+        text: str,
+        *,
+        campaign_id: str | int | None = None,
+        max_chars: int = 2000,
+        delete_delay=None,
+    ):
+        payload = self._with_world_time(text, campaign_id, ctx_like=ctx_like)
+        return await DiscordBot.send_large_message(
+            ctx_like,
+            payload,
+            max_chars=max_chars,
+            delete_delay=delete_delay,
+        )
+
+    async def _send_message(
+        self,
+        ctx_like,
+        text: str,
+        *,
+        campaign_id: str | int | None = None,
+        **kwargs,
+    ):
+        payload = self._with_world_time(text, campaign_id, ctx_like=ctx_like)
+        return await ctx_like.send(payload, **kwargs)
 
     async def _is_image_admin(self, ctx) -> bool:
         user_roles = getattr(ctx.author, "roles", [])
@@ -409,7 +503,7 @@ class Zork(commands.Cog):
         self, ctx_like, narration: str, campaign_id: int = None, notices: list[str] | None = None
     ):
         for notice in notices or []:
-            await DiscordBot.send_large_message(ctx_like, f"[Notice] {notice}")
+            await self._send_large_message(ctx_like, f"[Notice] {notice}", campaign_id=campaign_id)
         if campaign_id is not None:
             actor_id = getattr(getattr(ctx_like, "author", None), "id", None)
             scene_output = ZorkEmulator.get_latest_scene_output_for_actor(
@@ -420,11 +514,11 @@ class Zork(commands.Cog):
         narration = self._filter_narration(narration)
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
         if mention:
-            msg = await DiscordBot.send_large_message(
-                ctx_like, f"{mention}\n{narration}"
+            msg = await self._send_large_message(
+                ctx_like, f"{mention}\n{narration}", campaign_id=campaign_id
             )
         else:
-            msg = await DiscordBot.send_large_message(ctx_like, narration)
+            msg = await self._send_large_message(ctx_like, narration, campaign_id=campaign_id)
         # If a timer was just scheduled, register the message for later editing.
         if campaign_id is not None and msg is not None:
             ZorkEmulator.register_timer_message(campaign_id, msg.id)
@@ -502,7 +596,7 @@ class Zork(commands.Cog):
         with app.app_context():
             campaign = self._resolve_active_campaign(ctx_like, campaign_id=campaign_id)
             if campaign is None:
-                await DiscordBot.send_large_message(
+                await self._send_large_message(
                     ctx_like,
                     "No active campaign in this channel.",
                 )
@@ -533,7 +627,7 @@ class Zork(commands.Cog):
                 text = ZorkEmulator._format_inventory(player_state) or "Inventory: empty"
             else:
                 return False
-        await DiscordBot.send_large_message(ctx_like, text)
+        await self._send_large_message(ctx_like, text, campaign_id=campaign.id)
         return True
 
     async def _prepare_thread_source_material(
@@ -558,7 +652,11 @@ class Zork(commands.Cog):
         all_literary_profiles: dict = {}
         for attachment, attachment_text in attachment_infos:
             if isinstance(attachment_text, str) and attachment_text.startswith("ERROR:"):
-                await channel.send(attachment_text.replace("ERROR:", "", 1))
+                await self._send_message(
+                    channel,
+                    attachment_text.replace("ERROR:", "", 1),
+                    campaign_id=campaign.id,
+                )
                 continue
             if not attachment_text:
                 continue
@@ -615,6 +713,7 @@ class Zork(commands.Cog):
         return attachment_summary, ingest_message, all_literary_profiles
 
     async def _handle_source_material_command(self, ctx, *, label: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -743,13 +842,14 @@ class Zork(commands.Cog):
                 f"or `{prefix}zork source-material --clear`."
             )
             return
-        await DiscordBot.send_large_message(
+        await self._send_large_message(
             ctx,
             message_text or "No source-material changes were made.",
             max_chars=3900,
         )
 
     async def _handle_literary_reference_command(self, ctx, *, label: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -786,7 +886,7 @@ class Zork(commands.Cog):
                 profile = str(entry.get("profile") or "").strip()
                 truncated = (profile[:120] + "...") if len(profile) > 120 else profile
                 lines.append(f"**{key}**: {truncated}")
-            await DiscordBot.send_large_message(
+            await self._send_large_message(
                 ctx,
                 f"Literary style profiles ({len(lines)}):\n" + "\n".join(lines),
                 max_chars=3900,
@@ -909,6 +1009,7 @@ class Zork(commands.Cog):
         )
 
     async def _handle_campaign_rules_command(self, ctx, *, raw: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -936,7 +1037,7 @@ class Zork(commands.Cog):
                 await ctx.send("No campaign rules are stored in `campaign-rulebook`.")
                 return
             lines = [f"`{row['key']}`" for row in rules if str(row.get("key") or "").strip()]
-            await DiscordBot.send_large_message(
+            await self._send_large_message(
                 ctx,
                 f"Campaign rules ({len(lines)}):\n" + "\n".join(lines),
                 max_chars=3900,
@@ -953,7 +1054,7 @@ class Zork(commands.Cog):
             if not rule:
                 await ctx.send(f"Campaign rule `{requested}` not found.")
                 return
-            await DiscordBot.send_large_message(
+            await self._send_large_message(
                 ctx,
                 f"`{rule['key']}`: {rule['value']}",
                 max_chars=3900,
@@ -979,7 +1080,7 @@ class Zork(commands.Cog):
 
         if not result.get("ok"):
             if result.get("reason") == "exists":
-                await DiscordBot.send_large_message(
+                await self._send_large_message(
                     ctx,
                     f"Campaign rule `{result.get('key')}` already exists.\n"
                     f"Old: {result.get('old_value')}\n"
@@ -994,7 +1095,7 @@ class Zork(commands.Cog):
         new_value = str(result.get("new_value") or requested_value)
         old_value = str(result.get("old_value") or "").strip()
         if result.get("replaced"):
-            await DiscordBot.send_large_message(
+            await self._send_large_message(
                 ctx,
                 f"Updated campaign rule `{key_text}`.\n"
                 f"Old: {old_value}\n"
@@ -1003,7 +1104,7 @@ class Zork(commands.Cog):
             )
             return
 
-        await DiscordBot.send_large_message(
+        await self._send_large_message(
             ctx,
             f"Added campaign rule `{key_text}`.\n"
             f"New: {new_value}",
@@ -1020,7 +1121,7 @@ class Zork(commands.Cog):
             if dm_scope:
                 dm_binding = self._get_private_dm_binding(message.author.id)
                 if dm_binding is None:
-                    await message.channel.send("No active campaign in this DM.")
+                    await self._send_message(message.channel, "No active campaign in this DM.")
                     return
                 campaign_id = dm_binding["campaign_id"]
             else:
@@ -1028,17 +1129,21 @@ class Zork(commands.Cog):
                     message.guild.id, message.channel.id
                 )
                 if not channel_rec.enabled or channel_rec.campaign_id is None:
-                    await message.channel.send("No active campaign in this channel.")
+                    await self._send_message(message.channel, "No active campaign in this channel.")
                     return
                 campaign_id = channel_rec.campaign_id
             campaign = ZorkEmulator.query_campaign(campaign_id)
             if campaign is None:
-                await message.channel.send("Campaign not found.")
+                await self._send_message(message.channel, "Campaign not found.", campaign_id=campaign_id)
                 return
             # Normalize to the campaign's real UUID in case we resolved a legacy ID.
             campaign_id = campaign.id
             if ZorkEmulator.is_in_setup_mode(campaign):
-                await message.channel.send("Cannot rewind during campaign setup.")
+                await self._send_message(
+                    message.channel,
+                    "Cannot rewind during campaign setup.",
+                    campaign_id=campaign_id,
+                )
                 return
 
         lock = ZorkEmulator._get_lock(campaign_id)
@@ -1053,9 +1158,11 @@ class Zork(commands.Cog):
                 )
 
             if result is None:
-                await message.channel.send(
+                await self._send_message(
+                    message.channel,
                     "Could not find a snapshot for that message. "
-                    "Only messages created after the rewind feature was added can be rewound to."
+                    "Only messages created after the rewind feature was added can be rewound to.",
+                    campaign_id=campaign_id,
                 )
                 return
 
@@ -1077,12 +1184,16 @@ class Zork(commands.Cog):
                 ZorkEmulator.cancel_pending_sms_deliveries(campaign_id)
 
             if dm_scope:
-                await message.channel.send(
+                await self._send_message(
+                    message.channel,
                     f"Rewound your DM thread to turn {turn_id}. Removed {deleted_count} of your subsequent turn(s)."
                 )
             else:
-                await message.channel.send(
+                await self._send_message(
+                    message.channel,
                     f"Rewound to turn {turn_id}. Removed {deleted_count} subsequent turn(s)."
+                    ,
+                    campaign_id=campaign_id,
                 )
 
     async def _purge_messages_after(self, channel, target_message, rewind_message):
@@ -1117,15 +1228,19 @@ class Zork(commands.Cog):
                 campaign = ZorkEmulator.query_campaign(binding["campaign_id"])
                 if campaign is None:
                     self.config.clear_zork_private_dm(message.author.id)
-                    await message.channel.send(
+                    await self._send_message(
+                        message.channel,
                         "Your linked private Zork campaign no longer exists. "
-                        f"Re-enable it from the campaign channel with `{self._prefix()}zork private enable`."
+                        f"Re-enable it from the campaign channel with `{self._prefix()}zork private enable`.",
+                        campaign_id=binding["campaign_id"],
                     )
                     return
                 if ZorkEmulator.is_in_setup_mode(campaign):
-                    await message.channel.send(
+                    await self._send_message(
+                        message.channel,
                         f"Campaign `{campaign.name}` is still in setup. "
-                        "Finish setup in the server channel or thread before using private DMs."
+                        "Finish setup in the server channel or thread before using private DMs.",
+                        campaign_id=binding["campaign_id"],
                     )
                     return
             campaign_id, error_text = await ZorkEmulator.begin_turn_for_campaign(
@@ -1133,7 +1248,11 @@ class Zork(commands.Cog):
                 binding["campaign_id"],
             )
             if error_text is not None:
-                await message.channel.send(error_text)
+                await self._send_message(
+                    message.channel,
+                    error_text,
+                    campaign_id=binding["campaign_id"],
+                )
                 return
             if campaign_id is None:
                 return
@@ -1180,7 +1299,7 @@ class Zork(commands.Cog):
                         message, content, _setup_campaign, command_prefix=self._prefix()
                     )
                     if response:
-                        await DiscordBot.send_large_message(message, response)
+                        await self._send_large_message(message, response, campaign_id=campaign_id)
             finally:
                 if reaction_added:
                     await ZorkEmulator._remove_processing_reaction(message)
@@ -1227,6 +1346,7 @@ class Zork(commands.Cog):
 
     @commands.group(name="zork", invoke_without_command=True)
     async def zork(self, ctx, *, action: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1266,7 +1386,7 @@ class Zork(commands.Cog):
                     )
                     await ctx.send(message)
                     if campaign.last_narration:
-                        await DiscordBot.send_large_message(
+                        await self._send_large_message(
                             ctx, campaign.last_narration
                         )
                     return
@@ -1311,7 +1431,7 @@ class Zork(commands.Cog):
                         ctx, action, _setup_campaign, command_prefix=self._prefix()
                     )
                     if response:
-                        await DiscordBot.send_large_message(ctx, response)
+                        await self._send_large_message(ctx, response, campaign_id=campaign_id)
             finally:
                 if reaction_added:
                     await ZorkEmulator._remove_processing_reaction(ctx)
@@ -1347,6 +1467,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="help")
     async def zork_help(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1404,10 +1525,11 @@ class Zork(commands.Cog):
             f"- `roster` / `characters` / `npcs` — view the NPC roster\n"
             f"- `inventory` / `inv` / `i` — view your inventory\n"
         )
-        await DiscordBot.send_large_message(ctx, message)
+        await self._send_large_message(ctx, message)
 
     @zork.command(name="calendar", aliases=["cal", "events"])
     async def zork_calendar(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1421,10 +1543,11 @@ class Zork(commands.Cog):
                 await ctx.send("No active campaign in this channel.")
                 return
             text = ZorkEmulator.get_calendar_text(channel.campaign_id, ctx.author.id)
-        await DiscordBot.send_large_message(ctx, text)
+        await self._send_large_message(ctx, text)
 
     @zork.command(name="chapters", aliases=["outline"])
     async def zork_chapters(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1442,13 +1565,14 @@ class Zork(commands.Cog):
                 await ctx.send("Campaign not found.")
                 return
             chapter_data = ZorkEmulator.get_chapter_list(campaign)
-        await DiscordBot.send_large_message(
+        await self._send_large_message(
             ctx,
             self._render_chapter_outline_text(chapter_data),
         )
 
     @zork.command(name="inventory", aliases=["inv", "i"])
     async def zork_inventory(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1461,6 +1585,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="enable")
     async def zork_enable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1478,6 +1603,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="disable")
     async def zork_disable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1494,6 +1620,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="campaigns")
     async def zork_campaigns(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1516,10 +1643,11 @@ class Zork(commands.Cog):
                     f"No campaigns yet. Use `{self._prefix()}zork campaign <name>` to create one."
                 )
                 return
-            await DiscordBot.send_large_message(ctx, "Campaigns:\n" + "\n".join(lines))
+            await self._send_large_message(ctx, "Campaigns:\n" + "\n".join(lines))
 
     @zork.command(name="campaign")
     async def zork_campaign(self, ctx, *, name: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1551,6 +1679,7 @@ class Zork(commands.Cog):
 
     @zork.group(name="rails", invoke_without_command=True)
     async def zork_rails(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1576,6 +1705,7 @@ class Zork(commands.Cog):
 
     @zork_rails.command(name="enable")
     async def zork_rails_enable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1597,6 +1727,7 @@ class Zork(commands.Cog):
 
     @zork_rails.command(name="disable")
     async def zork_rails_disable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1618,6 +1749,7 @@ class Zork(commands.Cog):
 
     @zork.group(name="on-rails", invoke_without_command=True)
     async def zork_on_rails(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1643,6 +1775,7 @@ class Zork(commands.Cog):
 
     @zork_on_rails.command(name="enable")
     async def zork_on_rails_enable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1664,6 +1797,7 @@ class Zork(commands.Cog):
 
     @zork_on_rails.command(name="disable")
     async def zork_on_rails_disable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1686,6 +1820,7 @@ class Zork(commands.Cog):
     @zork.command(name="puzzles")
     async def zork_puzzles(self, ctx, *, mode: str = None):
         """View or set puzzle mode for active campaign."""
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1726,6 +1861,7 @@ class Zork(commands.Cog):
 
     @zork.group(name="timed-events", invoke_without_command=True)
     async def zork_timed_events(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1751,6 +1887,7 @@ class Zork(commands.Cog):
 
     @zork_timed_events.command(name="enable")
     async def zork_timed_events_enable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1781,6 +1918,7 @@ class Zork(commands.Cog):
 
     @zork_timed_events.command(name="disable")
     async def zork_timed_events_disable(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1811,6 +1949,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="identity")
     async def zork_identity(self, ctx, *, character_name: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1864,6 +2003,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="persona")
     async def zork_persona(self, ctx, *, persona: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -1896,7 +2036,7 @@ class Zork(commands.Cog):
                     f"Your persona: `{current_persona}`\n"
                     f"Campaign default persona: `{default_persona}`"
                 )
-                await DiscordBot.send_large_message(ctx, message)
+                await self._send_large_message(ctx, message)
                 return
 
             persona = persona.strip()
@@ -1912,6 +2052,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="private")
     async def zork_private(self, ctx, *, mode: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Run this in the campaign channel or thread you want to bind.")
             return
@@ -2015,6 +2156,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="backend")
     async def zork_backend(self, ctx, *, option: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2080,6 +2222,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="style")
     async def zork_style(self, ctx, *, option: str = None):
+        ctx = self._wrap_send(ctx)
         app = AppConfig.get_flask()
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
@@ -2173,6 +2316,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="thread")
     async def zork_thread(self, ctx, *, name: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2327,19 +2471,29 @@ class Zork(commands.Cog):
                 )
             resolved_campaign_name = campaign.name
 
-        await ctx.send(f"Created Zork thread: {thread.mention}")
+        await self._send_message(
+            ctx,
+            f"Created Zork thread: {thread.mention}",
+            campaign_id=campaign.id,
+        )
         if create_empty:
-            await thread.send(
+            await self._send_message(
+                thread,
                 f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n"
-                f"Empty thread created. Run `{self._prefix()}zork thread` here when you want to start setup."
+                f"Empty thread created. Run `{self._prefix()}zork thread` here when you want to start setup.",
+                campaign_id=campaign.id,
             )
         else:
-            await thread.send(
+            await self._send_message(
+                thread,
                 f"{ctx.author.mention} Campaign: `{resolved_campaign_name}`.\n\n{setup_message}"
+                ,
+                campaign_id=campaign.id,
             )
 
     @zork.command(name="share")
     async def zork_share(self, ctx, thread_id: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2410,18 +2564,22 @@ class Zork(commands.Cog):
 
     @zork.command(name="source-material")
     async def zork_source_material(self, ctx, *, label: str = None):
+        ctx = self._wrap_send(ctx)
         await self._handle_source_material_command(ctx, label=label)
 
     @zork.command(name="campaign-rules")
     async def zork_campaign_rules(self, ctx, *, raw: str = None):
+        ctx = self._wrap_send(ctx)
         await self._handle_campaign_rules_command(ctx, raw=raw)
 
     @zork.command(name="literary-reference")
     async def zork_literary_reference(self, ctx, *, label: str = None):
+        ctx = self._wrap_send(ctx)
         await self._handle_literary_reference_command(ctx, label=label)
 
     @zork.command(name="source-material-export")
     async def zork_source_material_export(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2503,6 +2661,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="campaign-export")
     async def zork_campaign_export(self, ctx, *, options: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2604,6 +2763,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="avatar")
     async def zork_avatar(self, ctx, *, avatar_input: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2644,7 +2804,7 @@ class Zork(commands.Cog):
                 lines.append(
                     f"Use `{self._prefix()}zork avatar accept` or `{self._prefix()}zork avatar decline`."
                 )
-                await DiscordBot.send_large_message(ctx, "\n".join(lines))
+                await self._send_large_message(ctx, "\n".join(lines))
                 return
 
             clean_input = avatar_input.strip()
@@ -2684,6 +2844,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="attributes")
     async def zork_attributes(self, ctx, *args):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2718,7 +2879,7 @@ class Zork(commands.Cog):
                     )
                     return
                 lines = [f"{k}: {v}" for k, v in sorted(attrs.items())]
-                await DiscordBot.send_large_message(
+                await self._send_large_message(
                     ctx,
                     "Attributes:\n"
                     + "\n".join(lines)
@@ -2753,6 +2914,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="stats")
     async def zork_stats(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2794,10 +2956,11 @@ class Zork(commands.Cog):
                 f"Timers missed: {player_stats.get('timers_missed', 0)}\n"
                 f"Attention time: {player_stats.get('attention_hours', 0.0):.2f} hours"
             )
-            await DiscordBot.send_large_message(ctx, message)
+            await self._send_large_message(ctx, message)
 
     @zork.command(name="level")
     async def zork_level(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2823,6 +2986,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="where")
     async def zork_where(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2864,10 +3028,11 @@ class Zork(commands.Cog):
                 # TODO: player.actor_id is a string actor_id, not a Discord int user ID.
                 # Discord mention needs the real Discord user ID; bridge lookup may be needed.
                 lines.append(f"- <@{player.actor_id}>: {room} ({status}{extra})")
-            await DiscordBot.send_large_message(ctx, "Locations:\n" + "\n".join(lines))
+            await self._send_large_message(ctx, "Locations:\n" + "\n".join(lines))
 
     @zork.command(name="hint")
     async def zork_hint(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2948,10 +3113,11 @@ class Zork(commands.Cog):
                 lines.append(
                     "Scene NPCs: " + ", ".join(f"`{slug}`" for slug in sorted(active_scene_npc_slugs))
                 )
-            await DiscordBot.send_large_message(ctx, "\n".join(lines))
+            await self._send_large_message(ctx, "\n".join(lines))
 
     @zork.command(name="speed")
     async def zork_speed(self, ctx, *, value: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -2995,6 +3161,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="difficulty")
     async def zork_difficulty(self, ctx, *, value: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -3051,6 +3218,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="roster")
     async def zork_roster(self, ctx, *, args: str = None):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -3110,12 +3278,13 @@ class Zork(commands.Cog):
                 return
 
             # Display roster.
-            await DiscordBot.send_large_message(
+            await self._send_large_message(
                 ctx, ZorkEmulator.format_roster(characters)
             )
 
     @zork.command(name="map")
     async def zork_map(self, ctx):
+        ctx = self._wrap_send(ctx)
         app = AppConfig.get_flask()
         if app is None:
             await ctx.send("Zork is not ready yet (no Flask app).")
@@ -3143,12 +3312,13 @@ class Zork(commands.Cog):
         else:
             ascii_map = await ZorkEmulator.generate_map(ctx, command_prefix=self._prefix())
         if ascii_map.startswith("```") and ascii_map.endswith("```"):
-            await DiscordBot.send_large_message(ctx, ascii_map)
+            await self._send_large_message(ctx, ascii_map)
             return
-        await DiscordBot.send_large_message(ctx, f"```\n{ascii_map}\n```")
+        await self._send_large_message(ctx, f"```\n{ascii_map}\n```")
 
     @zork.command(name="reset")
     async def zork_reset(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not self._ensure_guild(ctx):
             await ctx.send("Zork is only available in servers.")
             return
@@ -3221,6 +3391,7 @@ class Zork(commands.Cog):
 
     @zork.command(name="restart")
     async def zork_restart(self, ctx):
+        ctx = self._wrap_send(ctx)
         if not await self.bot.is_owner(ctx.author):
             await ctx.send("This command is restricted to the bot owner.")
             return
