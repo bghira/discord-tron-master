@@ -367,13 +367,10 @@ class Reactions(commands.Cog):
         if reaction.message.author != self.bot.user:
             logging.debug(f"Ignoring reaction on message not from me.")
             return
-        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌", "🧵", "✉️"}:
-            if await self._handle_sms_notice_reaction(
-                reaction.message,
-                str(reaction.emoji),
-                user,
-            ):
-                return
+        if str(reaction.emoji) in {"🧵", "✉️"}:
+            logging.debug("Ignoring SMS notice reaction in on_reaction_add; raw handler owns it.")
+            return
+        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌"}:
             return
         image_urls = []
         img = None
