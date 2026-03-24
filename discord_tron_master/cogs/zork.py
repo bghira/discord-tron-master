@@ -1,4 +1,5 @@
 from discord.ext import commands
+import asyncio
 import datetime
 import io
 import logging
@@ -33,12 +34,210 @@ class _WorldTimeSendProxy:
 
 
 class Zork(commands.Cog):
+    QUEUE_PREFIX = "[queue]"
+
     def __init__(self, bot):
         self.bot = bot
         self.config = AppConfig()
+        self._turn_queues: dict[tuple[str, str], asyncio.Queue] = {}
+        self._turn_queue_tasks: dict[tuple[str, str], asyncio.Task] = {}
 
     def _prefix(self) -> str:
         return self.config.get_command_prefix()
+
+    @staticmethod
+    def _queue_key(campaign_id: str | int, actor_id: str | int) -> tuple[str, str]:
+        return (str(campaign_id), str(actor_id))
+
+    def _strip_queue_prefix(self, content: str) -> str | None:
+        text = str(content or "").strip()
+        if not text.lower().startswith(self.QUEUE_PREFIX):
+            return None
+        stripped = text[len(self.QUEUE_PREFIX):].strip()
+        return stripped or None
+
+    async def _add_queue_reaction(self, message) -> None:
+        try:
+            await message.add_reaction("📥")
+        except Exception:
+            return
+
+    def _get_turn_queue(self, key: tuple[str, str]) -> asyncio.Queue:
+        queue = self._turn_queues.get(key)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._turn_queues[key] = queue
+        return queue
+
+    def _ensure_turn_queue_worker(self, key: tuple[str, str]) -> None:
+        task = self._turn_queue_tasks.get(key)
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._drain_turn_queue(key))
+        self._turn_queue_tasks[key] = task
+
+    async def _enqueue_turn_message(
+        self,
+        message,
+        *,
+        campaign_id: str,
+        content: str,
+    ) -> None:
+        key = self._queue_key(campaign_id, message.author.id)
+        queue = self._get_turn_queue(key)
+        await queue.put(
+            {
+                "message": message,
+                "campaign_id": str(campaign_id),
+                "content": str(content or "").strip(),
+            }
+        )
+        self._ensure_turn_queue_worker(key)
+        await self._add_queue_reaction(message)
+
+    async def _claim_turn_for_message(
+        self,
+        message,
+        campaign_id: str,
+        *,
+        retry_if_busy: bool,
+    ) -> tuple[str | None, str | None]:
+        while True:
+            claimed_campaign_id, error_text = await ZorkEmulator.begin_turn_for_campaign(
+                message,
+                campaign_id,
+            )
+            if error_text is not None:
+                return None, error_text
+            if claimed_campaign_id is not None:
+                return claimed_campaign_id, None
+            if not retry_if_busy:
+                return None, None
+            await asyncio.sleep(0.5)
+
+    async def _process_campaign_message(
+        self,
+        message,
+        *,
+        campaign_id: str,
+        content: str,
+        retry_if_busy: bool = False,
+    ) -> None:
+        app = AppConfig.get_flask()
+        if app is None:
+            return
+
+        claimed_campaign_id, error_text = await self._claim_turn_for_message(
+            message,
+            campaign_id,
+            retry_if_busy=retry_if_busy,
+        )
+        if error_text is not None:
+            await self._send_message(
+                message.channel,
+                error_text,
+                campaign_id=campaign_id,
+            )
+            return
+        if claimed_campaign_id is None:
+            return
+
+        # Setup mode intercept — route to setup handler instead of play_action.
+        with app.app_context():
+            _setup_campaign = ZorkEmulator.query_campaign(claimed_campaign_id)
+            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
+                _setup_campaign
+            )
+        if _in_setup:
+            reaction_added = await ZorkEmulator._add_processing_reaction(message)
+            try:
+                with app.app_context():
+                    _setup_campaign = ZorkEmulator.query_campaign(claimed_campaign_id)
+                    response = await ZorkEmulator.handle_setup_message(
+                        message, content, _setup_campaign, command_prefix=self._prefix()
+                    )
+                    if response:
+                        await self._send_large_message(
+                            message,
+                            response,
+                            campaign_id=claimed_campaign_id,
+                        )
+            finally:
+                if reaction_added:
+                    await ZorkEmulator._remove_processing_reaction(message)
+                ZorkEmulator.end_turn(claimed_campaign_id, message.author.id)
+            return
+
+        shortcut_kind = self._bare_shortcut_kind(content)
+        if shortcut_kind is not None:
+            handled = await self._send_bare_shortcut_reply(
+                message,
+                shortcut_kind=shortcut_kind,
+                campaign_id=claimed_campaign_id,
+            )
+            if handled:
+                ZorkEmulator.end_turn(claimed_campaign_id, message.author.id)
+                return
+
+        reaction_added = await ZorkEmulator._add_processing_reaction(message)
+        try:
+            narration = await ZorkEmulator.play_action(
+                message,
+                content,
+                command_prefix=self._prefix(),
+                campaign_id=claimed_campaign_id,
+                manage_claim=False,
+            )
+            if narration is None:
+                return
+            notices = ZorkEmulator.pop_turn_ephemeral_notices(
+                claimed_campaign_id, message.author.id
+            )
+            msg = await self._send_action_reply(
+                message, narration, campaign_id=claimed_campaign_id, notices=notices
+            )
+            if msg is not None:
+                with app.app_context():
+                    ZorkEmulator.record_turn_message_ids(
+                        claimed_campaign_id, message.id, msg.id
+                    )
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(message)
+            ZorkEmulator.end_turn(claimed_campaign_id, message.author.id)
+
+    async def _drain_turn_queue(self, key: tuple[str, str]) -> None:
+        queue = self._turn_queues.get(key)
+        if queue is None:
+            return
+        try:
+            while True:
+                item = await queue.get()
+                try:
+                    await self._process_campaign_message(
+                        item["message"],
+                        campaign_id=item["campaign_id"],
+                        content=item["content"],
+                        retry_if_busy=True,
+                    )
+                finally:
+                    queue.task_done()
+                if queue.empty():
+                    break
+        finally:
+            task = self._turn_queue_tasks.get(key)
+            current = asyncio.current_task()
+            if queue.empty():
+                self._turn_queues.pop(key, None)
+                if task is current:
+                    self._turn_queue_tasks.pop(key, None)
+            else:
+                self._turn_queues[key] = queue
+                if task is current:
+                    self._turn_queue_tasks.pop(key, None)
+                self._ensure_turn_queue_worker(key)
+            if task is current and key in self._turn_queue_tasks and self._turn_queue_tasks[key] is current:
+                self._turn_queue_tasks.pop(key, None)
 
     def _ensure_guild(self, ctx) -> bool:
         if ctx.guild is None:
@@ -1243,25 +1442,17 @@ class Zork(commands.Cog):
                         campaign_id=binding["campaign_id"],
                     )
                     return
-            campaign_id, error_text = await ZorkEmulator.begin_turn_for_campaign(
-                message,
-                binding["campaign_id"],
-            )
-            if error_text is not None:
-                await self._send_message(
-                    message.channel,
-                    error_text,
-                    campaign_id=binding["campaign_id"],
-                )
-                return
-            if campaign_id is None:
-                return
+            campaign_id = str(binding["campaign_id"])
         else:
             with app.app_context():
                 if not ZorkEmulator.is_channel_enabled(
                     message.guild.id, message.channel.id
                 ):
                     return
+            inferred_campaign_id = self._infer_campaign_id(message)
+            if inferred_campaign_id is None:
+                return
+            campaign_id = str(inferred_campaign_id)
 
         # Rewind detection — must happen before begin_turn.
         content_stripped = message.content.strip().lower()
@@ -1275,74 +1466,20 @@ class Zork(commands.Cog):
             await self._handle_rewind(message, app)
             return
 
-        if campaign_id is None:
-            campaign_id, error_text = await ZorkEmulator.begin_turn(
-                message, command_prefix=self._prefix()
+        queued_content = self._strip_queue_prefix(content)
+        if queued_content is not None:
+            await self._enqueue_turn_message(
+                message,
+                campaign_id=campaign_id,
+                content=queued_content,
             )
-            if error_text is not None:
-                return
-            if campaign_id is None:
-                return
-
-        # Setup mode intercept — route to setup handler instead of play_action.
-        with app.app_context():
-            _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
-            _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
-                _setup_campaign
-            )
-        if _in_setup:
-            reaction_added = await ZorkEmulator._add_processing_reaction(message)
-            try:
-                with app.app_context():
-                    _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
-                    response = await ZorkEmulator.handle_setup_message(
-                        message, content, _setup_campaign, command_prefix=self._prefix()
-                    )
-                    if response:
-                        await self._send_large_message(message, response, campaign_id=campaign_id)
-            finally:
-                if reaction_added:
-                    await ZorkEmulator._remove_processing_reaction(message)
-                ZorkEmulator.end_turn(campaign_id, message.author.id)
             return
 
-        shortcut_kind = self._bare_shortcut_kind(content)
-        if shortcut_kind is not None:
-            handled = await self._send_bare_shortcut_reply(
-                message,
-                shortcut_kind=shortcut_kind,
-                campaign_id=campaign_id,
-            )
-            if handled:
-                ZorkEmulator.end_turn(campaign_id, message.author.id)
-                return
-
-        reaction_added = await ZorkEmulator._add_processing_reaction(message)
-        try:
-            narration = await ZorkEmulator.play_action(
-                message,
-                content,
-                command_prefix=self._prefix(),
-                campaign_id=campaign_id,
-                manage_claim=False,
-            )
-            if narration is None:
-                return
-            notices = ZorkEmulator.pop_turn_ephemeral_notices(
-                campaign_id, message.author.id
-            )
-            msg = await self._send_action_reply(
-                message, narration, campaign_id=campaign_id, notices=notices
-            )
-            if msg is not None:
-                with app.app_context():
-                    ZorkEmulator.record_turn_message_ids(
-                        campaign_id, message.id, msg.id
-                    )
-        finally:
-            if reaction_added:
-                await ZorkEmulator._remove_processing_reaction(message)
-            ZorkEmulator.end_turn(campaign_id, message.author.id)
+        await self._process_campaign_message(
+            message,
+            campaign_id=campaign_id,
+            content=content,
+        )
 
     @commands.group(name="zork", invoke_without_command=True)
     async def zork(self, ctx, *, action: str = None):
