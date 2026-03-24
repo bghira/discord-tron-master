@@ -6,6 +6,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import datetime
 import inspect
 import json
@@ -18,7 +19,10 @@ from typing import Any, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
-_ZORK_LOG_STATE = threading.local()
+_ZORK_LOG_PATH: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "zork_log_path",
+    default=None,
+)
 _ZORK_LOG_RETENTION = 100
 
 
@@ -86,8 +90,8 @@ def _zork_log_begin(
     channel_id: object = None,
     user_id: object = None,
     is_dm: bool = False,
-) -> Optional[str]:
-    """Push a contextual log scope; returns a token for _zork_log_end."""
+) -> contextvars.Token:
+    """Push a contextual log scope; returns a contextvar token for _zork_log_end."""
     dir_path = _zork_log_context_dir(
         guild_id=None if is_dm else guild_id,
         channel_id=None if is_dm else channel_id,
@@ -100,23 +104,18 @@ def _zork_log_begin(
         latest_name = f"latest-{_zork_log_component(user_id, 'user')}.log"
     log_path = os.path.join(dir_path, latest_name)
     _zork_log_rotate(log_path)
-    prev = getattr(_ZORK_LOG_STATE, "path", None)
-    _ZORK_LOG_STATE.path = log_path
-    return prev
+    return _ZORK_LOG_PATH.set(log_path)
 
 
-def _zork_log_end(token: Optional[str]) -> None:
+def _zork_log_end(token: contextvars.Token) -> None:
     """Pop the contextual log scope."""
-    if token:
-        _ZORK_LOG_STATE.path = token
-    elif hasattr(_ZORK_LOG_STATE, "path"):
-        delattr(_ZORK_LOG_STATE, "path")
+    _ZORK_LOG_PATH.reset(token)
 
 
 def _zork_log(section: str, body: str = "") -> None:
     """Append a timestamped section to the active log file."""
     try:
-        log_path = getattr(_ZORK_LOG_STATE, "path", None)
+        log_path = _ZORK_LOG_PATH.get()
         if log_path is None:
             log_dir = os.path.join(_ZORK_LOG_ROOT, "global")
             os.makedirs(log_dir, exist_ok=True)
