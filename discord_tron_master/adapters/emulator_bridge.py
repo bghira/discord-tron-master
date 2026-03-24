@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 import os
+import sqlite3
 import threading
 from typing import Any, Optional, Tuple
 
@@ -252,8 +253,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             max_conflict_retries=2,
         )
 
-        # Point TGE's SourceMaterialMemory at ZorkMemory's SQLite database
-        # so source material (lore books) ingested pre-migration are visible.
+        # Point TGE's SourceMaterialMemory at DTM's shared SQLite database.
         from text_game_engine.core.source_material_memory import SourceMaterialMemory
         from discord_tron_master.classes import zork_memory as _zm_mod
 
@@ -261,6 +261,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             db_path=_zm_mod._DB_PATH,
             campaign_id_translator=ZorkMemoryAdapter._int_campaign_id,
         )
+        cls._migrate_legacy_memory_ids()
 
         cls._emu = TGEZorkEmulator(
             game_engine=game_engine,
@@ -630,6 +631,138 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         if not label:
             return body
         return f"-# world time: {label}\n{body}"
+
+    @classmethod
+    def get_latest_unread_sms_thread_for_actor(cls, campaign_id, actor_id, *, limit=20):
+        cls._ensure_init()
+        campaign = cls.query_campaign(campaign_id)
+        if campaign is None:
+            return None, None, []
+        player = cls._emu.get_or_create_player(str(campaign.id), str(actor_id))
+        player_state = cls._emu.get_player_state(player)
+        campaign_state = cls._emu.get_campaign_state(campaign)
+        contact_roster = cls._emu._sms_contact_roster(campaign)
+        aliases = cls._emu._sms_player_aliases(actor_id=actor_id, player_state=player_state)
+        actor_key = cls._emu._sms_actor_key(actor_id)
+        read_state = cls._emu._sms_read_state_from_campaign_state(campaign_state)
+        actor_row = read_state.get(actor_key) or {}
+        read_threads = actor_row.get("threads")
+        if not isinstance(read_threads, dict):
+            read_threads = {}
+        threads = cls._emu._sms_threads_from_state(campaign_state)
+
+        best_thread = None
+        best_label = None
+        best_marker = -1
+        for thread_key, row in threads.items():
+            if not isinstance(row, dict):
+                continue
+            visible_messages = cls._emu._sms_visible_messages_for_viewer(
+                row,
+                viewer_actor_id=actor_id,
+                player_state=player_state,
+            )
+            if not visible_messages:
+                continue
+            seen_marker = cls._emu._coerce_non_negative_int(
+                read_threads.get(thread_key, 0), default=0
+            )
+            latest_unread_marker = 0
+            for msg in visible_messages:
+                if not isinstance(msg, dict):
+                    continue
+                to_norm = cls._emu._sms_normalize_thread_key(msg.get("to"))
+                if not to_norm or to_norm not in aliases:
+                    continue
+                seq = cls._emu._coerce_non_negative_int(msg.get("seq", 0), default=0)
+                turn_id = cls._emu._coerce_non_negative_int(msg.get("turn_id", 0), default=0)
+                marker = seq if seq > 0 else turn_id
+                if marker > seen_marker:
+                    latest_unread_marker = max(latest_unread_marker, marker)
+            if latest_unread_marker <= 0:
+                continue
+            resolved = cls._emu._sms_resolved_contact(
+                thread_key,
+                row,
+                viewer_actor_id=actor_id,
+                player_state=player_state,
+                contact_roster=contact_roster,
+                visible_messages=visible_messages,
+            )
+            resolved_thread = str(resolved.get("thread") or thread_key).strip() or thread_key
+            resolved_label = str(resolved.get("label") or row.get("label") or thread_key).strip() or resolved_thread
+            if latest_unread_marker > best_marker:
+                best_marker = latest_unread_marker
+                best_thread = resolved_thread
+                best_label = resolved_label
+        if not best_thread:
+            return None, None, []
+        return cls._emu.read_sms_thread(
+            campaign.id,
+            best_thread,
+            limit=limit,
+            viewer_actor_id=actor_id,
+        )
+
+    @classmethod
+    def mark_unread_sms_read_for_actor(cls, campaign_id, actor_id):
+        cls._ensure_init()
+        with cls._session_factory() as session:
+            campaign = session.get(Campaign, str(campaign_id))
+            if campaign is None:
+                return 0
+            player = cls._emu.get_or_create_player(str(campaign.id), str(actor_id))
+            player_state = cls._emu.get_player_state(player)
+            campaign_state = cls._emu.get_campaign_state(campaign)
+            aliases = cls._emu._sms_player_aliases(actor_id=actor_id, player_state=player_state)
+            actor_key = cls._emu._sms_actor_key(actor_id)
+            read_state = cls._emu._sms_read_state_from_campaign_state(campaign_state)
+            actor_row = read_state.get(actor_key) or {}
+            read_threads = actor_row.get("threads")
+            if not isinstance(read_threads, dict):
+                read_threads = {}
+            threads = cls._emu._sms_threads_from_state(campaign_state)
+            thread_markers = {}
+            for thread_key, row in threads.items():
+                if not isinstance(row, dict):
+                    continue
+                messages = cls._emu._sms_visible_messages_for_viewer(
+                    row,
+                    viewer_actor_id=actor_id,
+                    player_state=player_state,
+                )
+                if not messages:
+                    continue
+                seen_marker = cls._emu._coerce_non_negative_int(
+                    read_threads.get(thread_key, 0), default=0
+                )
+                latest_unread_marker = 0
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    to_norm = cls._emu._sms_normalize_thread_key(msg.get("to"))
+                    if not to_norm or to_norm not in aliases:
+                        continue
+                    seq = cls._emu._coerce_non_negative_int(msg.get("seq", 0), default=0)
+                    turn_id = cls._emu._coerce_non_negative_int(msg.get("turn_id", 0), default=0)
+                    marker = seq if seq > 0 else turn_id
+                    if marker > seen_marker:
+                        latest_unread_marker = max(latest_unread_marker, marker)
+                if latest_unread_marker > 0:
+                    thread_markers[thread_key] = latest_unread_marker
+            if not thread_markers:
+                return 0
+            changed = cls._emu._sms_mark_threads_read(
+                campaign_state,
+                actor_id=actor_id,
+                player_state=player_state,
+                thread_markers=thread_markers,
+            )
+            if not changed:
+                return 0
+            campaign.state_json = cls._emu._dump_json(campaign_state)
+            session.commit()
+            return len(thread_markers)
 
     # -- Player Management -----------------------------------------------------
 
@@ -1246,11 +1379,6 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
 
         Returns a TGE Campaign detached from session (expire_on_commit=False),
         so callers can read/write attributes freely.
-
-        Supports both UUID string IDs (new TGE) and legacy integer IDs
-        (from old DM bindings or cached references). Legacy IDs are found
-        via the ``_legacy_campaign_id`` marker stored in state_json during
-        the data migration.
         """
         if campaign_id is None:
             return None
@@ -1258,26 +1386,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         from text_game_engine.persistence.sqlalchemy.models import Campaign
         cid = str(campaign_id)
         with cls._session_factory() as session:
-            campaign = session.get(Campaign, cid)
-            if campaign is not None:
-                return campaign
-            # Fallback: the caller may have an old integer campaign ID
-            # (e.g. from a saved DM binding). Search state_json for the
-            # legacy marker planted by the data migration.
-            try:
-                legacy_int = int(cid)
-            except (TypeError, ValueError):
-                return None
-            # Match precisely: the legacy_id is always followed by } or ,
-            # to avoid false positives (e.g. id=1 matching id=10).
-            from sqlalchemy import or_
-            result = session.query(Campaign).filter(
-                or_(
-                    Campaign.state_json.contains(f'"_legacy_campaign_id":{legacy_int}}}'),
-                    Campaign.state_json.contains(f'"_legacy_campaign_id":{legacy_int},'),
-                )
-            ).first()
-            return result
+            return session.get(Campaign, cid)
 
     @classmethod
     def query_campaign_for_channel(cls, channel_session):
@@ -1383,63 +1492,79 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         from datetime import datetime, timezone
         return datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # -- State preservation helper -----------------------------------------------
+    @classmethod
+    def memory_campaign_id(cls, campaign_id_or_obj) -> int:
+        from discord_tron_master.adapters.tge_ports import ZorkMemoryAdapter
+
+        raw = getattr(campaign_id_or_obj, "id", campaign_id_or_obj)
+        return ZorkMemoryAdapter._int_campaign_id(str(raw))
 
     @classmethod
-    def _preserve_legacy_state_keys(cls, campaign) -> str:
-        """Return a minimal state_json that preserves internal migration keys.
+    def _migrate_legacy_memory_ids(cls) -> None:
+        from text_game_engine.persistence.sqlalchemy.models import Campaign
+        from discord_tron_master.classes import zork_memory as _zm_mod
 
-        Called when resetting a campaign's state — ensures ``_legacy_campaign_id``
-        survives the wipe so ZorkMemory lookups keep working.
-        """
-        import json as _json
-        preserved = {}
+        db_path = getattr(_zm_mod, "_DB_PATH", "")
+        if not db_path or not os.path.exists(db_path):
+            return
+
+        mappings: list[tuple[int, int, str]] = []
+        with cls._session_factory() as session:
+            for campaign in session.query(Campaign).all():
+                try:
+                    state = json.loads(getattr(campaign, "state_json", "{}") or "{}")
+                except Exception:
+                    continue
+                if not isinstance(state, dict):
+                    continue
+                legacy = state.get("_legacy_campaign_id")
+                try:
+                    old_id = int(legacy)
+                except (TypeError, ValueError):
+                    continue
+                mappings.append((old_id, cls.memory_campaign_id(campaign.id), str(campaign.id)))
+
+        if not mappings:
+            return
+
+        migrated_campaign_ids: set[str] = set()
+        conn = sqlite3.connect(db_path)
         try:
-            old_state = _json.loads(getattr(campaign, "state_json", "{}") or "{}")
-        except Exception:
-            old_state = {}
-        if "_legacy_campaign_id" in old_state:
-            preserved["_legacy_campaign_id"] = old_state["_legacy_campaign_id"]
-        return _json.dumps(preserved) if preserved else "{}"
+            for old_id, new_id, campaign_id in mappings:
+                if old_id != new_id:
+                    for table in (
+                        "turn_embeddings",
+                        "manual_memories",
+                        "source_material_chunks",
+                        "source_material_digests",
+                        "turn_embedding_visible_players",
+                        "turn_embedding_aware_npcs",
+                    ):
+                        conn.execute(
+                            f"UPDATE {table} SET campaign_id = ? WHERE campaign_id = ?",
+                            (new_id, old_id),
+                        )
+                migrated_campaign_ids.add(campaign_id)
+            conn.commit()
+        finally:
+            conn.close()
 
-    # -- ZorkMemory integer campaign ID resolver --------------------------------
-
-    @classmethod
-    def legacy_memory_campaign_id(cls, campaign_id_or_obj) -> int:
-        """Convert a TGE campaign UUID (or Campaign object) to the legacy
-        integer campaign ID used by ZorkMemory's SQLite database.
-
-        Accepts:
-          - A Campaign model object (reads ``state_json._legacy_campaign_id``)
-          - A UUID string (looks up the Campaign, then extracts the legacy ID)
-          - An integer or int-string (returned as-is for backwards compat)
-        """
-        import json as _json
-
-        raw = campaign_id_or_obj
-        # If given a Campaign object, extract directly
-        if hasattr(raw, "state_json"):
-            state = _json.loads(getattr(raw, "state_json", "{}") or "{}")
-            legacy = state.get("_legacy_campaign_id")
-            if legacy is not None:
-                return int(legacy)
-            raw = getattr(raw, "id", raw)
-
-        cid = str(raw)
-        # Fast path: already an integer string
-        try:
-            return int(cid)
-        except (TypeError, ValueError):
-            pass
-
-        # UUID path: look up the campaign
-        campaign = cls.query_campaign(cid)
-        if campaign is not None:
-            state = _json.loads(getattr(campaign, "state_json", "{}") or "{}")
-            legacy = state.get("_legacy_campaign_id")
-            if legacy is not None:
-                return int(legacy)
-        raise ValueError(f"Cannot resolve legacy memory campaign ID for {cid!r}")
+        with cls._session_factory() as session:
+            changed = False
+            for campaign in session.query(Campaign).filter(
+                Campaign.id.in_(sorted(migrated_campaign_ids))
+            ).all():
+                try:
+                    state = json.loads(getattr(campaign, "state_json", "{}") or "{}")
+                except Exception:
+                    continue
+                if not isinstance(state, dict) or "_legacy_campaign_id" not in state:
+                    continue
+                state.pop("_legacy_campaign_id", None)
+                campaign.state_json = json.dumps(state, separators=(",", ":"))
+                changed = True
+            if changed:
+                session.commit()
 
     # -- Fallback for any method not explicitly bridged ------------------------
 

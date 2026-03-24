@@ -35,6 +35,7 @@ class _WorldTimeSendProxy:
 
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
+    SMS_NOTICE_REACTIONS = ("🧵", "✉️")
 
     def __init__(self, bot):
         self.bot = bot
@@ -284,6 +285,36 @@ class Zork(commands.Cog):
             return str(text or "").strip()
         return ZorkEmulator.prepend_world_time_header(text, resolved_campaign_id)
 
+    @staticmethod
+    def _looks_like_sms_notice(text: str) -> bool:
+        body = str(text or "").strip().lower()
+        if body.startswith("-# world time:"):
+            body = "\n".join(body.splitlines()[1:]).strip()
+        return "unread sms" in body or (
+            "unread" in body and any(token in body for token in ("sms", "text", "message"))
+        )
+
+    async def _ensure_sms_notice_reactions(self, message, text: str) -> None:
+        if message is None or not self._looks_like_sms_notice(text):
+            return
+        existing = {
+            str(reaction.emoji): reaction
+            for reaction in getattr(message, "reactions", []) or []
+        }
+        for emoji in self.SMS_NOTICE_REACTIONS:
+            reaction = existing.get(emoji)
+            if reaction is not None and getattr(reaction, "me", False):
+                continue
+            try:
+                await message.add_reaction(emoji)
+            except Exception:
+                logger.debug(
+                    "Failed adding SMS notice reaction %s on %s",
+                    emoji,
+                    getattr(message, "id", None),
+                    exc_info=True,
+                )
+
     def _wrap_send(self, target, *, campaign_id: str | int | None = None):
         resolved_campaign_id = campaign_id
         if resolved_campaign_id is None:
@@ -303,12 +334,14 @@ class Zork(commands.Cog):
         delete_delay=None,
     ):
         payload = self._with_world_time(text, campaign_id, ctx_like=ctx_like)
-        return await DiscordBot.send_large_message(
+        msg = await DiscordBot.send_large_message(
             ctx_like,
             payload,
             max_chars=max_chars,
             delete_delay=delete_delay,
         )
+        await self._ensure_sms_notice_reactions(msg, payload)
+        return msg
 
     async def _send_message(
         self,
@@ -319,7 +352,9 @@ class Zork(commands.Cog):
         **kwargs,
     ):
         payload = self._with_world_time(text, campaign_id, ctx_like=ctx_like)
-        return await ctx_like.send(payload, **kwargs)
+        msg = await ctx_like.send(payload, **kwargs)
+        await self._ensure_sms_notice_reactions(msg, payload)
+        return msg
 
     async def _is_image_admin(self, ctx) -> bool:
         user_roles = getattr(ctx.author, "roles", [])
@@ -3489,7 +3524,7 @@ class Zork(commands.Cog):
                 )
                 ZorkEmulator.delete_campaign_data(new_campaign.id)
                 new_campaign.summary = ""
-                new_campaign.state_json = ZorkEmulator._preserve_legacy_state_keys(new_campaign)
+                new_campaign.state_json = "{}"
                 new_campaign.last_narration = None
                 new_campaign.updated_at = ZorkEmulator.utcnow()
                 channel = ZorkEmulator.bind_channel_campaign(
@@ -3498,30 +3533,24 @@ class Zork(commands.Cog):
                     enabled=True,
                 )
                 ZorkEmulator.commit_model(new_campaign)
-                try:
-                    _mcid = ZorkEmulator.legacy_memory_campaign_id(new_campaign)
-                    ZorkMemory.delete_campaign_embeddings(_mcid)
-                except (ValueError, TypeError):
-                    pass
+                ZorkMemory.delete_campaign_embeddings(
+                    ZorkEmulator.memory_campaign_id(new_campaign)
+                )
                 await ctx.send(
                     f"Channel reset to fresh campaign `{new_campaign.name}` (shared campaign left untouched)."
                 )
                 return
 
-            try:
-                _mcid = ZorkEmulator.legacy_memory_campaign_id(campaign)
-            except (ValueError, TypeError):
-                _mcid = None
+            _mcid = ZorkEmulator.memory_campaign_id(campaign)
             ZorkEmulator.delete_campaign_data(campaign.id)
             campaign.summary = ""
-            campaign.state_json = ZorkEmulator._preserve_legacy_state_keys(campaign)
+            campaign.state_json = "{}"
             campaign.last_narration = None
             campaign.updated_at = ZorkEmulator.utcnow()
             channel.enabled = True
             channel.updated_at = ZorkEmulator.utcnow()
             ZorkEmulator.commit_models(campaign, channel)
-            if _mcid is not None:
-                ZorkMemory.delete_campaign_embeddings(_mcid)
+            ZorkMemory.delete_campaign_embeddings(_mcid)
             ZorkEmulator.cancel_pending_timer(campaign.id)
             ZorkEmulator.cancel_pending_sms_deliveries(campaign.id)
             await ctx.send(f"Reset campaign `{campaign.name}` for this channel.")

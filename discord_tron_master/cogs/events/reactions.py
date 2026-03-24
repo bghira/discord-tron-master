@@ -19,6 +19,7 @@ guild_config = Guilds()
 
 class Reactions(commands.Cog):
     ZORK_TURN_REACTIONS = ("ℹ️", "⏪", "❌")
+    SMS_NOTICE_REACTIONS = ("🧵", "✉️")
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -65,6 +66,87 @@ class Reactions(commands.Cog):
                 await message.add_reaction(emoji)
             except Exception:
                 logging.debug("Failed restoring Zork turn reaction %s on %s", emoji, getattr(message, "id", None), exc_info=True)
+
+    @staticmethod
+    def _looks_like_sms_notice_message(message) -> bool:
+        content = str(getattr(message, "content", "") or "").strip().lower()
+        if content.startswith("-# world time:"):
+            content = "\n".join(content.splitlines()[1:]).strip()
+        return "unread sms" in content or (
+            "unread" in content and any(token in content for token in ("sms", "text", "message"))
+        )
+
+    async def _resolve_sms_notice_campaign_id(self, message, user) -> str | None:
+        app = AppConfig.get_flask()
+        if app is None:
+            return None
+        with app.app_context():
+            if message.guild is not None:
+                channel_rec = ZorkEmulator.get_or_create_channel(
+                    message.guild.id,
+                    message.channel.id,
+                )
+                campaign_id = getattr(channel_rec, "campaign_id", None)
+                return str(campaign_id) if campaign_id else None
+            binding = self.config.get_zork_private_dm(user.id)
+            if isinstance(binding, dict) and binding.get("enabled") and binding.get("campaign_id"):
+                return str(binding.get("campaign_id"))
+        return None
+
+    @staticmethod
+    def _render_sms_thread_text(label: str, messages) -> str:
+        lines = [f"__**SMS Thread: {label or 'Unknown'}**__"]
+        for row in messages or []:
+            if not isinstance(row, dict):
+                continue
+            day = int(row.get("day", 0) or 0)
+            hour = int(row.get("hour", 0) or 0)
+            minute = int(row.get("minute", 0) or 0)
+            sender = str(row.get("from") or "").strip() or "Unknown"
+            text = str(row.get("message") or "").strip()
+            if not text:
+                continue
+            lines.append(f"- [Day {day} {hour:02d}:{minute:02d}] {sender}: {text}")
+        return "\n".join(lines)
+
+    async def _handle_sms_notice_reaction(self, message, emoji: str, user) -> bool:
+        emoji = str(emoji or "")
+        if emoji not in self.SMS_NOTICE_REACTIONS:
+            return False
+        if message is None or message.author != self.bot.user or user is None or getattr(user, "bot", False):
+            return False
+        if not self._looks_like_sms_notice_message(message):
+            return False
+        campaign_id = await self._resolve_sms_notice_campaign_id(message, user)
+        if not campaign_id:
+            return False
+
+        if emoji == "🧵":
+            thread_key, label, messages = ZorkEmulator.get_latest_unread_sms_thread_for_actor(
+                campaign_id,
+                user.id,
+                limit=20,
+            )
+            if not thread_key or not messages:
+                text = ZorkEmulator.prepend_world_time_header(
+                    "No unread SMS threads.",
+                    campaign_id,
+                )
+                await DiscordBot.send_large_message(message, f"{user.mention}\n{text}")
+                return True
+            rendered = self._render_sms_thread_text(label or thread_key, messages)
+            rendered = ZorkEmulator.prepend_world_time_header(rendered, campaign_id)
+            await DiscordBot.send_large_message(message, f"{user.mention}\n{rendered}")
+            return True
+
+        marked = ZorkEmulator.mark_unread_sms_read_for_actor(campaign_id, user.id)
+        if marked > 0:
+            text = f"Marked {marked} unread SMS thread(s) as read."
+        else:
+            text = "No unread SMS to mark as read."
+        text = ZorkEmulator.prepend_world_time_header(text, campaign_id)
+        await DiscordBot.send_large_message(message, f"{user.mention}\n{text}")
+        return True
 
     async def _bootstrap_recent_zork_turn_messages(self):
         app = AppConfig.get_flask()
@@ -247,7 +329,7 @@ class Reactions(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
         emoji = str(getattr(payload, "emoji", "") or "")
-        if emoji not in {"ℹ️", "ℹ", "⏪", "❌"}:
+        if emoji not in {"ℹ️", "ℹ", "⏪", "❌", "🧵", "✉️"}:
             return
         channel = await self._fetch_channel_for_payload(payload)
         if channel is None:
@@ -262,6 +344,8 @@ class Reactions(commands.Cog):
         guild = getattr(message, "guild", None)
         user = await self._fetch_discord_user(payload, guild=guild)
         if user is None:
+            return
+        if await self._handle_sms_notice_reaction(message, emoji, user):
             return
         await self._handle_zork_turn_reaction(message, emoji, user)
 
@@ -283,7 +367,13 @@ class Reactions(commands.Cog):
         if reaction.message.author != self.bot.user:
             logging.debug(f"Ignoring reaction on message not from me.")
             return
-        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌"}:
+        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌", "🧵", "✉️"}:
+            if await self._handle_sms_notice_reaction(
+                reaction.message,
+                str(reaction.emoji),
+                user,
+            ):
+                return
             return
         image_urls = []
         img = None

@@ -29,12 +29,6 @@ class API:
         from discord_tron_master.models.conversation import Conversations
         from discord_tron_master.models.transformers import Transformers
         from discord_tron_master.models.schedulers import Schedulers
-        from discord_tron_master.models.zork import (
-            ZorkCampaign,
-            ZorkChannel,
-            ZorkPlayer,
-            ZorkTurn,
-        )
 
         self.migrate = Migrate(self.app, self.db)
         self.register_routes()

@@ -8,6 +8,7 @@ QueueManager, IMDB scraper) behind the Protocol interface that TGE expects.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from types import SimpleNamespace
@@ -333,38 +334,30 @@ class MediaGenerationAdapter:
 class ZorkMemoryAdapter:
     """Wraps DTM's ``ZorkMemory`` class behind ``MemorySearchPort``.
 
-    Handles the ``campaign_id: str`` ↔ ``int`` translation since
-    ZorkMemory uses integer campaign IDs internally.  TGE campaign IDs
-    are UUID strings; the legacy integer ID is stored in the campaign's
-    ``state_json`` under ``_legacy_campaign_id`` by the data migration.
+    ZorkMemory uses integer campaign IDs internally, so TGE UUID campaign IDs
+    are normalized into a stable 63-bit integer namespace.
     """
 
-    _legacy_id_cache: Dict[str, int] = {}
+    _campaign_id_cache: Dict[str, int] = {}
 
     @classmethod
     def _int_campaign_id(cls, campaign_id: str) -> int:
-        # Fast path: already an integer string (pre-migration callers)
-        try:
-            return int(campaign_id)
-        except (TypeError, ValueError):
-            pass
-        # UUID path: look up the legacy integer ID from the campaign state.
-        cached = cls._legacy_id_cache.get(campaign_id)
+        text = str(campaign_id or "").strip()
+        if not text:
+            raise ValueError("campaign_id is required")
+        cached = cls._campaign_id_cache.get(text)
         if cached is not None:
             return cached
-        try:
-            from discord_tron_master.adapters.emulator_bridge import EmulatorBridge
-            campaign = EmulatorBridge.query_campaign(campaign_id)
-            if campaign is not None:
-                import json as _json
-                state = _json.loads(getattr(campaign, "state_json", "{}") or "{}")
-                legacy = state.get("_legacy_campaign_id")
-                if legacy is not None:
-                    cls._legacy_id_cache[campaign_id] = int(legacy)
-                    return int(legacy)
-        except Exception:
-            pass
-        raise ValueError(f"Cannot resolve integer campaign ID for {campaign_id!r}")
+        digest = hashlib.blake2b(
+            text.encode("utf-8"),
+            digest_size=8,
+            person=b"dtm-zork",
+        ).digest()
+        value = int.from_bytes(digest, "big") & ((1 << 63) - 1)
+        if value == 0:
+            value = 1
+        cls._campaign_id_cache[text] = value
+        return value
 
     @classmethod
     def _maybe_int_campaign_id(cls, campaign_id: str) -> int | None:
