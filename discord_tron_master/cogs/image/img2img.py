@@ -25,6 +25,8 @@ from discord_tron_master.classes.openai.text import GPT
 
 # Commands used for Stable Diffusion image gen.
 class Img2img(commands.Cog):
+    QUEUE_PREFIX = "[queue]"
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.config = AppConfig()
@@ -37,6 +39,80 @@ class Img2img(commands.Cog):
         if isinstance(message.channel, discord.Thread):
             return message.author.id
         return message.channel.id
+
+    def _strip_leading_bot_mention(self, text: str) -> str:
+        if not self.bot or not self.bot.user:
+            return text
+        cleaned = str(text or "").strip()
+        mention_tokens = (
+            f"<@{self.bot.user.id}>",
+            f"<@!{self.bot.user.id}>",
+        )
+        changed = True
+        while changed:
+            changed = False
+            for token in mention_tokens:
+                if cleaned.startswith(token):
+                    cleaned = cleaned[len(token):].strip()
+                    changed = True
+        return cleaned
+
+    def _strip_queue_prefix(self, text: str) -> str | None:
+        cleaned = self._strip_leading_bot_mention(text)
+        if not cleaned.lower().startswith(self.QUEUE_PREFIX):
+            return None
+        stripped = cleaned[len(self.QUEUE_PREFIX):].strip()
+        stripped = self._strip_leading_bot_mention(stripped)
+        return stripped
+
+    async def _handle_queued_message(self, message):
+        queue_prompt = self._strip_queue_prefix(message.content)
+        if queue_prompt is None:
+            return False
+        message.content = queue_prompt
+        if message.content.startswith("!") or message.content.startswith("+"):
+            return True
+
+        if message.attachments:
+            attachment = message.attachments[0]
+            if attachment.content_type and attachment.content_type.startswith("image/"):
+                try:
+                    await self._handle_image_attachment(message, attachment)
+                except Exception as e:
+                    await message.channel.send(
+                        f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                    )
+                return True
+
+        import re
+
+        url_list = re.findall(
+            r"(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?", message.content
+        )
+        if len(url_list) > 0:
+            message.content = re.sub(r"(https?://[^\s]+)", "", message.content).strip()
+            for url in url_list:
+                test_url = url.split("?")[0]
+                if (
+                    test_url.endswith(".png")
+                    or test_url.endswith(".jpg")
+                    or test_url.endswith(".jpeg")
+                    or test_url.endswith(".webp")
+                ):
+                    try:
+                        await self._handle_image_attachment(message, url)
+                    except Exception as e:
+                        await message.channel.send(
+                            f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                        )
+                    return True
+
+        prompt = message.content.strip("*").strip()
+        if prompt:
+            generator = self.bot.get_cog("Generate")
+            if generator is not None:
+                await generator.generate(message, prompt=prompt)
+        return True
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -59,6 +135,9 @@ class Img2img(commands.Cog):
             )
             await self._clear_previous_simpletuner_messages(message)
 
+            return
+
+        if await self._handle_queued_message(message):
             return
 
         if message.guild is not None:
