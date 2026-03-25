@@ -784,6 +784,32 @@ class Zork(commands.Cog):
         return text
 
     @classmethod
+    def _should_format_scene_output(cls, narration: str) -> bool:
+        text = str(narration or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        if "timed event in progress" in lowered:
+            return False
+        if lowered.startswith("another turn is already resolving"):
+            return False
+        return True
+
+    @classmethod
+    def _extract_status_prefix_lines(cls, narration: str) -> list[str]:
+        text = str(narration or "").strip()
+        if not text:
+            return []
+        kept: list[str] = []
+        for raw_line in text.splitlines():
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            if line.startswith(("⏰", "⚠️", "✅")):
+                kept.append(line)
+        return kept
+
+    @classmethod
     def _format_scene_output_for_discord(
         cls,
         narration: str,
@@ -806,6 +832,9 @@ class Zork(commands.Cog):
             rendered_beats.append(f"-# speaker: {speaker}\n{text}")
 
         if rendered_beats:
+            prefix_lines = cls._extract_status_prefix_lines(narration)
+            if prefix_lines:
+                return "\n".join(prefix_lines) + "\n\n" + "\n\n".join(rendered_beats)
             return "\n\n".join(rendered_beats)
         return str(narration or "").strip()
 
@@ -837,7 +866,7 @@ class Zork(commands.Cog):
     ):
         for notice in notices or []:
             await self._send_large_message(ctx_like, f"[Notice] {notice}", campaign_id=campaign_id)
-        if campaign_id is not None:
+        if campaign_id is not None and self._should_format_scene_output(narration):
             actor_id = getattr(getattr(ctx_like, "author", None), "id", None)
             scene_output = ZorkEmulator.get_latest_scene_output_for_actor(
                 campaign_id,
