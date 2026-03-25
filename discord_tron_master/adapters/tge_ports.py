@@ -137,6 +137,60 @@ class TimerEffectsAdapter:
 class NotificationAdapter:
     """Wraps DiscordBot DM delivery behind ``NotificationPort``."""
 
+    async def send_channel_message(
+        self,
+        campaign_id: str,
+        message: str,
+    ) -> None:
+        from discord_tron_master.bot import DiscordBot
+        from discord_tron_master.adapters.emulator_bridge import (
+            EmulatorBridge as ZorkEmulator,
+        )
+        from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
+
+        bot_instance = DiscordBot.get_instance()
+        if bot_instance is None:
+            return
+        text = str(message or "").strip()
+        if not text:
+            return
+
+        ZorkEmulator._ensure_init()
+        with ZorkEmulator._session_factory() as session:
+            rows = (
+                session.query(GameSession)
+                .filter(
+                    GameSession.campaign_id == str(campaign_id),
+                    GameSession.enabled == True,  # noqa: E712
+                )
+                .order_by(GameSession.updated_at.desc(), GameSession.id.desc())
+                .all()
+            )
+
+        for row in rows:
+            target_id = (
+                getattr(row, "surface_thread_id", None)
+                or getattr(row, "surface_channel_id", None)
+                or None
+            )
+            try:
+                channel = await bot_instance.find_channel(int(target_id))
+            except (TypeError, ValueError):
+                channel = None
+            if channel is None:
+                continue
+            try:
+                payload = ZorkEmulator.prepend_world_time_header(text, campaign_id)
+                await DiscordBot.send_large_message(channel, payload)
+                return
+            except Exception as exc:
+                logger.debug(
+                    "Channel send failed for campaign %s via %s: %s",
+                    campaign_id,
+                    target_id,
+                    exc,
+                )
+
     async def send_dm(
         self,
         actor_id: str,
