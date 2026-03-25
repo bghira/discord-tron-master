@@ -131,11 +131,16 @@ class Reactions(commands.Cog):
                 text = ZorkEmulator.prepend_world_time_header(
                     "No unread SMS threads.",
                     campaign_id,
+                    actor_id=user.id,
                 )
                 await DiscordBot.send_large_message(message, f"{user.mention}\n{text}")
                 return True
             rendered = self._render_sms_thread_text(label or thread_key, messages)
-            rendered = ZorkEmulator.prepend_world_time_header(rendered, campaign_id)
+            rendered = ZorkEmulator.prepend_world_time_header(
+                rendered,
+                campaign_id,
+                actor_id=user.id,
+            )
             await DiscordBot.send_large_message(message, f"{user.mention}\n{rendered}")
             return True
 
@@ -144,7 +149,11 @@ class Reactions(commands.Cog):
             text = f"Marked {marked} unread SMS thread(s) as read."
         else:
             text = "No unread SMS to mark as read."
-        text = ZorkEmulator.prepend_world_time_header(text, campaign_id)
+        text = ZorkEmulator.prepend_world_time_header(
+            text,
+            campaign_id,
+            actor_id=user.id,
+        )
         await DiscordBot.send_large_message(message, f"{user.mention}\n{text}")
         return True
 

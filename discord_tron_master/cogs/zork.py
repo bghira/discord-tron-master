@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import io
 import logging
+import re
 import shlex
 import discord
 
@@ -36,6 +37,25 @@ class _WorldTimeSendProxy:
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    CLOCK_WEEKDAY_ALIASES = {
+        "mon": "monday",
+        "monday": "monday",
+        "tue": "tuesday",
+        "tues": "tuesday",
+        "tuesday": "tuesday",
+        "wed": "wednesday",
+        "wednesday": "wednesday",
+        "thu": "thursday",
+        "thur": "thursday",
+        "thurs": "thursday",
+        "thursday": "thursday",
+        "fri": "friday",
+        "friday": "friday",
+        "sat": "saturday",
+        "saturday": "saturday",
+        "sun": "sunday",
+        "sunday": "sunday",
+    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -45,6 +65,55 @@ class Zork(commands.Cog):
 
     def _prefix(self) -> str:
         return self.config.get_command_prefix()
+
+    @classmethod
+    def _parse_clock_value(
+        cls,
+        raw_value: str,
+        *,
+        current_day: int,
+    ) -> tuple[dict[str, object] | None, str | None]:
+        text = " ".join(str(raw_value or "").strip().split())
+        if not text:
+            return None, "Provide a time like `18:30`, `138 18:30`, or `friday 138 18:30`."
+        parts = text.split()
+        weekday = None
+        head = parts[0].lower() if parts else ""
+        if head in cls.CLOCK_WEEKDAY_ALIASES:
+            weekday = cls.CLOCK_WEEKDAY_ALIASES[head]
+            parts = parts[1:]
+        if parts and parts[0].lower() == "day":
+            parts = parts[1:]
+        if not parts:
+            return None, "Missing time value. Use `18:30`, `138 18:30`, or `friday 138 18:30`."
+        if len(parts) == 1:
+            day = current_day
+            time_token = parts[0]
+        elif len(parts) == 2:
+            try:
+                day = int(parts[0])
+            except (TypeError, ValueError):
+                return None, "Day must be a positive integer."
+            time_token = parts[1]
+        else:
+            return None, "Use `18:30`, `138 18:30`, or `friday 138 18:30`."
+        time_match = re.fullmatch(r"(\d{1,2})(?::(\d{1,2}))?", str(time_token or "").strip())
+        if time_match is None:
+            return None, "Time must look like `18`, `18:30`, or `06:05`."
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or "0")
+        if day < 1:
+            return None, "Day must be 1 or greater."
+        if hour < 0 or hour > 23:
+            return None, "Hour must be between 0 and 23."
+        if minute < 0 or minute > 59:
+            return None, "Minute must be between 0 and 59."
+        return {
+            "day": day,
+            "hour": hour,
+            "minute": minute,
+            "day_of_week": weekday,
+        }, None
 
     @staticmethod
     def _queue_key(campaign_id: str | int, actor_id: str | int) -> tuple[str, str]:
@@ -279,11 +348,19 @@ class Zork(commands.Cog):
         ctx_like=None,
     ) -> str:
         resolved_campaign_id = campaign_id
+        resolved_actor_id = None
         if resolved_campaign_id is None:
             resolved_campaign_id = self._infer_campaign_id(ctx_like)
+        author = getattr(ctx_like, "author", None) if ctx_like is not None else None
+        if author is not None:
+            resolved_actor_id = getattr(author, "id", None)
         if resolved_campaign_id is None:
             return str(text or "").strip()
-        return ZorkEmulator.prepend_world_time_header(text, resolved_campaign_id)
+        return ZorkEmulator.prepend_world_time_header(
+            text,
+            resolved_campaign_id,
+            actor_id=resolved_actor_id,
+        )
 
     @staticmethod
     def _looks_like_sms_notice(text: str) -> bool:
@@ -1677,6 +1754,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork on-rails enable|disable` lock/unlock story to the chapter outline\n"
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
             f"- `{prefix}zork speed [value]` view or set game speed multiplier (0.1–10.0, creator/admin only)\n"
+            f"- `{prefix}zork clock [HH[:MM]|DAY HH[:MM]|WEEKDAY DAY HH[:MM]]` view or set the campaign's global clock (creator/bot owner only)\n"
             f"- `{prefix}zork difficulty [story|easy|medium|normal|hard|impossible]` view or set difficulty template (creator/admin only)\n"
             f"- `{prefix}zork roster` view the NPC character roster with portraits\n"
             f"- `{prefix}zork roster <name> portrait` regenerate portrait for a character\n"
@@ -3330,6 +3408,71 @@ class Zork(commands.Cog):
                 return
             ZorkEmulator.set_speed_multiplier(campaign, multiplier)
             await ctx.send(f"Speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`.")
+
+    @zork.command(name="clock")
+    async def zork_clock(self, ctx, *, value: str = None):
+        ctx = self._wrap_send(ctx)
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            current_clock = ZorkEmulator.get_campaign_clock(campaign)
+            current_label = str(current_clock.get("date_label") or "").strip() or ZorkEmulator.get_world_time_text(campaign.id)
+            current_hour = int(current_clock.get("hour", 0) or 0)
+            current_minute = int(current_clock.get("minute", 0) or 0)
+            if value is None:
+                await ctx.send(
+                    f"Current campaign clock: `{current_label} ({current_hour:02d}:{current_minute:02d})`.\n"
+                    f"Use `{self._prefix()}zork clock 18:30`, "
+                    f"`{self._prefix()}zork clock 138 18:30`, or "
+                    f"`{self._prefix()}zork clock friday 138 18:30` to change it."
+                )
+                return
+            is_owner = await self.bot.is_owner(ctx.author)
+            if campaign.created_by_actor_id != str(ctx.author.id) and not is_owner:
+                await ctx.send(
+                    "Only the campaign creator or the bot owner can change the campaign clock."
+                )
+                return
+            parsed, error = self._parse_clock_value(
+                value,
+                current_day=int(current_clock.get("day", 1) or 1),
+            )
+            if parsed is None:
+                await ctx.send(error or "Invalid clock value.")
+                return
+            updated = ZorkEmulator.set_campaign_clock(
+                campaign,
+                day=int(parsed.get("day", 1) or 1),
+                hour=int(parsed.get("hour", 0) or 0),
+                minute=int(parsed.get("minute", 0) or 0),
+                day_of_week=parsed.get("day_of_week"),
+            )
+            if not isinstance(updated, dict) or not updated:
+                await ctx.send("Failed to update the campaign clock.")
+                return
+            updated_label = str(updated.get("date_label") or "").strip() or ZorkEmulator.get_world_time_text(campaign.id)
+            updated_hour = int(updated.get("hour", 0) or 0)
+            updated_minute = int(updated.get("minute", 0) or 0)
+            note = ""
+            state = ZorkEmulator.get_campaign_state(campaign)
+            if str(state.get("time_model") or "").strip().lower() == "individual_clocks":
+                note = " Global campaign clock updated; personal player clocks were not changed."
+            await ctx.send(
+                f"Campaign clock set to `{updated_label} ({updated_hour:02d}:{updated_minute:02d})` for campaign `{campaign.name}`.{note}"
+            )
 
     @zork.command(name="difficulty")
     async def zork_difficulty(self, ctx, *, value: str = None):

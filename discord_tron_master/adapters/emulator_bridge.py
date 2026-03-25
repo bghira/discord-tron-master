@@ -548,12 +548,21 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         if campaign is None:
             return "No active campaign in this channel."
         campaign_state = cls._emu.get_campaign_state(campaign)
-        game_time = campaign_state.get("game_time", {})
-        calendar_entries = cls._emu._calendar_for_prompt(campaign_state)
         player_calendar_lines = []
+        player_state = {}
         if actor_id is not None:
             player = cls._emu.get_or_create_player(str(campaign.id), str(actor_id))
             player_state = cls._emu.get_player_state(player)
+        game_time, _global_game_time, _time_model, _calendar_policy = cls._emu._current_game_time_for_prompt(
+            campaign_state,
+            player_state=player_state,
+        )
+        calendar_entries = cls._emu._calendar_for_prompt(
+            campaign_state,
+            player_state=player_state,
+            viewer_actor_id=str(actor_id) if actor_id is not None else None,
+        )
+        if actor_id is not None:
             player_calendar_lines = cls._emu._player_calendar_events_for_display(
                 player_state
             )
@@ -596,13 +605,20 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return "\n".join(lines)
 
     @classmethod
-    def get_world_time_text(cls, campaign_id):
+    def get_world_time_text(cls, campaign_id, actor_id=None):
         cls._ensure_init()
         campaign = cls.query_campaign(campaign_id)
         if campaign is None:
             return None
         campaign_state = cls._emu.get_campaign_state(campaign)
-        game_time = campaign_state.get("game_time", {}) if isinstance(campaign_state, dict) else {}
+        player_state = {}
+        if actor_id is not None:
+            player = cls._emu.get_or_create_player(str(campaign.id), str(actor_id))
+            player_state = cls._emu.get_player_state(player)
+        game_time, _global_game_time, _time_model, _calendar_policy = cls._emu._current_game_time_for_prompt(
+            campaign_state,
+            player_state=player_state,
+        )
         if not isinstance(game_time, dict):
             game_time = {}
         date_label = str(game_time.get("date_label") or "").strip()
@@ -620,13 +636,13 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             return date_label or None
 
     @classmethod
-    def prepend_world_time_header(cls, text, campaign_id):
+    def prepend_world_time_header(cls, text, campaign_id, actor_id=None):
         body = str(text or "").strip()
         if not body:
             return body
         if body.startswith("-# world time:"):
             return body
-        label = cls.get_world_time_text(campaign_id)
+        label = cls.get_world_time_text(campaign_id, actor_id=actor_id)
         if not label:
             return body
         return f"-# world time: {label}\n{body}"
@@ -871,6 +887,22 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     def set_speed_multiplier(cls, campaign, value):
         cls._ensure_init()
         return cls._emu.set_speed_multiplier(campaign, value)
+
+    @classmethod
+    def get_campaign_clock(cls, campaign):
+        cls._ensure_init()
+        return cls._emu.get_campaign_clock(campaign)
+
+    @classmethod
+    def set_campaign_clock(cls, campaign, *, day, hour, minute=0, day_of_week=None):
+        cls._ensure_init()
+        return cls._emu.set_campaign_clock(
+            campaign,
+            day=day,
+            hour=hour,
+            minute=minute,
+            day_of_week=day_of_week,
+        )
 
     # -- Campaign Rules --------------------------------------------------------
 
