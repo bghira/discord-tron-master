@@ -1060,7 +1060,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         except (TypeError, ValueError):
             return None
         from text_game_engine.persistence.sqlalchemy.models import (
-            Campaign, Player, Snapshot, Turn,
+            Campaign, Player, Snapshot, Timer, Turn,
         )
         with cls._session_factory() as session:
             turn = (
@@ -1070,7 +1070,51 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
                 .first()
             )
             if turn is None:
-                return None
+                timer = (
+                    session.query(Timer)
+                    .filter(Timer.external_message_id == mid)
+                    .order_by(Timer.updated_at.desc(), Timer.created_at.desc())
+                    .first()
+                )
+                if timer is None:
+                    return None
+                campaign = (
+                    session.get(Campaign, timer.campaign_id)
+                    if getattr(timer, "campaign_id", None)
+                    else None
+                )
+                campaign_state = cls._emu.get_campaign_state(campaign) if campaign else {}
+                lines = ["Timed Event"]
+                game_time = campaign_state.get("game_time") or campaign_state.get("_game_time") or {}
+                if isinstance(game_time, dict) and game_time:
+                    day = game_time.get("day", "?")
+                    hour = game_time.get("hour", "?")
+                    minute = game_time.get("minute", "?")
+                    period = game_time.get("period", "")
+                    lines.append(f"World Time: Day {day}, {hour}:{str(minute).zfill(2)} {period}".strip())
+                status = str(getattr(timer, "status", "") or "").strip() or "unknown"
+                lines.append(f"Status: {status}")
+                event_text = str(getattr(timer, "event_text", "") or "").strip()
+                if event_text:
+                    lines.append(f"Event: {event_text}")
+                due_at = getattr(timer, "due_at", None)
+                if due_at is not None:
+                    try:
+                        import calendar as _calendar
+
+                        due_ts = int(_calendar.timegm(due_at.utctimetuple()))
+                        lines.append(f"Due: <t:{due_ts}:F> (<t:{due_ts}:R>)")
+                    except Exception:
+                        lines.append(f"Due: {due_at}")
+                interruptible = getattr(timer, "interruptible", None)
+                if interruptible is not None:
+                    lines.append(
+                        "Interruptible: yes" if bool(interruptible) else "Interruptible: no"
+                    )
+                interrupt_action = str(getattr(timer, "interrupt_action", "") or "").strip()
+                if interrupt_action:
+                    lines.append(f"Interrupt: {interrupt_action}")
+                return "\n".join(lines)
             campaign = session.get(Campaign, turn.campaign_id) if turn.campaign_id else None
             player = None
             if turn.campaign_id and turn.actor_id:

@@ -196,13 +196,10 @@ class Reactions(commands.Cog):
             return False
         app = AppConfig.get_flask()
         with (app.app_context() if app is not None else nullcontext()):
-            turn = ZorkEmulator.get_turn_for_message(message.id)
             if emoji in {"ℹ️", "ℹ"}:
                 info_text = ZorkEmulator.get_turn_info_text_for_message(message.id)
             else:
                 info_text = None
-        if turn is None:
-            return False
         if emoji in {"ℹ️", "ℹ"}:
             if not info_text:
                 return True
@@ -211,6 +208,10 @@ class Reactions(commands.Cog):
             else:
                 await DiscordBot.send_large_message(message, f"{user.mention}\n{info_text}")
             return True
+        with (app.app_context() if app is not None else nullcontext()):
+            turn = ZorkEmulator.get_turn_for_message(message.id)
+        if turn is None:
+            return False
 
         is_admin = await self._is_image_admin_member(user)
         owner_ok = str(getattr(turn, "actor_id", "") or "") == str(user.id)
