@@ -139,7 +139,6 @@ class TimerEffectsAdapter:
         text = str(narration or "").strip()
         if not text:
             return
-        text = f"⚠️ *Timed event fired.*\n{text}"
         mention = ""
         try:
             actor_id_text = str(actor_id or "").strip()
