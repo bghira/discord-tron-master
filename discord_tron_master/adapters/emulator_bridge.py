@@ -904,6 +904,16 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             day_of_week=day_of_week,
         )
 
+    @classmethod
+    def get_campaign_clock_type(cls, campaign):
+        cls._ensure_init()
+        return cls._emu.get_campaign_clock_type(campaign)
+
+    @classmethod
+    def set_campaign_clock_type(cls, campaign, value):
+        cls._ensure_init()
+        return cls._emu.set_campaign_clock_type(campaign, value)
+
     # -- Campaign Rules --------------------------------------------------------
 
     @classmethod

@@ -1755,6 +1755,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
             f"- `{prefix}zork speed [value]` view or set game speed multiplier (0.1–10.0, creator/admin only)\n"
             f"- `{prefix}zork clock [HH[:MM]|DAY HH[:MM]|WEEKDAY DAY HH[:MM]]` view or set the campaign's global clock (creator/bot owner only)\n"
+            f"- `{prefix}zork clock-type [loose-calendar|consequential-calendar|individual-calendars]` view or set the campaign time/calendar mode (creator/bot owner only)\n"
             f"- `{prefix}zork difficulty [story|easy|medium|normal|hard|impossible]` view or set difficulty template (creator/admin only)\n"
             f"- `{prefix}zork roster` view the NPC character roster with portraits\n"
             f"- `{prefix}zork roster <name> portrait` regenerate portrait for a character\n"
@@ -3472,6 +3473,46 @@ class Zork(commands.Cog):
                 note = " Global campaign clock updated; personal player clocks were not changed."
             await ctx.send(
                 f"Campaign clock set to `{updated_label} ({updated_hour:02d}:{updated_minute:02d})` for campaign `{campaign.name}`.{note}"
+            )
+
+    @zork.command(name="clock-type")
+    async def zork_clock_type(self, ctx, *, value: str = None):
+        ctx = self._wrap_send(ctx)
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            current = ZorkEmulator.get_campaign_clock_type(campaign)
+            if value is None:
+                await ctx.send(
+                    f"Current clock type: `{current}` for campaign `{campaign.name}`.\n"
+                    "Available: `loose-calendar`, `consequential-calendar`, `individual-calendars`."
+                )
+                return
+            is_owner = await self.bot.is_owner(ctx.author)
+            if campaign.created_by_actor_id != str(ctx.author.id) and not is_owner:
+                await ctx.send(
+                    "Only the campaign creator or the bot owner can change the clock type."
+                )
+                return
+            updated, error = ZorkEmulator.set_campaign_clock_type(campaign, value)
+            if error:
+                await ctx.send(error)
+                return
+            await ctx.send(
+                f"Clock type set to `{updated}` for campaign `{campaign.name}`."
             )
 
     @zork.command(name="difficulty")
