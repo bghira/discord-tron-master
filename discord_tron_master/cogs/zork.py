@@ -832,10 +832,11 @@ class Zork(commands.Cog):
             rendered_beats.append(f"-# speaker: {speaker}\n{text}")
 
         if rendered_beats:
-            prefix_lines = cls._extract_status_prefix_lines(narration)
-            if prefix_lines:
-                return "\n".join(prefix_lines) + "\n\n" + "\n\n".join(rendered_beats)
-            return "\n\n".join(rendered_beats)
+            rendered = "\n\n".join(rendered_beats)
+            status_lines = cls._extract_status_prefix_lines(narration)
+            if status_lines:
+                return rendered + "\n\n" + "\n".join(status_lines)
+            return rendered
         return str(narration or "").strip()
 
     @classmethod
@@ -881,11 +882,14 @@ class Zork(commands.Cog):
             )
         else:
             msg = await self._send_large_message(ctx_like, narration, campaign_id=campaign_id)
+        timer_bound = False
         if campaign_id is not None and msg is not None:
-            ZorkEmulator.register_timer_message(campaign_id, msg.id)
+            timer_bound = bool(ZorkEmulator.register_timer_message(campaign_id, msg.id))
         if msg is not None:
             try:
                 await msg.add_reaction("ℹ️")
+                if timer_bound:
+                    await msg.add_reaction("⏲️")
                 await msg.add_reaction("⏪")
                 await msg.add_reaction("❌")
             except Exception:

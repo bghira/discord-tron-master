@@ -1303,6 +1303,19 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return cls._emu.register_timer_message(str(campaign_id), str(message_id))
 
     @classmethod
+    def has_active_timer_for_message(cls, message_id):
+        cls._ensure_init()
+        return cls._emu.has_active_timer_for_message(str(message_id))
+
+    @classmethod
+    def extend_pending_timer_for_message(cls, message_id, *, extra_seconds=60):
+        cls._ensure_init()
+        return cls._emu.extend_pending_timer_for_message(
+            str(message_id),
+            extra_seconds=extra_seconds,
+        )
+
+    @classmethod
     def get_pending_timer_notice(cls, campaign_id):
         cls._ensure_init()
         return cls._emu.get_pending_timer_notice(str(campaign_id))

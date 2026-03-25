@@ -18,7 +18,7 @@ guild_config = Guilds()
 
 
 class Reactions(commands.Cog):
-    ZORK_TURN_REACTIONS = ("ℹ️", "⏪", "❌")
+    ZORK_TURN_REACTIONS = ("ℹ️", "⏲️", "⏪", "❌")
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
 
     def __init__(self, bot: commands.Bot):
@@ -58,7 +58,13 @@ class Reactions(commands.Cog):
 
     async def _ensure_zork_turn_reactions(self, message):
         existing = {str(reaction.emoji): reaction for reaction in getattr(message, "reactions", []) or []}
+        timer_active = False
+        app = AppConfig.get_flask()
+        with (app.app_context() if app is not None else nullcontext()):
+            timer_active = ZorkEmulator.has_active_timer_for_message(getattr(message, "id", ""))
         for emoji in self.ZORK_TURN_REACTIONS:
+            if emoji == "⏲️" and not timer_active:
+                continue
             reaction = existing.get(emoji)
             if reaction is not None and getattr(reaction, "me", False):
                 continue
@@ -190,7 +196,7 @@ class Reactions(commands.Cog):
 
     async def _handle_zork_turn_reaction(self, message, emoji: str, user) -> bool:
         emoji = str(emoji or "")
-        if emoji not in {"ℹ️", "ℹ", "⏪", "❌"}:
+        if emoji not in {"ℹ️", "ℹ", "⏲️", "⏲", "⏪", "❌"}:
             return False
         if message is None or message.author != self.bot.user or user is None or getattr(user, "bot", False):
             return False
@@ -219,6 +225,19 @@ class Reactions(commands.Cog):
             await message.channel.send(
                 f"{user.mention} only the turn owner or an Image Admin can do that."
             )
+            return True
+
+        if emoji in {"⏲️", "⏲"}:
+            with (app.app_context() if app is not None else nullcontext()):
+                result = ZorkEmulator.extend_pending_timer_for_message(
+                    message.id,
+                    extra_seconds=60,
+                )
+            if result is None:
+                await message.channel.send(
+                    f"{user.mention} no active timer on that message to extend."
+                )
+                return True
             return True
 
         dm_scope = message.guild is None
