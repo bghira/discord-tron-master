@@ -302,10 +302,19 @@ class Zork(commands.Cog):
         queue = self._turn_queues.get(key)
         if queue is None:
             return
+        campaign_id, actor_id = key
         try:
             while True:
                 item = await queue.get()
                 try:
+                    while True:
+                        timed_event_notice = ZorkEmulator.get_timed_event_in_progress_notice(
+                            campaign_id,
+                            actor_id,
+                        )
+                        if not timed_event_notice:
+                            break
+                        await asyncio.sleep(0.5)
                     await self._process_campaign_message(
                         item["message"],
                         campaign_id=item["campaign_id"],
@@ -810,6 +819,16 @@ class Zork(commands.Cog):
         return kept
 
     @classmethod
+    def _contains_pending_timer_line(cls, narration: str) -> bool:
+        text = str(narration or "").strip()
+        if not text:
+            return False
+        return any(
+            str(raw_line or "").strip().startswith("⏰ *Timed event:*")
+            for raw_line in text.splitlines()
+        )
+
+    @classmethod
     def _format_scene_output_for_discord(
         cls,
         narration: str,
@@ -883,7 +902,7 @@ class Zork(commands.Cog):
         else:
             msg = await self._send_large_message(ctx_like, narration, campaign_id=campaign_id)
         timer_bound = False
-        if campaign_id is not None and msg is not None:
+        if campaign_id is not None and msg is not None and self._contains_pending_timer_line(narration):
             timer_bound = bool(ZorkEmulator.register_timer_message(campaign_id, msg.id))
         if msg is not None:
             try:
