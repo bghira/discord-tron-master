@@ -517,6 +517,11 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return cls._emu.record_turn_message_ids(*args, **kwargs)
 
     @classmethod
+    def bind_latest_narrator_message(cls, *args, **kwargs):
+        cls._ensure_init()
+        return cls._emu.bind_latest_narrator_message(*args, **kwargs)
+
+    @classmethod
     def get_latest_scene_output_for_actor(cls, campaign_id, actor_id):
         cls._ensure_init()
         campaign = cls.query_campaign(campaign_id)
@@ -1296,6 +1301,18 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     def register_timer_message(cls, campaign_id, message_id):
         cls._ensure_init()
         return cls._emu.register_timer_message(str(campaign_id), str(message_id))
+
+    @classmethod
+    def get_pending_timer_notice(cls, campaign_id):
+        cls._ensure_init()
+        return cls._emu.get_pending_timer_notice(str(campaign_id))
+
+    @classmethod
+    def get_timed_event_in_progress_notice(cls, campaign_id, actor_id):
+        cls._ensure_init()
+        return cls._emu.get_timed_event_in_progress_notice(
+            str(campaign_id), str(actor_id)
+        )
 
     @classmethod
     def cancel_pending_timer(cls, campaign_id):

@@ -139,6 +139,7 @@ class TimerEffectsAdapter:
         text = str(narration or "").strip()
         if not text:
             return
+        text = f"⚠️ *Timed event fired.*\n{text}"
         mention = ""
         try:
             actor_id_text = str(actor_id or "").strip()
@@ -154,6 +155,8 @@ class TimerEffectsAdapter:
         )
         try:
             msg = await DiscordBot.send_large_message(channel, payload)
+            if msg is not None:
+                ZorkEmulator.bind_latest_narrator_message(campaign_id, msg.id)
             await self._add_standard_zork_reactions(msg)
         except Exception as exc:
             logger.debug("Timed event send failed: %s", exc)

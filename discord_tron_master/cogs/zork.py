@@ -172,6 +172,7 @@ class Zork(commands.Cog):
         *,
         retry_if_busy: bool,
     ) -> tuple[str | None, str | None]:
+        timed_event_notice_sent = False
         while True:
             claimed_campaign_id, error_text = await ZorkEmulator.begin_turn_for_campaign(
                 message,
@@ -181,6 +182,17 @@ class Zork(commands.Cog):
                 return None, error_text
             if claimed_campaign_id is not None:
                 return claimed_campaign_id, None
+            timed_event_notice = ZorkEmulator.get_timed_event_in_progress_notice(
+                campaign_id,
+                message.author.id,
+            )
+            if timed_event_notice and not timed_event_notice_sent:
+                await self._send_large_message(
+                    message.channel,
+                    f"{message.author.mention}\n{timed_event_notice}",
+                    campaign_id=campaign_id,
+                )
+                timed_event_notice_sent = True
             if not retry_if_busy:
                 return None, None
             await asyncio.sleep(0.5)
@@ -210,6 +222,16 @@ class Zork(commands.Cog):
             )
             return
         if claimed_campaign_id is None:
+            timed_event_notice = ZorkEmulator.get_timed_event_in_progress_notice(
+                campaign_id,
+                message.author.id,
+            )
+            if timed_event_notice:
+                await self._send_large_message(
+                    message.channel,
+                    f"{message.author.mention}\n{timed_event_notice}",
+                    campaign_id=campaign_id,
+                )
             return
 
         # Setup mode intercept — route to setup handler instead of play_action.
@@ -747,6 +769,12 @@ class Zork(commands.Cog):
         return "\n".join(filtered)
 
     @staticmethod
+    def _strip_timer_lines(text: str) -> str:
+        lines = str(text or "").splitlines()
+        filtered = [line for line in lines if not line.strip().startswith("⏰")]
+        return "\n".join(filtered).strip()
+
+    @staticmethod
     def _format_scene_speaker_name(raw: object) -> str:
         text = str(raw or "").strip()
         if not text:
@@ -823,16 +851,28 @@ class Zork(commands.Cog):
             )
             narration = self._format_scene_output_for_discord(narration, scene_output)
         narration = self._filter_narration(narration)
+        narration = self._strip_timer_lines(narration)
         mention = getattr(getattr(ctx_like, "author", None), "mention", None)
+        msg = None
         if mention:
-            msg = await self._send_large_message(
-                ctx_like, f"{mention}\n{narration}", campaign_id=campaign_id
-            )
-        else:
+            if narration:
+                msg = await self._send_large_message(
+                    ctx_like, f"{mention}\n{narration}", campaign_id=campaign_id
+                )
+        elif narration:
             msg = await self._send_large_message(ctx_like, narration, campaign_id=campaign_id)
-        # If a timer was just scheduled, register the message for later editing.
-        if campaign_id is not None and msg is not None:
-            ZorkEmulator.register_timer_message(campaign_id, msg.id)
+        timer_msg = None
+        if campaign_id is not None:
+            timer_notice = ZorkEmulator.get_pending_timer_notice(campaign_id)
+            if timer_notice:
+                timer_payload = f"{mention}\n{timer_notice}" if mention else timer_notice
+                timer_msg = await self._send_large_message(
+                    ctx_like,
+                    timer_payload,
+                    campaign_id=campaign_id,
+                )
+                if timer_msg is not None:
+                    ZorkEmulator.register_timer_message(campaign_id, timer_msg.id)
         if msg is not None:
             try:
                 await msg.add_reaction("ℹ️")
@@ -840,6 +880,13 @@ class Zork(commands.Cog):
                 await msg.add_reaction("❌")
             except Exception:
                 logger.debug("Failed adding Zork turn reactions", exc_info=True)
+        if timer_msg is not None:
+            try:
+                await timer_msg.add_reaction("ℹ️")
+                await timer_msg.add_reaction("⏪")
+                await timer_msg.add_reaction("❌")
+            except Exception:
+                logger.debug("Failed adding timed-event setup reactions", exc_info=True)
         return msg
 
     @staticmethod
