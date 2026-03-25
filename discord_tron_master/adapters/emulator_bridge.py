@@ -889,6 +889,16 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return cls._emu.set_speed_multiplier(campaign, value)
 
     @classmethod
+    def get_timed_events_speed_multiplier(cls, campaign):
+        cls._ensure_init()
+        return cls._emu.get_timed_events_speed_multiplier(campaign)
+
+    @classmethod
+    def set_timed_events_speed_multiplier(cls, campaign, value):
+        cls._ensure_init()
+        return cls._emu.set_timed_events_speed_multiplier(campaign, value)
+
+    @classmethod
     def get_campaign_clock(cls, campaign):
         cls._ensure_init()
         return cls._emu.get_campaign_clock(campaign)

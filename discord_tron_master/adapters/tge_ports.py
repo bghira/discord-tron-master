@@ -63,6 +63,21 @@ class TextCompletionAdapter:
 class TimerEffectsAdapter:
     """Wraps DiscordBot for timer-line edits and timed-event emission."""
 
+    @staticmethod
+    async def _add_standard_zork_reactions(message) -> None:
+        if message is None:
+            return
+        for emoji in ("ℹ️", "⏪", "❌"):
+            try:
+                await message.add_reaction(emoji)
+            except Exception:
+                logger.debug(
+                    "Timed event reaction add failed: %s on %s",
+                    emoji,
+                    getattr(message, "id", None),
+                    exc_info=True,
+                )
+
     async def edit_timer_line(
         self,
         channel_id: str,
@@ -124,9 +139,22 @@ class TimerEffectsAdapter:
         text = str(narration or "").strip()
         if not text:
             return
-        text = ZorkEmulator.prepend_world_time_header(text, campaign_id)
+        mention = ""
         try:
-            await DiscordBot.send_large_message(channel, text)
+            actor_id_text = str(actor_id or "").strip()
+            if actor_id_text and int(actor_id_text) > 0:
+                mention = f"<@{actor_id_text}>\n"
+        except (TypeError, ValueError):
+            mention = ""
+        payload = f"{mention}{text}" if mention else text
+        payload = ZorkEmulator.prepend_world_time_header(
+            payload,
+            campaign_id,
+            actor_id=actor_id,
+        )
+        try:
+            msg = await DiscordBot.send_large_message(channel, payload)
+            await self._add_standard_zork_reactions(msg)
         except Exception as exc:
             logger.debug("Timed event send failed: %s", exc)
 

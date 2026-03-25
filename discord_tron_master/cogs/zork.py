@@ -1753,7 +1753,8 @@ class Zork(commands.Cog):
             f"- `{prefix}zork on-rails` show on-rails narrative mode status\n"
             f"- `{prefix}zork on-rails enable|disable` lock/unlock story to the chapter outline\n"
             f"- `{prefix}zork timed-events` show timed events status; enable/disable toggles\n"
-            f"- `{prefix}zork speed [value]` view or set game speed multiplier (0.1–10.0, creator/admin only)\n"
+            f"- `{prefix}zork speed [value]` view or set in-world clock speed multiplier (0.1–10.0, creator/admin only)\n"
+            f"- `{prefix}zork timed-events-speed [value]` view or set realtime timed-event speed multiplier (0.1–10.0, creator/admin only)\n"
             f"- `{prefix}zork clock [HH[:MM]|DAY HH[:MM]|WEEKDAY DAY HH[:MM]]` view or set the campaign's global clock (creator/bot owner only)\n"
             f"- `{prefix}zork clock-type [loose-calendar|consequential-calendar|individual-calendars]` view or set the campaign time/calendar mode (creator/bot owner only)\n"
             f"- `{prefix}zork difficulty [story|easy|medium|normal|hard|impossible]` view or set difficulty template (creator/admin only)\n"
@@ -3388,7 +3389,7 @@ class Zork(commands.Cog):
             if value is None:
                 current = ZorkEmulator.get_speed_multiplier(campaign)
                 await ctx.send(
-                    f"Current speed multiplier: `{current}x` for campaign `{campaign.name}`.\n"
+                    f"Current in-world clock speed multiplier: `{current}x` for campaign `{campaign.name}`.\n"
                     f"Use `{self._prefix()}zork speed <value>` to change (0.1–10.0)."
                 )
                 return
@@ -3396,19 +3397,63 @@ class Zork(commands.Cog):
             # This comparison needs a bridge lookup to map actor_id -> Discord user ID.
             if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
                 await ctx.send(
-                    "Only the campaign creator or an Image Admin can change the speed multiplier."
+                    "Only the campaign creator or an Image Admin can change the in-world clock speed multiplier."
                 )
                 return
             try:
                 multiplier = float(value.strip())
             except ValueError:
-                await ctx.send("Speed multiplier must be a number (0.1–10.0).")
+                await ctx.send("In-world clock speed multiplier must be a number (0.1–10.0).")
                 return
             if multiplier < 0.1 or multiplier > 10.0:
-                await ctx.send("Speed multiplier must be between 0.1 and 10.0.")
+                await ctx.send("In-world clock speed multiplier must be between 0.1 and 10.0.")
                 return
             ZorkEmulator.set_speed_multiplier(campaign, multiplier)
-            await ctx.send(f"Speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`.")
+            await ctx.send(f"In-world clock speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`.")
+
+    @zork.command(name="timed-events-speed")
+    async def zork_timed_events_speed(self, ctx, *, value: str = None):
+        ctx = self._wrap_send(ctx)
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            if value is None:
+                current = ZorkEmulator.get_timed_events_speed_multiplier(campaign)
+                await ctx.send(
+                    f"Current timed-events speed multiplier: `{current}x` for campaign `{campaign.name}`.\n"
+                    f"Use `{self._prefix()}zork timed-events-speed <value>` to change (0.1–10.0)."
+                )
+                return
+            if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
+                await ctx.send(
+                    "Only the campaign creator or an Image Admin can change the timed-events speed multiplier."
+                )
+                return
+            try:
+                multiplier = float(value.strip())
+            except ValueError:
+                await ctx.send("Timed-events speed multiplier must be a number (0.1–10.0).")
+                return
+            if multiplier < 0.1 or multiplier > 10.0:
+                await ctx.send("Timed-events speed multiplier must be between 0.1 and 10.0.")
+                return
+            ZorkEmulator.set_timed_events_speed_multiplier(campaign, multiplier)
+            await ctx.send(
+                f"Timed-events speed multiplier set to `{multiplier}x` for campaign `{campaign.name}`."
+            )
 
     @zork.command(name="clock")
     async def zork_clock(self, ctx, *, value: str = None):
