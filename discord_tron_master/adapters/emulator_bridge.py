@@ -1351,7 +1351,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return None
 
     @classmethod
-    async def wait_for_drain(cls, timeout=120):
+    async def wait_for_drain(cls, timeout=600):
         cls._ensure_init()
         fn = getattr(cls._emu, "wait_for_drain", None)
         if callable(fn):

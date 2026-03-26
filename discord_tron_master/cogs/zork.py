@@ -37,6 +37,9 @@ class _WorldTimeSendProxy:
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
+    TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
+    RESTART_DRAIN_TIMEOUT_SECONDS = 600
     CLOCK_WEEKDAY_ALIASES = {
         "mon": "monday",
         "monday": "monday",
@@ -131,6 +134,10 @@ class Zork(commands.Cog):
             await message.add_reaction("📥")
         except Exception:
             return
+
+    @classmethod
+    def _is_turn_busy_text(cls, text: object) -> bool:
+        return " ".join(str(text or "").split()) == cls.TURN_BUSY_TEXT
 
     def _get_turn_queue(self, key: tuple[str, str]) -> asyncio.Queue:
         queue = self._turn_queues.get(key)
@@ -232,6 +239,12 @@ class Zork(commands.Cog):
                     f"{message.author.mention}\n{timed_event_notice}",
                     campaign_id=campaign_id,
                 )
+            elif not retry_if_busy:
+                await self._enqueue_turn_message(
+                    message,
+                    campaign_id=campaign_id,
+                    content=content,
+                )
             return
 
         # Setup mode intercept — route to setup handler instead of play_action.
@@ -273,26 +286,38 @@ class Zork(commands.Cog):
 
         reaction_added = await ZorkEmulator._add_processing_reaction(message)
         try:
-            narration = await ZorkEmulator.play_action(
-                message,
-                content,
-                command_prefix=self._prefix(),
-                campaign_id=claimed_campaign_id,
-                manage_claim=False,
-            )
-            if narration is None:
-                return
-            notices = ZorkEmulator.pop_turn_ephemeral_notices(
-                claimed_campaign_id, message.author.id
-            )
-            msg = await self._send_action_reply(
-                message, narration, campaign_id=claimed_campaign_id, notices=notices
-            )
-            if msg is not None:
-                with app.app_context():
-                    ZorkEmulator.record_turn_message_ids(
-                        claimed_campaign_id, message.id, msg.id
+            while True:
+                narration = await ZorkEmulator.play_action(
+                    message,
+                    content,
+                    command_prefix=self._prefix(),
+                    campaign_id=claimed_campaign_id,
+                    manage_claim=False,
+                )
+                if narration is None:
+                    return
+                if self._is_turn_busy_text(narration):
+                    if retry_if_busy:
+                        await asyncio.sleep(self.TURN_BUSY_RETRY_DELAY_SECONDS)
+                        continue
+                    await self._enqueue_turn_message(
+                        message,
+                        campaign_id=claimed_campaign_id,
+                        content=content,
                     )
+                    return
+                notices = ZorkEmulator.pop_turn_ephemeral_notices(
+                    claimed_campaign_id, message.author.id
+                )
+                msg = await self._send_action_reply(
+                    message, narration, campaign_id=claimed_campaign_id, notices=notices
+                )
+                if msg is not None:
+                    with app.app_context():
+                        ZorkEmulator.record_turn_message_ids(
+                            claimed_campaign_id, message.id, msg.id
+                        )
+                break
         finally:
             if reaction_added:
                 await ZorkEmulator._remove_processing_reaction(message)
@@ -3867,7 +3892,9 @@ class Zork(commands.Cog):
             "Restart initiated. Rejecting new requests and draining in-flight turns..."
         )
         ZorkEmulator.request_shutdown()
-        drained = await ZorkEmulator.wait_for_drain(timeout=120)
+        drained = await ZorkEmulator.wait_for_drain(
+            timeout=self.RESTART_DRAIN_TIMEOUT_SECONDS
+        )
         if drained:
             await ctx.send("All turns drained. Shutting down now.")
         else:
