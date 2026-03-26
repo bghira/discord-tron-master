@@ -3,8 +3,12 @@ import asyncio
 import datetime
 import io
 import logging
+import os
 import re
 import shlex
+import shutil
+import subprocess
+import tempfile
 import discord
 
 from discord_tron_master.bot import DiscordBot
@@ -37,9 +41,13 @@ class _WorldTimeSendProxy:
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
     TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
     RESTART_DRAIN_TIMEOUT_SECONDS = 600
+    AUDIO_PREVIEW_MAX_CHARS = 1500
+    AUDIO_FILE_EXTENSIONS = (".aac", ".flac", ".m4a", ".mp3", ".mp4", ".oga", ".ogg", ".wav", ".weba", ".webm")
+    AUDIO_CONTENT_TYPE_PREFIXES = ("audio/", "video/")
     CLOCK_WEEKDAY_ALIASES = {
         "mon": "monday",
         "monday": "monday",
@@ -65,6 +73,7 @@ class Zork(commands.Cog):
         self.config = AppConfig()
         self._turn_queues: dict[tuple[str, str], asyncio.Queue] = {}
         self._turn_queue_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._pending_audio_transcriptions: dict[str, dict[str, object]] = {}
 
     def _prefix(self) -> str:
         return self.config.get_command_prefix()
@@ -134,6 +143,257 @@ class Zork(commands.Cog):
             await message.add_reaction("📥")
         except Exception:
             return
+
+    @staticmethod
+    def _looks_like_audio_attachment(attachment) -> bool:
+        content_type = str(getattr(attachment, "content_type", "") or "").strip().lower()
+        if any(content_type.startswith(prefix) for prefix in Zork.AUDIO_CONTENT_TYPE_PREFIXES):
+            return True
+        filename = str(getattr(attachment, "filename", "") or "").strip().lower()
+        return filename.endswith(Zork.AUDIO_FILE_EXTENSIONS)
+
+    def _first_audio_attachment(self, message):
+        for attachment in list(getattr(message, "attachments", []) or []):
+            if self._looks_like_audio_attachment(attachment):
+                return attachment
+        return None
+
+    @staticmethod
+    def _render_audio_transcription_preview(text: str) -> str:
+        normalized = " ".join(str(text or "").split()).strip()
+        if len(normalized) > Zork.AUDIO_PREVIEW_MAX_CHARS:
+            normalized = normalized[: Zork.AUDIO_PREVIEW_MAX_CHARS - 3].rstrip() + "..."
+        return normalized
+
+    @staticmethod
+    def _whisper_cpu_command_template() -> str:
+        return str(
+            os.getenv(
+                "ZORK_WHISPER_CPU_CMD",
+                "whisper-cpu --output-format txt --output-dir {output_dir} {input}",
+            )
+        ).strip()
+
+    @staticmethod
+    def _whisper_cpu_timeout_seconds() -> int:
+        raw = os.getenv("ZORK_WHISPER_CPU_TIMEOUT_SECONDS", "180")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 180
+        return max(15, value)
+
+    @classmethod
+    def _transcribe_audio_bytes_with_whisper_cpu(
+        cls,
+        audio_bytes: bytes,
+        *,
+        filename: str,
+    ) -> str:
+        if not audio_bytes:
+            raise RuntimeError("Empty audio payload.")
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            raise RuntimeError("ffmpeg is not installed.")
+        command_template = cls._whisper_cpu_command_template()
+        if not command_template:
+            raise RuntimeError("ZORK_WHISPER_CPU_CMD is empty.")
+
+        safe_filename = os.path.basename(str(filename or "audio.bin"))
+        if not safe_filename:
+            safe_filename = "audio.bin"
+
+        with tempfile.TemporaryDirectory(prefix="zork-whisper-") as tmpdir:
+            source_path = os.path.join(tmpdir, safe_filename)
+            wav_path = os.path.join(tmpdir, "input.wav")
+            with open(source_path, "wb") as handle:
+                handle.write(audio_bytes)
+
+            ffmpeg_result = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    source_path,
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    wav_path,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=cls._whisper_cpu_timeout_seconds(),
+                check=False,
+            )
+            if ffmpeg_result.returncode != 0:
+                stderr = " ".join(str(ffmpeg_result.stderr or "").split())
+                raise RuntimeError(stderr or "ffmpeg failed to decode the audio attachment.")
+
+            formatted = command_template.format(
+                input=shlex.quote(wav_path),
+                output_dir=shlex.quote(tmpdir),
+            )
+            command = shlex.split(formatted)
+            if not command:
+                raise RuntimeError("Whisper command is empty.")
+            if shutil.which(command[0]) is None:
+                raise RuntimeError(f"{command[0]} is not installed.")
+
+            whisper_result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=cls._whisper_cpu_timeout_seconds(),
+                check=False,
+                cwd=tmpdir,
+            )
+            if whisper_result.returncode != 0:
+                stderr = " ".join(str(whisper_result.stderr or "").split())
+                raise RuntimeError(stderr or "whisper-cpu failed to transcribe the audio attachment.")
+
+            stdout_text = " ".join(str(whisper_result.stdout or "").split()).strip()
+            if stdout_text:
+                return stdout_text
+
+            txt_candidates = sorted(
+                os.path.join(tmpdir, name)
+                for name in os.listdir(tmpdir)
+                if name.lower().endswith(".txt")
+            )
+            for candidate in txt_candidates:
+                try:
+                    with open(candidate, "r", encoding="utf-8") as handle:
+                        text = " ".join(handle.read().split()).strip()
+                except Exception:
+                    continue
+                if text:
+                    return text
+
+        raise RuntimeError("whisper-cpu produced no transcription text.")
+
+    async def _handle_audio_transcription_message(
+        self,
+        message,
+        *,
+        campaign_id: str,
+        attachment,
+    ) -> None:
+        reaction_added = await ZorkEmulator._add_processing_reaction(message)
+        try:
+            audio_bytes = await attachment.read()
+            try:
+                transcript = await asyncio.to_thread(
+                    self._transcribe_audio_bytes_with_whisper_cpu,
+                    audio_bytes,
+                    filename=getattr(attachment, "filename", "audio.bin"),
+                )
+            except Exception as exc:
+                logger.warning("Audio transcription failed for Zork message %s", getattr(message, "id", None), exc_info=True)
+                await self._send_large_message(
+                    message.channel,
+                    f"{message.author.mention}\nAudio transcription failed: {exc}",
+                    campaign_id=campaign_id,
+                )
+                return
+
+            transcript = " ".join(str(transcript or "").split()).strip()
+            if not transcript:
+                await self._send_large_message(
+                    message.channel,
+                    f"{message.author.mention}\nAudio transcription produced no text.",
+                    campaign_id=campaign_id,
+                )
+                return
+
+            preview_text = self._render_audio_transcription_preview(transcript)
+            preview_message = await self._send_large_message(
+                message.channel,
+                (
+                    f"{message.author.mention}\n"
+                    "[Audio transcription preview]\n"
+                    f"{preview_text}\n\n"
+                    "React with ✅ to use this as your turn text, or ❌ to discard it."
+                ),
+                campaign_id=campaign_id,
+            )
+            if preview_message is None:
+                return
+            self._pending_audio_transcriptions[str(preview_message.id)] = {
+                "campaign_id": str(campaign_id),
+                "actor_id": str(message.author.id),
+                "source_message": message,
+                "transcript_text": transcript,
+            }
+            for emoji in self.AUDIO_TRANSCRIPTION_REACTIONS:
+                try:
+                    await preview_message.add_reaction(emoji)
+                except Exception:
+                    logger.debug(
+                        "Failed adding audio transcription reaction %s on %s",
+                        emoji,
+                        getattr(preview_message, "id", None),
+                        exc_info=True,
+                    )
+        finally:
+            if reaction_added:
+                await ZorkEmulator._remove_processing_reaction(message)
+
+    async def handle_audio_transcription_reaction(self, message, emoji: str, user) -> bool:
+        if str(emoji or "") not in self.AUDIO_TRANSCRIPTION_REACTIONS:
+            return False
+        pending = self._pending_audio_transcriptions.get(str(getattr(message, "id", "")))
+        if not isinstance(pending, dict):
+            return False
+        if user is None or getattr(user, "bot", False):
+            return True
+        owner_id = str(pending.get("actor_id") or "")
+        campaign_id = str(pending.get("campaign_id") or "")
+        if owner_id != str(getattr(user, "id", "")):
+            await self._send_message(
+                message.channel,
+                f"{user.mention} only the original speaker can accept or reject that transcription."
+                ,
+                campaign_id=campaign_id,
+            )
+            return True
+
+        transcript_text = str(pending.get("transcript_text") or "").strip()
+        source_message = pending.get("source_message")
+        self._pending_audio_transcriptions.pop(str(message.id), None)
+
+        if str(emoji) == "❌":
+            await message.edit(
+                content=self._with_world_time(
+                    f"{user.mention}\n❌ Audio transcription discarded.",
+                    campaign_id,
+                    ctx_like=message,
+                )
+            )
+            return True
+
+        preview_text = self._render_audio_transcription_preview(transcript_text)
+        await message.edit(
+            content=self._with_world_time(
+                (
+                    f"{user.mention}\n"
+                    "✅ Using this audio transcription as turn text:\n"
+                    f"{preview_text}"
+                ),
+                campaign_id,
+                ctx_like=message,
+            )
+        )
+        if source_message is None or not transcript_text:
+            return True
+        await self._process_campaign_message(
+            source_message,
+            campaign_id=campaign_id,
+            content=transcript_text,
+        )
+        return True
 
     @classmethod
     def _is_turn_busy_text(cls, text: object) -> bool:
@@ -1625,8 +1885,8 @@ class Zork(commands.Cog):
         if app is None:
             return
         content = self._strip_bot_mention(message.content)
-        if not content:
-            return
+        audio_attachment = self._first_audio_attachment(message)
+        has_audio_only_input = bool(audio_attachment is not None and not content)
 
         campaign_id = None
         if message.guild is None:
@@ -1663,6 +1923,16 @@ class Zork(commands.Cog):
             if inferred_campaign_id is None:
                 return
             campaign_id = str(inferred_campaign_id)
+
+        if has_audio_only_input:
+            await self._handle_audio_transcription_message(
+                message,
+                campaign_id=campaign_id,
+                attachment=audio_attachment,
+            )
+            return
+        if not content:
+            return
 
         # Rewind detection — must happen before begin_turn.
         content_stripped = message.content.strip().lower()

@@ -20,6 +20,7 @@ guild_config = Guilds()
 class Reactions(commands.Cog):
     ZORK_TURN_REACTIONS = ("ℹ️", "⏲️", "⏪", "❌")
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    ZORK_AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -162,6 +163,20 @@ class Reactions(commands.Cog):
         )
         await DiscordBot.send_large_message(message, f"{user.mention}\n{text}")
         return True
+
+    async def _handle_zork_audio_transcription_reaction(self, message, emoji: str, user) -> bool:
+        emoji = str(emoji or "")
+        if emoji not in self.ZORK_AUDIO_TRANSCRIPTION_REACTIONS:
+            return False
+        if message is None or message.author != self.bot.user or user is None or getattr(user, "bot", False):
+            return False
+        zork_cog = self.bot.get_cog("Zork")
+        if zork_cog is None:
+            return False
+        handler = getattr(zork_cog, "handle_audio_transcription_reaction", None)
+        if not callable(handler):
+            return False
+        return bool(await handler(message, emoji, user))
 
     async def _bootstrap_recent_zork_turn_messages(self):
         app = AppConfig.get_flask()
@@ -358,7 +373,7 @@ class Reactions(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
         emoji = str(getattr(payload, "emoji", "") or "")
-        if emoji not in {"ℹ️", "ℹ", "⏪", "❌", "🧵", "✉️"}:
+        if emoji not in {"ℹ️", "ℹ", "⏪", "❌", "✅", "🧵", "✉️"}:
             return
         channel = await self._fetch_channel_for_payload(payload)
         if channel is None:
@@ -373,6 +388,8 @@ class Reactions(commands.Cog):
         guild = getattr(message, "guild", None)
         user = await self._fetch_discord_user(payload, guild=guild)
         if user is None:
+            return
+        if await self._handle_zork_audio_transcription_reaction(message, emoji, user):
             return
         if await self._handle_sms_notice_reaction(message, emoji, user):
             return
@@ -399,7 +416,7 @@ class Reactions(commands.Cog):
         if str(reaction.emoji) in {"🧵", "✉️"}:
             logging.debug("Ignoring SMS notice reaction in on_reaction_add; raw handler owns it.")
             return
-        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌"}:
+        if str(reaction.emoji) in {"ℹ️", "ℹ", "⏪", "❌", "✅"}:
             return
         image_urls = []
         img = None
