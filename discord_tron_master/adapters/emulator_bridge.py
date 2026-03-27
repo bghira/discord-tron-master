@@ -248,7 +248,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         game_engine = GameEngine(
             uow_factory=_uow_factory,
             llm=llm,
-            lease_ttl_seconds=300,
+            lease_ttl_seconds=GameEngine.DEFAULT_LEASE_TTL_SECONDS,
             max_conflict_retries=2,
         )
 
