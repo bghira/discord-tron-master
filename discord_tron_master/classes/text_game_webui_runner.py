@@ -47,6 +47,12 @@ class TextGameWebUIRunner:
         env["TEXT_GAME_WEBUI_PORT"] = str(port)
         env["TEXT_GAME_WEBUI_TGE_DATABASE_URL"] = self._config.get_text_game_webui_database_url()
         env["TEXT_GAME_WEBUI_DEBUG"] = "1" if self._config.get_text_game_webui_debug() else "0"
+        env["TEXT_GAME_WEBUI_ZORK_LOG_ROOT"] = str(
+            Path(self._config.project_root).resolve().parent / "zork-logs"
+        )
+        env["TEXT_GAME_WEBUI_DTM_LINK_AUTH"] = "1"
+        env["TEXT_GAME_WEBUI_DTM_LINK_SECRET"] = self._config.get_text_game_webui_link_secret()
+        env["TEXT_GAME_WEBUI_DTM_COMMAND_PREFIX"] = str(self._config.get_command_prefix() or "+")
         env["TEXT_GAME_WEBUI_TGE_RUNTIME_PROBE_LLM"] = (
             "1" if self._config.get_text_game_webui_runtime_probe_llm() else "0"
         )

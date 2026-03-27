@@ -1,3 +1,4 @@
+import hashlib
 import json, logging, os
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -45,6 +46,7 @@ DEFAULT_CONFIG = {
         "sync_zork_backend": True,
         "runtime_probe_llm": False,
         "runtime_probe_timeout_seconds": 8,
+        "link_secret": None,
     },
 }
 
@@ -519,3 +521,20 @@ class AppConfig:
             )
         except (TypeError, ValueError):
             return 8
+
+    def get_text_game_webui_link_secret(self):
+        explicit = str(
+            self.get_text_game_webui_config().get("link_secret") or ""
+        ).strip()
+        if explicit:
+            return explicit
+        seed = "|".join(
+            [
+                str(self.get_discord_api_key() or ""),
+                str(self.get_mysql_password() or ""),
+                str(self.get_mysql_hostname() or ""),
+                str(self.get_mysql_dbname() or ""),
+                str(self.project_root or ""),
+            ]
+        )
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()

@@ -2,6 +2,7 @@ from discord.ext import commands
 import asyncio
 import datetime
 import io
+import json
 import logging
 import os
 import re
@@ -9,6 +10,9 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 import discord
 
 from discord_tron_master.bot import DiscordBot
@@ -78,6 +82,64 @@ class Zork(commands.Cog):
 
     def _prefix(self) -> str:
         return self.config.get_command_prefix()
+
+    def _text_game_webui_link_url(self) -> str | None:
+        if not self.config.is_text_game_webui_enabled():
+            return None
+        host = str(self.config.get_text_game_webui_host() or "127.0.0.1").strip() or "127.0.0.1"
+        if host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        port = int(self.config.get_text_game_webui_port() or 8080)
+        return f"http://{host}:{port}/api/dtm-link/confirm"
+
+    async def _confirm_text_game_webui_link(
+        self,
+        *,
+        code: str,
+        actor_id: str,
+        display_name: str,
+    ) -> dict[str, object]:
+        url = self._text_game_webui_link_url()
+        if not url:
+            raise RuntimeError("text-game-webui is not enabled in config.")
+        payload = json.dumps(
+            {
+                "code": code,
+                "actor_id": actor_id,
+                "display_name": display_name,
+            }
+        ).encode("utf-8")
+        req = urllib_request.Request(
+            url,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-DTM-Link-Secret": self.config.get_text_game_webui_link_secret(),
+            },
+        )
+
+        def _send() -> dict[str, object]:
+            with urllib_request.urlopen(req, timeout=10) as response:
+                raw = response.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else {"ok": True}
+
+        try:
+            return await asyncio.to_thread(_send)
+        except urllib_error.HTTPError as exc:
+            detail = ""
+            try:
+                raw = exc.read().decode("utf-8")
+                if raw.strip():
+                    parsed = json.loads(raw)
+                    detail = str(parsed.get("detail") or "").strip()
+            except Exception:
+                detail = ""
+            if detail:
+                raise RuntimeError(detail) from exc
+            raise RuntimeError(f"Web UI link request failed with HTTP {exc.code}.") from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"Could not reach text-game-webui: {exc.reason}") from exc
 
     @classmethod
     def _parse_clock_value(
@@ -2149,6 +2211,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork style [prompt|default]` view or set the style direction for this channel/thread (max 120 chars; creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
+            f"- `{prefix}zork link-account <uuid>` link your Discord account to the DTM web UI session currently waiting on that code\n"
             f"- `{prefix}zork campaigns` list campaigns\n"
             f"- `{prefix}zork campaign <name>` switch or create campaign\n"
             f"- `{prefix}zork identity <name>` set your character name\n"
@@ -2810,6 +2873,41 @@ class Zork(commands.Cog):
             f"Private DMs enabled for `{campaign.name}` as `{character_name}`.\n"
             "Send plain messages to the bot in DM and they will act in this shared campaign."
         )
+
+    @zork.command(name="link-account")
+    async def zork_link_account(self, ctx, code: str = None):
+        ctx = self._wrap_send(ctx)
+        if not code:
+            await ctx.send(
+                f"Usage: `{self._prefix()}zork link-account <uuid>`"
+            )
+            return
+        try:
+            normalized_code = str(uuid.UUID(str(code).strip()))
+        except (TypeError, ValueError):
+            await ctx.send("Link code must be a valid UUID.")
+            return
+        if not self.config.is_text_game_webui_enabled():
+            await ctx.send("text-game-webui is not enabled in config.")
+            return
+        try:
+            result = await self._confirm_text_game_webui_link(
+                code=normalized_code,
+                actor_id=str(ctx.author.id),
+                display_name=str(getattr(ctx.author, "display_name", "") or getattr(ctx.author, "name", "") or ""),
+            )
+        except Exception as exc:
+            await ctx.send(f"Could not link web UI account: {exc}")
+            return
+        linked_name = str(result.get("display_name") or getattr(ctx.author, "display_name", "") or "").strip()
+        if linked_name:
+            await ctx.send(
+                f"Web UI linked for `{linked_name}`. Return to the browser and it should unlock automatically."
+            )
+        else:
+            await ctx.send(
+                "Web UI linked. Return to the browser and it should unlock automatically."
+            )
 
     @zork.command(name="backend")
     async def zork_backend(self, ctx, *, option: str = None):
