@@ -12,6 +12,9 @@ from discord_tron_master.classes.app_config import AppConfig
 logger = logging.getLogger(__name__)
 
 _ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+_BACKEND_DEFAULT_MODELS = {
+    "zai": "glm-5.1",
+}
 
 
 class TextGameWebUIRunner:
@@ -110,7 +113,7 @@ class TextGameWebUIRunner:
             backend = str(backend_config.get("backend") or "zai").strip().lower() or "zai"
             backend_model = str(backend_config.get("model") or "").strip() or None
             completion_mode = completion_mode or backend
-            llm_model = llm_model or backend_model
+            llm_model = llm_model or backend_model or _BACKEND_DEFAULT_MODELS.get(backend)
             if backend == "zai":
                 llm_base_url = llm_base_url or _ZAI_DEFAULT_BASE_URL
                 llm_api_key = llm_api_key or self._config.get_openai_api_key()

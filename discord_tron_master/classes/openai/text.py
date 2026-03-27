@@ -34,7 +34,7 @@ def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
 
 
 class GPT:
-    _ZAI_MODEL = "glm-5"
+    _ZAI_MODEL = "glm-5.1"
     _CLI_TIMEOUT_SECONDS = 300.0
     _CLI_WORKDIR = "/tmp/discord-tron-master-gpt"
     _TEXT_COMPLETION_INSTRUCTIONS = (
