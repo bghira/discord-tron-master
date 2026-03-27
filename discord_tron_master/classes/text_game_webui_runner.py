@@ -31,6 +31,11 @@ class TextGameWebUIRunner:
         project_path = Path(self._config.get_text_game_webui_project_path()).expanduser()
         if not project_path.exists():
             raise RuntimeError(f"text-game-webui project path does not exist: {project_path}")
+        tge_project_path = Path(self._config.get_text_game_webui_tge_project_path()).expanduser()
+        if not tge_project_path.exists():
+            raise RuntimeError(
+                f"text-game-engine project path does not exist: {tge_project_path}"
+            )
 
         python_bin = self._config.get_text_game_webui_python_bin() or sys.executable
         host = self._config.get_text_game_webui_host()
@@ -48,6 +53,9 @@ class TextGameWebUIRunner:
         env["TEXT_GAME_WEBUI_TGE_RUNTIME_PROBE_TIMEOUT_SECONDS"] = str(
             self._config.get_text_game_webui_runtime_probe_timeout_seconds()
         )
+        existing_pythonpath = [part for part in str(env.get("PYTHONPATH") or "").split(os.pathsep) if part]
+        desired_pythonpath = [str(project_path), str(tge_project_path)]
+        env["PYTHONPATH"] = os.pathsep.join(desired_pythonpath + existing_pythonpath)
         self._apply_llm_environment(env)
 
         command = [

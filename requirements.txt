@@ -8,4 +8,5 @@ Flask-Migrate
 mysql-connector-python
 python-dotenv
 openai-whisper
+-e ../text-game-engine
 -e ../text-game-webui

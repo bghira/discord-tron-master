@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
         "host": "127.0.0.1",
         "port": 8080,
         "project_path": "/home/kash/src/text-game-webui",
+        "tge_project_path": "/home/kash/src/text-game-engine/src",
         "python_bin": None,
         "debug": False,
         "database_url": None,
@@ -465,6 +466,12 @@ class AppConfig:
         return str(
             self.get_text_game_webui_config().get("project_path")
             or "/home/kash/src/text-game-webui"
+        )
+
+    def get_text_game_webui_tge_project_path(self):
+        return str(
+            self.get_text_game_webui_config().get("tge_project_path")
+            or "/home/kash/src/text-game-engine/src"
         )
 
     def get_text_game_webui_python_bin(self):
