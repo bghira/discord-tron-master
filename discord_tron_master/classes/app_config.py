@@ -1,5 +1,6 @@
 import json, logging, os
 from pathlib import Path
+from urllib.parse import quote_plus
 
 DEFAULT_CONFIG = {
     "concurrent_slots": 1,
@@ -27,6 +28,22 @@ DEFAULT_CONFIG = {
         "password": "diffusion_pwd",
         "hostname": "localhost",
         "dbname": "diffusion_master",
+    },
+    "text_game_webui": {
+        "enabled": False,
+        "host": "127.0.0.1",
+        "port": 8080,
+        "project_path": "/home/kash/src/text-game-webui",
+        "python_bin": None,
+        "debug": False,
+        "database_url": None,
+        "completion_mode": None,
+        "llm_base_url": None,
+        "llm_api_key": None,
+        "llm_model": None,
+        "sync_zork_backend": True,
+        "runtime_probe_llm": False,
+        "runtime_probe_timeout_seconds": 8,
     },
 }
 
@@ -416,3 +433,82 @@ class AppConfig:
     def get_mysql_dbname(self):
         self.reload_config()
         return self.config.get("mysql", {}).get("dbname", "diffusion_master")
+
+    def get_tge_database_url(self):
+        self.reload_config()
+        user = quote_plus(str(self.get_mysql_user() or ""))
+        password = quote_plus(str(self.get_mysql_password() or ""))
+        host = str(self.get_mysql_hostname() or "localhost")
+        dbname = str(self.get_mysql_dbname() or "diffusion_master")
+        return f"mysql+mysqlconnector://{user}:{password}@{host}/{dbname}"
+
+    def get_text_game_webui_config(self):
+        self.reload_config()
+        raw = self.config.get("text_game_webui", {})
+        if not isinstance(raw, dict):
+            raw = {}
+        return self.merge_dicts(DEFAULT_CONFIG["text_game_webui"], raw)
+
+    def is_text_game_webui_enabled(self):
+        return bool(self.get_text_game_webui_config().get("enabled", False))
+
+    def get_text_game_webui_host(self):
+        return str(self.get_text_game_webui_config().get("host") or "127.0.0.1")
+
+    def get_text_game_webui_port(self):
+        try:
+            return int(self.get_text_game_webui_config().get("port", 8080))
+        except (TypeError, ValueError):
+            return 8080
+
+    def get_text_game_webui_project_path(self):
+        return str(
+            self.get_text_game_webui_config().get("project_path")
+            or "/home/kash/src/text-game-webui"
+        )
+
+    def get_text_game_webui_python_bin(self):
+        value = self.get_text_game_webui_config().get("python_bin")
+        return str(value).strip() if value else None
+
+    def get_text_game_webui_debug(self):
+        return bool(self.get_text_game_webui_config().get("debug", False))
+
+    def get_text_game_webui_database_url(self):
+        configured = self.get_text_game_webui_config().get("database_url")
+        if configured:
+            return str(configured).strip()
+        return self.get_tge_database_url()
+
+    def get_text_game_webui_completion_mode(self):
+        value = self.get_text_game_webui_config().get("completion_mode")
+        return str(value).strip() if value else None
+
+    def get_text_game_webui_llm_base_url(self):
+        value = self.get_text_game_webui_config().get("llm_base_url")
+        return str(value).strip() if value else None
+
+    def get_text_game_webui_llm_api_key(self):
+        value = self.get_text_game_webui_config().get("llm_api_key")
+        return str(value).strip() if value else None
+
+    def get_text_game_webui_llm_model(self):
+        value = self.get_text_game_webui_config().get("llm_model")
+        return str(value).strip() if value else None
+
+    def get_text_game_webui_sync_zork_backend(self):
+        return bool(self.get_text_game_webui_config().get("sync_zork_backend", True))
+
+    def get_text_game_webui_runtime_probe_llm(self):
+        return bool(self.get_text_game_webui_config().get("runtime_probe_llm", False))
+
+    def get_text_game_webui_runtime_probe_timeout_seconds(self):
+        try:
+            return int(
+                self.get_text_game_webui_config().get(
+                    "runtime_probe_timeout_seconds",
+                    8,
+                )
+            )
+        except (TypeError, ValueError):
+            return 8

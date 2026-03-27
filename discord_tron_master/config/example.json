@@ -30,6 +30,22 @@
         "hostname": "127.0.0.1",
         "dbname": "diffusion_master"
     },
+    "text_game_webui": {
+        "enabled": false,
+        "host": "127.0.0.1",
+        "port": 8080,
+        "project_path": "/home/kash/src/text-game-webui",
+        "python_bin": null,
+        "debug": false,
+        "database_url": null,
+        "completion_mode": null,
+        "llm_base_url": null,
+        "llm_api_key": null,
+        "llm_model": null,
+        "sync_zork_backend": true,
+        "runtime_probe_llm": false,
+        "runtime_probe_timeout_seconds": 8
+    },
     "web_root": "/tmp/discord",
     "url_base": "https://localhost.foo/folder",
     "tls_key_path": "discord_tron_master/config/server_key.pem",

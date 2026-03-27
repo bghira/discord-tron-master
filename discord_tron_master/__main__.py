@@ -11,6 +11,7 @@ from flask import Flask
 from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.command_processor import CommandProcessor
+from discord_tron_master.classes.text_game_webui_runner import TextGameWebUIRunner
 
 config = AppConfig()
 
@@ -46,6 +47,7 @@ command_processor = CommandProcessor(queue_manager, worker_manager, discord_bot)
 websocket_hub = WebSocketHub(
     auth_instance=auth, command_processor=command_processor, discord_bot=discord_bot
 )
+text_game_webui_runner = TextGameWebUIRunner(config)
 
 
 import asyncio, concurrent
@@ -70,17 +72,21 @@ def main():
         asyncio.set_event_loop(loop)
         loop.run_until_complete(discord_bot.run())
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        tasks = [
-            executor.submit(run_discord_bot),
-            # executor.submit(run_websocket_hub),
-        ]
+    text_game_webui_runner.start()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            tasks = [
+                executor.submit(run_discord_bot),
+                # executor.submit(run_websocket_hub),
+            ]
 
-        for future in concurrent.futures.as_completed(tasks):
-            try:
-                future.result()
-            except Exception as e:
-                logging.error("An error occurred: %s", e)
+            for future in concurrent.futures.as_completed(tasks):
+                try:
+                    future.result()
+                except Exception as e:
+                    logging.error("An error occurred: %s", e)
+    finally:
+        text_game_webui_runner.stop()
 
 
 # A simple wrapper to run Flask in a thread.

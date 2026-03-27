@@ -727,6 +727,7 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     @classmethod
     def mark_unread_sms_read_for_actor(cls, campaign_id, actor_id):
         cls._ensure_init()
+        from text_game_engine.persistence.sqlalchemy.models import Campaign
         with cls._session_factory() as session:
             campaign = session.get(Campaign, str(campaign_id))
             if campaign is None:

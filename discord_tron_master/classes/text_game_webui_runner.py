@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from discord_tron_master.classes.app_config import AppConfig
+
+logger = logging.getLogger(__name__)
+
+_ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+
+
+class TextGameWebUIRunner:
+    def __init__(self, config: AppConfig):
+        self._config = config
+        self._process: subprocess.Popen[str] | None = None
+
+    def is_enabled(self) -> bool:
+        return self._config.is_text_game_webui_enabled()
+
+    def start(self) -> None:
+        if not self.is_enabled():
+            return
+        if self._process is not None and self._process.poll() is None:
+            return
+
+        project_path = Path(self._config.get_text_game_webui_project_path()).expanduser()
+        if not project_path.exists():
+            raise RuntimeError(f"text-game-webui project path does not exist: {project_path}")
+
+        python_bin = self._config.get_text_game_webui_python_bin() or sys.executable
+        host = self._config.get_text_game_webui_host()
+        port = self._config.get_text_game_webui_port()
+
+        env = os.environ.copy()
+        env["TEXT_GAME_WEBUI_GATEWAY_BACKEND"] = "tge"
+        env["TEXT_GAME_WEBUI_HOST"] = str(host)
+        env["TEXT_GAME_WEBUI_PORT"] = str(port)
+        env["TEXT_GAME_WEBUI_TGE_DATABASE_URL"] = self._config.get_text_game_webui_database_url()
+        env["TEXT_GAME_WEBUI_DEBUG"] = "1" if self._config.get_text_game_webui_debug() else "0"
+        env["TEXT_GAME_WEBUI_TGE_RUNTIME_PROBE_LLM"] = (
+            "1" if self._config.get_text_game_webui_runtime_probe_llm() else "0"
+        )
+        env["TEXT_GAME_WEBUI_TGE_RUNTIME_PROBE_TIMEOUT_SECONDS"] = str(
+            self._config.get_text_game_webui_runtime_probe_timeout_seconds()
+        )
+        self._apply_llm_environment(env)
+
+        command = [
+            python_bin,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            str(host),
+            "--port",
+            str(port),
+        ]
+
+        logger.info(
+            "Starting text-game-webui at http://%s:%s using %s",
+            host,
+            port,
+            project_path,
+        )
+        self._process = subprocess.Popen(
+            command,
+            cwd=str(project_path),
+            env=env,
+            stdout=None,
+            stderr=None,
+            text=True,
+        )
+
+        time.sleep(2.0)
+        if self._process.poll() is not None:
+            code = self._process.returncode
+            self._process = None
+            raise RuntimeError(f"text-game-webui exited immediately with code {code}")
+
+    def _apply_llm_environment(self, env: dict[str, str]) -> None:
+        sync_with_zork = self._config.get_text_game_webui_sync_zork_backend()
+        env["TEXT_GAME_WEBUI_TGE_SYNC_WITH_DTM"] = "1" if sync_with_zork else "0"
+
+        completion_mode = self._config.get_text_game_webui_completion_mode()
+        llm_base_url = self._config.get_text_game_webui_llm_base_url()
+        llm_api_key = self._config.get_text_game_webui_llm_api_key()
+        llm_model = self._config.get_text_game_webui_llm_model()
+
+        if sync_with_zork:
+            backend_config = self._config.get_zork_backend_config(default_backend="zai")
+            backend = str(backend_config.get("backend") or "zai").strip().lower() or "zai"
+            backend_model = str(backend_config.get("model") or "").strip() or None
+            completion_mode = completion_mode or backend
+            llm_model = llm_model or backend_model
+            if backend == "zai":
+                llm_base_url = llm_base_url or _ZAI_DEFAULT_BASE_URL
+                llm_api_key = llm_api_key or self._config.get_openai_api_key()
+
+        if completion_mode:
+            env["TEXT_GAME_WEBUI_TGE_COMPLETION_MODE"] = completion_mode
+        if llm_base_url:
+            env["TEXT_GAME_WEBUI_TGE_LLM_BASE_URL"] = llm_base_url
+        if llm_api_key:
+            env["TEXT_GAME_WEBUI_TGE_LLM_API_KEY"] = llm_api_key
+        if llm_model:
+            env["TEXT_GAME_WEBUI_TGE_LLM_MODEL"] = llm_model
+
+    def stop(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+        if process.poll() is not None:
+            return
+        logger.info("Stopping text-game-webui sidecar process")
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.warning("text-game-webui did not stop after SIGTERM; killing it")
+            process.kill()
+            process.wait(timeout=5)

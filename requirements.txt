@@ -7,3 +7,5 @@ discord>=2.2.2
 Flask-Migrate
 mysql-connector-python
 python-dotenv
+openai-whisper
+-e ../text-game-webui

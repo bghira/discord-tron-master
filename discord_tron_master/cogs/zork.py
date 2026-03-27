@@ -41,6 +41,7 @@ class _WorldTimeSendProxy:
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    CAMPAIGN_BACKEND_STATE_KEY = "zork_backend_config"
     AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
     TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
@@ -170,7 +171,7 @@ class Zork(commands.Cog):
         return str(
             os.getenv(
                 "ZORK_WHISPER_CPU_CMD",
-                "whisper-cpu --output-format txt --output-dir {output_dir} {input}",
+                "whisper {input} --output_dir {output_dir} --output_format txt --model base --fp16 False",
             )
         ).strip()
 
@@ -239,7 +240,9 @@ class Zork(commands.Cog):
             if not command:
                 raise RuntimeError("Whisper command is empty.")
             if shutil.which(command[0]) is None:
-                raise RuntimeError(f"{command[0]} is not installed.")
+                raise RuntimeError(
+                    f"{command[0]} is not installed. Install `openai-whisper` or set ZORK_WHISPER_CPU_CMD."
+                )
 
             whisper_result = subprocess.run(
                 command,
@@ -510,6 +513,11 @@ class Zork(commands.Cog):
         # Setup mode intercept — route to setup handler instead of play_action.
         with app.app_context():
             _setup_campaign = ZorkEmulator.query_campaign(claimed_campaign_id)
+            if _setup_campaign is not None:
+                self._sync_campaign_backend_state(
+                    _setup_campaign,
+                    channel_id=getattr(message.channel, "id", None),
+                )
             _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
                 _setup_campaign
             )
@@ -629,6 +637,35 @@ class Zork(commands.Cog):
         if ctx.guild is None:
             return False
         return True
+
+    def _sync_campaign_backend_state(
+        self,
+        campaign,
+        *,
+        channel_id: int | str | None = None,
+        backend: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, str | None]:
+        resolved = (
+            {
+                "backend": str(backend or "").strip().lower() or "zai",
+                "model": str(model or "").strip() or None,
+            }
+            if backend is not None
+            else self.config.get_zork_backend_config(channel_id, default_backend="zai")
+        )
+        state = ZorkEmulator.get_campaign_state(campaign)
+        if not isinstance(state, dict):
+            state = {}
+        desired = {"backend": str(resolved.get("backend") or "zai").strip().lower() or "zai"}
+        desired_model = str(resolved.get("model") or "").strip() or None
+        if desired_model:
+            desired["model"] = desired_model
+        if state.get(self.CAMPAIGN_BACKEND_STATE_KEY) != desired:
+            state[self.CAMPAIGN_BACKEND_STATE_KEY] = desired
+            campaign.state_json = ZorkEmulator._dump_json(state)
+            ZorkEmulator.commit_model(campaign)
+        return {"backend": desired["backend"], "model": desired.get("model")}
 
     def _infer_campaign_id(self, ctx_like) -> str | int | None:
         if ctx_like is None:
@@ -2835,6 +2872,15 @@ class Zork(commands.Cog):
             return
 
         self.config.set_zork_backend(ctx.channel.id, normalized, model=model)
+        with app.app_context():
+            campaign = ZorkEmulator.query_campaign(campaign.id)
+            if campaign is not None:
+                self._sync_campaign_backend_state(
+                    campaign,
+                    channel_id=ctx.channel.id,
+                    backend=normalized,
+                    model=model,
+                )
         model_text = f" with model `{model}`" if model else " with the backend default model"
         await ctx.send(
             f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`{model_text}."
