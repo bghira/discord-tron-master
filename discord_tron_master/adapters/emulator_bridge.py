@@ -16,6 +16,12 @@ import sqlite3
 import threading
 from typing import Any, Optional, Tuple
 
+from discord_tron_master.adapters.tge_ports import (
+    get_tge_completion_overrides,
+    reset_tge_completion_overrides,
+    set_tge_completion_overrides,
+)
+
 logger = logging.getLogger(__name__)
 
 _ZORK_LOG_ROOT = os.path.join(os.getcwd(), "zork-logs")
@@ -202,9 +208,6 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             MediaGenerationAdapter,
             ZorkMemoryAdapter,
             IMDBLookupAdapter,
-            get_tge_completion_overrides,
-            set_tge_completion_overrides,
-            reset_tge_completion_overrides,
         )
 
         config = AppConfig()
