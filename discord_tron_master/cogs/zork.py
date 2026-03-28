@@ -93,6 +93,15 @@ class Zork(commands.Cog):
         port = int(self.config.get_text_game_webui_port() or 8080)
         return f"http://{host}:{port}/api/dtm-link/confirm"
 
+    def _text_game_webui_turn_refresh_url(self, campaign_id: str | int | None) -> str | None:
+        if not self.config.is_text_game_webui_enabled() or campaign_id is None:
+            return None
+        host = str(self.config.get_text_game_webui_host() or "127.0.0.1").strip() or "127.0.0.1"
+        if host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        port = int(self.config.get_text_game_webui_port() or 8080)
+        return f"http://{host}:{port}/api/internal/campaigns/{campaign_id}/turns/refresh"
+
     async def _confirm_text_game_webui_link(
         self,
         *,
@@ -141,6 +150,52 @@ class Zork(commands.Cog):
             raise RuntimeError(f"Web UI link request failed with HTTP {exc.code}.") from exc
         except urllib_error.URLError as exc:
             raise RuntimeError(f"Could not reach text-game-webui: {exc.reason}") from exc
+
+    async def _notify_text_game_webui_turn_refresh(
+        self,
+        *,
+        campaign_id: str | int | None,
+        actor_id: str | int | None = None,
+        session_id: str | int | None = None,
+    ) -> None:
+        url = self._text_game_webui_turn_refresh_url(campaign_id)
+        if not url:
+            return
+        payload = json.dumps(
+            {
+                "actor_id": str(actor_id or "").strip() or None,
+                "session_id": str(session_id or "").strip() or None,
+            }
+        ).encode("utf-8")
+        req = urllib_request.Request(
+            url,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-DTM-Link-Secret": self.config.get_text_game_webui_link_secret(),
+            },
+        )
+
+        def _send() -> None:
+            with urllib_request.urlopen(req, timeout=5) as response:
+                response.read()
+
+        try:
+            await asyncio.to_thread(_send)
+        except urllib_error.HTTPError as exc:
+            logger.debug(
+                "text-game-webui turn refresh failed for campaign %s with HTTP %s",
+                campaign_id,
+                exc.code,
+                exc_info=True,
+            )
+        except urllib_error.URLError:
+            logger.debug(
+                "text-game-webui turn refresh unavailable for campaign %s",
+                campaign_id,
+                exc_info=True,
+            )
 
     @classmethod
     def _parse_clock_value(
@@ -598,6 +653,10 @@ class Zork(commands.Cog):
                             response,
                             campaign_id=claimed_campaign_id,
                         )
+                        await self._notify_text_game_webui_turn_refresh(
+                            campaign_id=claimed_campaign_id,
+                            actor_id=message.author.id,
+                        )
             finally:
                 if reaction_added:
                     await ZorkEmulator._remove_processing_reaction(message)
@@ -642,6 +701,10 @@ class Zork(commands.Cog):
                 )
                 msg = await self._send_action_reply(
                     message, narration, campaign_id=claimed_campaign_id, notices=notices
+                )
+                await self._notify_text_game_webui_turn_refresh(
+                    campaign_id=claimed_campaign_id,
+                    actor_id=message.author.id,
                 )
                 if msg is not None:
                     with app.app_context():
@@ -2158,6 +2221,10 @@ class Zork(commands.Cog):
                     )
                     if response:
                         await self._send_large_message(ctx, response, campaign_id=campaign_id)
+                        await self._notify_text_game_webui_turn_refresh(
+                            campaign_id=campaign_id,
+                            actor_id=ctx.author.id,
+                        )
             finally:
                 if reaction_added:
                     await ZorkEmulator._remove_processing_reaction(ctx)
@@ -2180,6 +2247,10 @@ class Zork(commands.Cog):
             )
             msg = await self._send_action_reply(
                 ctx, narration, campaign_id=campaign_id, notices=notices
+            )
+            await self._notify_text_game_webui_turn_refresh(
+                campaign_id=campaign_id,
+                actor_id=ctx.author.id,
             )
             if msg is not None:
                 with app.app_context():
