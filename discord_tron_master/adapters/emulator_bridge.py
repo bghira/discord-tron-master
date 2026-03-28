@@ -1434,29 +1434,48 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         cls._ensure_init()
         fn = getattr(cls._emu, "wait_for_drain", None)
         if callable(fn):
-            return await fn(timeout=timeout)
+            drained = await fn(timeout=timeout)
+            if drained:
+                return True
         backend_inflight = getattr(cls._emu, "_inflight_turns", None)
         backend_lock = getattr(cls._emu, "_inflight_turns_lock", None)
-        if backend_inflight is None:
-            logger.info("EmulatorBridge: bridge-local drain fallback found no backend inflight tracker")
-            return True
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0, float(timeout))
         while loop.time() < deadline:
             try:
-                if backend_lock is not None:
+                if backend_inflight is None:
+                    active = set()
+                elif backend_lock is not None:
                     with backend_lock:
                         active = set(backend_inflight)
                 else:
                     active = set(backend_inflight)
             except Exception:
                 active = set()
+            db_active = 0
+            try:
+                session_factory = cls._session_factory
+                if session_factory is not None:
+                    from datetime import datetime, timezone
+                    from text_game_engine.persistence.sqlalchemy.models import InflightTurn
+
+                    with session_factory() as session:
+                        now = datetime.now(timezone.utc).replace(tzinfo=None)
+                        db_active = int(
+                            session.query(InflightTurn)
+                            .filter(InflightTurn.expires_at > now)
+                            .count()
+                        )
+            except Exception:
+                db_active = 0
             cls._inflight_turns = active
-            if not active:
+            if not active and db_active <= 0:
                 return True
             await asyncio.sleep(0.25)
         try:
-            if backend_lock is not None:
+            if backend_inflight is None:
+                cls._inflight_turns = set()
+            elif backend_lock is not None:
                 with backend_lock:
                     cls._inflight_turns = set(backend_inflight)
             else:
