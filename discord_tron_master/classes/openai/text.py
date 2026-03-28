@@ -198,6 +198,12 @@ class GPT:
     def _normalize_backend(self) -> str:
         return self.config.normalize_zork_backend(getattr(self, "backend", "zai"))
 
+    def _resolve_zai_model(self) -> str:
+        raw_model = str(getattr(self, "engine", "") or "").strip()
+        if not raw_model or raw_model in {"o3-mini", "text-davinci-003"}:
+            return self._ZAI_MODEL
+        return raw_model
+
     def _resolve_cli_model(self, backend: str) -> str | None:
         raw_model = str(getattr(self, "engine", "") or "").strip()
         if backend == "opencode":
@@ -214,7 +220,7 @@ class GPT:
             base_url="https://api.z.ai/api/coding/paas/v4",
         )
         request_kwargs = {
-            "model": self._ZAI_MODEL,
+            "model": self._resolve_zai_model(),
             "messages": message_log,
             "max_completion_tokens": self.max_tokens,
             "temperature": self.temperature,
