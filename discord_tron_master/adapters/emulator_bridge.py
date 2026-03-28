@@ -202,6 +202,9 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             MediaGenerationAdapter,
             ZorkMemoryAdapter,
             IMDBLookupAdapter,
+            get_tge_completion_overrides,
+            set_tge_completion_overrides,
+            reset_tge_completion_overrides,
         )
 
         config = AppConfig()
@@ -218,9 +221,16 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         def _gpt_factory():
             from discord_tron_master.classes.openai.text import GPT
             gpt = GPT()
+            overrides = get_tge_completion_overrides()
             backend_config = config.get_zork_backend_config(default_backend="zai")
-            gpt.backend = str(backend_config.get("backend") or "zai").strip() or "zai"
-            model = str(backend_config.get("model") or "").strip()
+            backend = (
+                str(overrides.get("backend") or backend_config.get("backend") or "zai").strip()
+                or "zai"
+            )
+            model = str(
+                overrides.get("model") or backend_config.get("model") or ""
+            ).strip()
+            gpt.backend = backend
             if model:
                 gpt.engine = model
             return gpt
@@ -478,9 +488,14 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             user_id=getattr(author, "id", None) if author else None,
             is_dm=guild is None,
         )
+        campaign_id = kwargs.get("campaign_id")
+        completion_token = set_tge_completion_overrides(
+            cls._campaign_completion_overrides(campaign_id)
+        )
         try:
             return await cls._emu.play_action(*args, **kwargs)
         finally:
+            reset_tge_completion_overrides(completion_token)
             _zork_log_end(log_token)
 
     @classmethod
@@ -496,10 +511,46 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             user_id=getattr(author, "id", None) if author else None,
             is_dm=guild is None,
         )
+        campaign_like = args[2] if len(args) > 2 else kwargs.get("campaign")
+        campaign_id = getattr(campaign_like, "id", campaign_like)
+        completion_token = set_tge_completion_overrides(
+            cls._campaign_completion_overrides(campaign_id)
+        )
         try:
             return await cls._emu.handle_setup_message(*args, **kwargs)
         finally:
+            reset_tge_completion_overrides(completion_token)
             _zork_log_end(log_token)
+
+    @classmethod
+    def _campaign_completion_overrides(cls, campaign_id) -> dict[str, Any]:
+        from discord_tron_master.classes.app_config import AppConfig
+
+        config = AppConfig()
+        resolved = config.get_zork_backend_config(default_backend="zai")
+        campaign = cls.query_campaign(campaign_id) if campaign_id is not None else None
+        if campaign is not None:
+            state = cls._emu.get_campaign_state(campaign)
+            raw = state.get("zork_backend_config") if isinstance(state, dict) else None
+            if isinstance(raw, dict):
+                backend = config.normalize_zork_backend(
+                    raw.get("backend"),
+                    default=str(resolved.get("backend") or "zai").strip() or "zai",
+                )
+                model = str(raw.get("model") or "").strip() or None
+                thinking_value = raw.get("thinking_enabled")
+                resolved = {
+                    "backend": backend,
+                    "model": model,
+                    "thinking_enabled": (
+                        thinking_value if isinstance(thinking_value, bool) else True
+                    ),
+                }
+        return {
+            "backend": str(resolved.get("backend") or "zai").strip() or "zai",
+            "model": str(resolved.get("model") or "").strip() or None,
+            "thinking_enabled": bool(resolved.get("thinking_enabled", True)),
+        }
 
     @classmethod
     def end_turn(cls, campaign_id, user_id):

@@ -8,6 +8,7 @@ QueueManager, IMDB scraper) behind the Protocol interface that TGE expects.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
 import re
@@ -15,6 +16,24 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+_TGE_COMPLETION_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "dtm_tge_completion_overrides",
+    default=None,
+)
+
+
+def set_tge_completion_overrides(overrides: dict[str, Any] | None) -> contextvars.Token:
+    payload = dict(overrides or {}) if isinstance(overrides, dict) else None
+    return _TGE_COMPLETION_OVERRIDES.set(payload)
+
+
+def reset_tge_completion_overrides(token: contextvars.Token) -> None:
+    _TGE_COMPLETION_OVERRIDES.reset(token)
+
+
+def get_tge_completion_overrides() -> dict[str, Any]:
+    current = _TGE_COMPLETION_OVERRIDES.get()
+    return dict(current or {}) if isinstance(current, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -49,11 +68,13 @@ class TextCompletionAdapter:
         max_tokens: int = 2048,
     ) -> str | None:
         gpt = self._make_gpt()
+        overrides = get_tge_completion_overrides()
         return await gpt.turbo_completion(
             system_prompt,
             prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            thinking_enabled=bool(overrides.get("thinking_enabled", True)),
         )
 
 

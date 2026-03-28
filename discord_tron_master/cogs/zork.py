@@ -46,6 +46,7 @@ class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
     CAMPAIGN_BACKEND_STATE_KEY = "zork_backend_config"
+    THINKING_SUPPORTED_BACKENDS = {"zai"}
     AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
     TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
@@ -707,11 +708,15 @@ class Zork(commands.Cog):
         channel_id: int | str | None = None,
         backend: str | None = None,
         model: str | None = None,
+        thinking_enabled: bool | None = None,
     ) -> dict[str, str | None]:
         resolved = (
             {
                 "backend": str(backend or "").strip().lower() or "zai",
                 "model": str(model or "").strip() or None,
+                "thinking_enabled": bool(thinking_enabled)
+                if isinstance(thinking_enabled, bool)
+                else True,
             }
             if backend is not None
             else self.config.get_zork_backend_config(channel_id, default_backend="zai")
@@ -723,11 +728,16 @@ class Zork(commands.Cog):
         desired_model = str(resolved.get("model") or "").strip() or None
         if desired_model:
             desired["model"] = desired_model
+        desired["thinking_enabled"] = bool(resolved.get("thinking_enabled", True))
         if state.get(self.CAMPAIGN_BACKEND_STATE_KEY) != desired:
             state[self.CAMPAIGN_BACKEND_STATE_KEY] = desired
             campaign.state_json = ZorkEmulator._dump_json(state)
             ZorkEmulator.commit_model(campaign)
-        return {"backend": desired["backend"], "model": desired.get("model")}
+        return {
+            "backend": desired["backend"],
+            "model": desired.get("model"),
+            "thinking_enabled": desired.get("thinking_enabled"),
+        }
 
     def _infer_campaign_id(self, ctx_like) -> str | int | None:
         if ctx_like is None:
@@ -2209,6 +2219,7 @@ class Zork(commands.Cog):
             f"- `{prefix}zork literary-reference --clear` remove all literary style profiles\n"
             f"- `{prefix}zork campaign-export [--type full|raw] [--raw-format jsonl|json|markdown|script|loglines]` export the campaign and stored source docs\n"
             f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
+            f"- `{prefix}zork thinking [enable|disable]` view or set backend thinking/reasoning when supported (creator/admin only to change)\n"
             f"- `{prefix}zork style [prompt|default]` view or set the style direction for this channel/thread (max 120 chars; creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork link-account <uuid>` link your Discord account to the DTM web UI session currently waiting on that code\n"
@@ -2982,6 +2993,78 @@ class Zork(commands.Cog):
         model_text = f" with model `{model}`" if model else " with the backend default model"
         await ctx.send(
             f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`{model_text}."
+        )
+
+    @zork.command(name="thinking")
+    async def zork_thinking(self, ctx, *, option: str = None):
+        ctx = self._wrap_send(ctx)
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+
+        current = self.config.get_zork_backend_config(
+            ctx.channel.id,
+            default_backend="zai",
+        )
+        backend = str(current.get("backend") or "zai").strip() or "zai"
+        enabled = bool(current.get("thinking_enabled", True))
+        support_note = (
+            "Supported by this backend."
+            if backend in self.THINKING_SUPPORTED_BACKENDS
+            else f"Currently ignored by backend `{backend}`."
+        )
+        if option is None:
+            state_text = "enabled" if enabled else "disabled"
+            await ctx.send(
+                f"Current LLM thinking for this channel/thread: `{state_text}`.\n"
+                f"Backend: `{backend}`. {support_note}\n"
+                f"Use `{self._prefix()}zork thinking enable` or `{self._prefix()}zork thinking disable` to change it."
+            )
+            return
+
+        normalized = " ".join(str(option or "").strip().lower().split())
+        enable_tokens = {"enable", "enabled", "on", "true", "yes"}
+        disable_tokens = {"disable", "disabled", "off", "false", "no"}
+        if normalized in enable_tokens:
+            new_value = True
+        elif normalized in disable_tokens:
+            new_value = False
+        else:
+            await ctx.send("Use `enable` or `disable`.")
+            return
+
+        if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
+            await ctx.send(
+                "Only the campaign creator or an Image Admin can change this setting."
+            )
+            return
+
+        self.config.set_zork_backend_thinking(ctx.channel.id, new_value)
+        with app.app_context():
+            campaign = ZorkEmulator.query_campaign(campaign.id)
+            if campaign is not None:
+                self._sync_campaign_backend_state(
+                    campaign,
+                    channel_id=ctx.channel.id,
+                    thinking_enabled=new_value,
+                )
+        state_text = "enabled" if new_value else "disabled"
+        await ctx.send(
+            f"LLM thinking set to `{state_text}` for `{campaign.name}` in this channel/thread. {support_note}"
         )
 
     @zork.command(name="style")

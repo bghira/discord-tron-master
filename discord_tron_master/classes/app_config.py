@@ -298,6 +298,14 @@ class AppConfig:
     def get_zork_backend_model(self, channel_id=None):
         return self.get_zork_backend_config(channel_id=channel_id).get("model")
 
+    def get_zork_backend_thinking_enabled(self, channel_id=None, default_value=True):
+        return bool(
+            self.get_zork_backend_config(channel_id=channel_id).get(
+                "thinking_enabled",
+                default_value,
+            )
+        )
+
     def get_zork_backend_config(self, channel_id=None, default_backend="zai"):
         self.reload_config()
         resolved_default = self.normalize_zork_backend(default_backend, default="zai")
@@ -312,7 +320,16 @@ class AppConfig:
                     default=resolved_default,
                 )
                 model_value = str(value.get("model") or "").strip() or None
-                return {"backend": backend_value, "model": model_value}
+                thinking_value = value.get("thinking_enabled")
+                if isinstance(thinking_value, bool):
+                    thinking_enabled = thinking_value
+                else:
+                    thinking_enabled = True
+                return {
+                    "backend": backend_value,
+                    "model": model_value,
+                    "thinking_enabled": thinking_enabled,
+                }
             if value:
                 return {
                     "backend": self.normalize_zork_backend(
@@ -320,6 +337,7 @@ class AppConfig:
                         default=resolved_default,
                     ),
                     "model": None,
+                    "thinking_enabled": True,
                 }
             return None
 
@@ -340,9 +358,9 @@ class AppConfig:
             )
             if configured:
                 return configured
-        return {"backend": resolved_default, "model": None}
+        return {"backend": resolved_default, "model": None, "thinking_enabled": True}
 
-    def set_zork_backend(self, channel_id, backend, model=None):
+    def set_zork_backend(self, channel_id, backend, model=None, thinking_enabled=None):
         normalized = self.normalize_zork_backend(backend, default="")
         if normalized not in self.ZORK_BACKEND_OPTIONS:
             raise ValueError(f"Unsupported Zork backend: {backend}")
@@ -351,8 +369,26 @@ class AppConfig:
             mapping = {}
             self.config["zork_backends"] = mapping
         model_text = str(model or "").strip() or None
-        mapping[str(channel_id)] = {"backend": normalized, "model": model_text}
+        current = self.get_zork_backend_config(channel_id=channel_id, default_backend=normalized)
+        if isinstance(thinking_enabled, bool):
+            resolved_thinking = thinking_enabled
+        else:
+            resolved_thinking = bool(current.get("thinking_enabled", True))
+        mapping[str(channel_id)] = {
+            "backend": normalized,
+            "model": model_text,
+            "thinking_enabled": resolved_thinking,
+        }
         self._save_config()
+
+    def set_zork_backend_thinking(self, channel_id, enabled):
+        current = self.get_zork_backend_config(channel_id=channel_id)
+        self.set_zork_backend(
+            channel_id,
+            current.get("backend"),
+            model=current.get("model"),
+            thinking_enabled=bool(enabled),
+        )
 
     def clear_zork_backend(self, channel_id):
         mapping = self.config.setdefault("zork_backends", {})
