@@ -390,6 +390,30 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             return row
 
     @classmethod
+    def set_channel_label(cls, channel_session, label):
+        cls._ensure_init()
+        if channel_session is None:
+            return None
+        from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
+
+        channel_id = getattr(channel_session, "id", channel_session)
+        label_text = " ".join(str(label or "").split()).strip()
+        if not label_text:
+            return None
+        with cls._session_factory() as session:
+            row = session.get(GameSession, channel_id)
+            if row is None:
+                return None
+            meta = cls._emu._load_session_metadata(row)
+            if str(meta.get("label") or "").strip() == label_text:
+                return row
+            meta["label"] = label_text
+            row.updated_at = cls.utcnow()
+            cls._emu._store_session_metadata(row, meta)
+            session.commit()
+            return row
+
+    @classmethod
     def is_channel_enabled(cls, *args, **kwargs):
         cls._ensure_init()
         return cls._emu.is_channel_enabled(*args, **kwargs)

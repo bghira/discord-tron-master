@@ -14,6 +14,7 @@ import uuid
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 import discord
+from sqlalchemy import or_
 
 from discord_tron_master.bot import DiscordBot
 from discord_tron_master.classes.app_config import AppConfig
@@ -51,6 +52,7 @@ class Zork(commands.Cog):
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
     TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
     RESTART_DRAIN_TIMEOUT_SECONDS = 600
+    WEBUI_DISCORD_ECHO_POLL_SECONDS = 2.0
     AUDIO_PREVIEW_MAX_CHARS = 1500
     AUDIO_FILE_EXTENSIONS = (".aac", ".flac", ".m4a", ".mp3", ".mp4", ".oga", ".ogg", ".wav", ".weba", ".webm")
     AUDIO_CONTENT_TYPE_PREFIXES = ("audio/", "video/")
@@ -80,6 +82,7 @@ class Zork(commands.Cog):
         self._turn_queues: dict[tuple[str, str], asyncio.Queue] = {}
         self._turn_queue_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._pending_audio_transcriptions: dict[str, dict[str, object]] = {}
+        self._webui_discord_echo_task: asyncio.Task | None = None
 
     def _prefix(self) -> str:
         return self.config.get_command_prefix()
@@ -597,6 +600,20 @@ class Zork(commands.Cog):
         if app is None:
             return
 
+        if getattr(message, "guild", None) is not None and getattr(message, "channel", None) is not None:
+            with app.app_context():
+                channel_session = ZorkEmulator.get_or_create_channel(
+                    message.guild.id,
+                    message.channel.id,
+                )
+                channel_name = str(
+                    getattr(message.channel, "name", "")
+                    or getattr(message.channel, "topic", "")
+                    or ""
+                ).strip()
+                if channel_name:
+                    ZorkEmulator.set_channel_label(channel_session, channel_name)
+
         claimed_campaign_id, error_text = await self._claim_turn_for_message(
             message,
             campaign_id,
@@ -889,6 +906,20 @@ class Zork(commands.Cog):
             lambda text: self._with_world_time(text, resolved_campaign_id),
         )
 
+    def cog_unload(self):
+        task = self._webui_discord_echo_task
+        self._webui_discord_echo_task = None
+        if task is not None:
+            task.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        task = self._webui_discord_echo_task
+        if task is None or task.done():
+            self._webui_discord_echo_task = asyncio.create_task(
+                self._webui_discord_echo_loop()
+            )
+
     async def _send_large_message(
         self,
         ctx_like,
@@ -920,6 +951,145 @@ class Zork(commands.Cog):
         msg = await ctx_like.send(payload, **kwargs)
         await self._ensure_sms_notice_reactions(msg, payload)
         return msg
+
+    async def _webui_discord_echo_loop(self):
+        while True:
+            try:
+                await self._drain_webui_discord_echo_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed draining webui Discord mirror outbox")
+            await asyncio.sleep(self.WEBUI_DISCORD_ECHO_POLL_SECONDS)
+
+    async def _drain_webui_discord_echo_once(self):
+        from text_game_engine.persistence.sqlalchemy.models import (
+            OutboxEvent,
+            Session as GameSession,
+        )
+
+        ZorkEmulator._ensure_init()
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        with ZorkEmulator._session_factory() as session:
+            pending = (
+                session.query(OutboxEvent)
+                .filter(
+                    OutboxEvent.event_type == "webui_discord_echo",
+                    OutboxEvent.status == "pending",
+                    or_(
+                        OutboxEvent.next_attempt_at.is_(None),
+                        OutboxEvent.next_attempt_at <= now,
+                    ),
+                )
+                .order_by(OutboxEvent.created_at.asc())
+                .limit(10)
+                .all()
+            )
+            work = [
+                {
+                    "id": str(row.id),
+                    "campaign_id": str(row.campaign_id),
+                    "payload_json": str(row.payload_json or ""),
+                    "attempts": int(row.attempts or 0),
+                }
+                for row in pending
+            ]
+
+        for item in work:
+            status = "consumed"
+            next_attempt_at = None
+            try:
+                payload = json.loads(item["payload_json"] or "{}")
+                if not isinstance(payload, dict):
+                    payload = {}
+                scope = str(
+                    ((payload.get("turn_visibility") or {}) if isinstance(payload.get("turn_visibility"), dict) else {}).get("scope")
+                    or "public"
+                ).strip().lower()
+                if scope not in {"", "public", "local"}:
+                    continue
+                channel_id = self._resolve_campaign_discord_channel_id(item["campaign_id"])
+                if not channel_id:
+                    continue
+                bot_instance = DiscordBot.get_instance()
+                channel = await bot_instance.find_channel(int(channel_id)) if bot_instance is not None else None
+                if channel is None:
+                    continue
+                source_name = (
+                    str(payload.get("actor_display_name") or "").strip()
+                    or str(payload.get("actor_id") or "").strip()
+                    or "unknown"
+                )
+                narration = str(payload.get("narration") or "").strip()
+                scene_output = payload.get("scene_output")
+                rendered = self._format_scene_output_for_discord(narration, scene_output)
+                rendered = self._filter_narration(rendered)
+                if not rendered:
+                    continue
+                text = f"-# webui event from {source_name}\n{rendered}"
+                await self._send_large_message(
+                    channel,
+                    text,
+                    campaign_id=item["campaign_id"],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Failed sending webui Discord mirror for campaign=%s event=%s",
+                    item["campaign_id"],
+                    item["id"],
+                )
+                status = "pending"
+                next_attempt_at = datetime.datetime.now(datetime.timezone.utc).replace(
+                    tzinfo=None
+                ) + datetime.timedelta(seconds=30)
+            finally:
+                with ZorkEmulator._session_factory() as session:
+                    row = session.get(OutboxEvent, item["id"])
+                    if row is None:
+                        continue
+                    row.attempts = int(row.attempts or 0) + 1
+                    row.status = status
+                    row.next_attempt_at = next_attempt_at
+                    session.commit()
+
+    def _resolve_campaign_discord_channel_id(self, campaign_id: str | int | None) -> str | None:
+        from text_game_engine.persistence.sqlalchemy.models import (
+            Session as GameSession,
+        )
+
+        if campaign_id is None:
+            return None
+        ZorkEmulator._ensure_init()
+        with ZorkEmulator._session_factory() as session:
+            rows = (
+                session.query(GameSession)
+                .filter(
+                    GameSession.campaign_id == str(campaign_id),
+                    GameSession.enabled == True,  # noqa: E712
+                )
+                .order_by(GameSession.created_at.asc(), GameSession.id.asc())
+                .all()
+            )
+        preferred = []
+        fallback = []
+        for row in rows:
+            channel_id = str(
+                getattr(row, "surface_thread_id", None)
+                or getattr(row, "surface_channel_id", None)
+                or ""
+            ).strip()
+            if not channel_id:
+                continue
+            surface = str(getattr(row, "surface", "") or "").strip().lower()
+            target = preferred if surface.startswith("discord") else fallback
+            target.append(channel_id)
+        if preferred:
+            return preferred[0]
+        if fallback:
+            return fallback[0]
+        return None
 
     async def _is_image_admin(self, ctx) -> bool:
         user_roles = getattr(ctx.author, "roles", [])
