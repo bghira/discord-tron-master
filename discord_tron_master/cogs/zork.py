@@ -1002,6 +1002,19 @@ class Zork(commands.Cog):
                 payload = json.loads(item["payload_json"] or "{}")
                 if not isinstance(payload, dict):
                     payload = {}
+                actor_id = str(payload.get("actor_id") or "").strip()
+                aware_actor_ids = [
+                    str(raw_actor_id or "").strip()
+                    for raw_actor_id in list(payload.get("aware_actor_ids") or [])
+                    if str(raw_actor_id or "").strip()
+                ]
+                other_discord_aware_actor_ids = [
+                    aware_actor_id
+                    for aware_actor_id in aware_actor_ids
+                    if aware_actor_id != actor_id and self._is_probable_discord_actor_id(aware_actor_id)
+                ]
+                if not other_discord_aware_actor_ids:
+                    continue
                 scope = str(
                     ((payload.get("turn_visibility") or {}) if isinstance(payload.get("turn_visibility"), dict) else {}).get("scope")
                     or "public"
@@ -1024,6 +1037,11 @@ class Zork(commands.Cog):
                 scene_output = payload.get("scene_output")
                 rendered = self._format_scene_output_for_discord(narration, scene_output)
                 rendered = self._filter_narration(rendered)
+                rendered = self._prepend_webui_actor_input(
+                    rendered,
+                    source_name=source_name,
+                    action_text=str(payload.get("action_text") or "").strip(),
+                )
                 if not rendered:
                     continue
                 text = f"-# webui event from {source_name}\n{rendered}"
@@ -1455,6 +1473,11 @@ class Zork(commands.Cog):
             for raw_line in text.splitlines()
         )
 
+    @staticmethod
+    def _is_probable_discord_actor_id(value: object) -> bool:
+        text = str(value or "").strip()
+        return bool(text and text.isdigit())
+
     @classmethod
     def _format_scene_output_for_discord(
         cls,
@@ -1484,6 +1507,23 @@ class Zork(commands.Cog):
                 return rendered + "\n\n" + "\n".join(status_lines)
             return rendered
         return str(narration or "").strip()
+
+    @classmethod
+    def _prepend_webui_actor_input(
+        cls,
+        rendered: str,
+        *,
+        source_name: str,
+        action_text: str,
+    ) -> str:
+        action = str(action_text or "").strip()
+        if not action:
+            return str(rendered or "").strip()
+        opening = f"-# speaker: {cls._format_scene_speaker_name(source_name)}\n{action}"
+        body = str(rendered or "").strip()
+        if not body:
+            return opening
+        return f"{opening}\n\n{body}"
 
     @classmethod
     def _format_preset_campaigns(
