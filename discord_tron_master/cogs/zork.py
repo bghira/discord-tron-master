@@ -4677,8 +4677,10 @@ class Zork(commands.Cog):
             await ctx.send("All turns drained. Shutting down now.")
         else:
             remaining = len(ZorkEmulator._inflight_turns)
+            cleared = ZorkEmulator.clear_all_inflight_claims()
             await ctx.send(
-                f"Drain timeout. {remaining} turn(s) still in-flight. Forcing shutdown."
+                f"Drain timeout. {remaining} turn(s) still in-flight. "
+                f"Cleared {cleared} abandoned inflight claim(s) and forcing shutdown."
             )
         await self.bot.close()
         import sys

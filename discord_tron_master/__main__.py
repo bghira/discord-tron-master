@@ -62,6 +62,15 @@ asyncio.run(discord_bot.set_websocket_hub(websocket_hub))
 
 
 def main():
+    from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
+
+    cleared_inflight = ZorkEmulator.clear_all_inflight_claims()
+    if cleared_inflight:
+        logging.warning(
+            "Cleared %s abandoned inflight turn claim(s) during startup recovery.",
+            cleared_inflight,
+        )
+
     def run_websocket_hub():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

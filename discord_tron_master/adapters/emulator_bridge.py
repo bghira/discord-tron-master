@@ -1430,6 +1430,40 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         return None
 
     @classmethod
+    def clear_all_inflight_claims(cls) -> int:
+        cls._ensure_init()
+        deleted = 0
+        try:
+            session_factory = cls._session_factory
+            if session_factory is not None:
+                from text_game_engine.persistence.sqlalchemy.models import InflightTurn
+
+                with session_factory() as session:
+                    deleted = int(session.query(InflightTurn).delete() or 0)
+                    session.commit()
+        except Exception:
+            logger.warning("Failed to clear inflight turn claims", exc_info=True)
+            return 0
+        try:
+            backend_inflight = getattr(cls._emu, "_inflight_turns", None)
+            backend_lock = getattr(cls._emu, "_inflight_turns_lock", None)
+            if backend_inflight is not None:
+                if backend_lock is not None:
+                    with backend_lock:
+                        backend_inflight.clear()
+                else:
+                    backend_inflight.clear()
+            claims = getattr(cls._emu, "_claims", None)
+            if isinstance(claims, dict):
+                claims.clear()
+        except Exception:
+            logger.debug("Failed to clear emulator-local inflight state", exc_info=True)
+        cls._inflight_turns = set()
+        if deleted:
+            logger.warning("Cleared %s inflight turn claim(s)", deleted)
+        return deleted
+
+    @classmethod
     async def wait_for_drain(cls, timeout=600):
         cls._ensure_init()
         fn = getattr(cls._emu, "wait_for_drain", None)
