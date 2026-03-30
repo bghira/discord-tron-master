@@ -790,17 +790,14 @@ class Zork(commands.Cog):
         model: str | None = None,
         thinking_enabled: bool | None = None,
     ) -> dict[str, str | None]:
-        resolved = (
-            {
-                "backend": str(backend or "").strip().lower() or "zai",
-                "model": str(model or "").strip() or None,
-                "thinking_enabled": bool(thinking_enabled)
-                if isinstance(thinking_enabled, bool)
-                else True,
-            }
-            if backend is not None
-            else self.config.get_zork_backend_config(channel_id, default_backend="zai")
-        )
+        # Start from config defaults, then override with any explicit parameters.
+        resolved = self.config.get_zork_backend_config(channel_id, default_backend="zai")
+        if backend is not None:
+            resolved["backend"] = str(backend or "").strip().lower() or "zai"
+        if model is not None:
+            resolved["model"] = str(model or "").strip() or None
+        if isinstance(thinking_enabled, bool):
+            resolved["thinking_enabled"] = thinking_enabled
         state = ZorkEmulator.get_campaign_state(campaign)
         if not isinstance(state, dict):
             state = {}
