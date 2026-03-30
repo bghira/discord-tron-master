@@ -5,6 +5,7 @@ from discord_tron_master.exceptions.registration import RegistrationError
 from typing import Dict, Any
 from discord_tron_master.classes.command_processors import hardware
 from discord_tron_master.classes.command_processors import discord as discord_module
+from discord_tron_master.classes.command_processors import ollama as ollama_module
 import logging, json, websocket
 
 
@@ -34,6 +35,9 @@ class CommandProcessor:
             "job_queue": {
                 "finish": self.worker_manager.finish_payload,
                 "acknowledge": self.worker_manager.acknowledge_payload,
+            },
+            "ollama": {
+                "complete_result": ollama_module.complete_result,
             },
             # Add more command handlers as needed
         }

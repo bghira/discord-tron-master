@@ -19,6 +19,7 @@ class WorkerManager:
             "compute": [],
             "memory": [],
             "llama": [],
+            "ollama": [],
             "stablelm": [],
             "stablevicuna": [],
             "tts_bark": [],

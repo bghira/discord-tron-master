@@ -12,6 +12,12 @@ DEFAULT_CONFIG = {
         "tls": False,
     },
     "openai_api": {"api_key": None},
+    "ollama": {
+        "base_url": "http://127.0.0.1:11434",
+        "model": "llama3.1",
+        "keep_alive": "30m",
+        "timeout_seconds": 600,
+    },
     "huggingface_api": {
         "api_key": None,
     },
@@ -115,7 +121,7 @@ DEFAULT_USER_CONFIG = {
 
 class AppConfig:
     flask = None
-    ZORK_BACKEND_OPTIONS = ("zai", "codex", "claude", "gemini", "opencode")
+    ZORK_BACKEND_OPTIONS = ("zai", "ollama", "codex", "claude", "gemini", "opencode")
     DEFAULT_ZORK_STYLE = "Mulberry Award-winning literature"
 
     def __init__(self):
@@ -198,6 +204,22 @@ class AppConfig:
     def get_openai_api_key(self):
         self.reload_config()
         return self.config["openai_api"].get("api_key", None)
+
+    def get_ollama_base_url(self):
+        self.reload_config()
+        return str(self.config.get("ollama", {}).get("base_url", "http://127.0.0.1:11434")).rstrip("/")
+
+    def get_ollama_model(self):
+        self.reload_config()
+        return self.config.get("ollama", {}).get("model", "llama3.1")
+
+    def get_ollama_keep_alive(self):
+        self.reload_config()
+        return self.config.get("ollama", {}).get("keep_alive", "30m")
+
+    def get_ollama_timeout_seconds(self):
+        self.reload_config()
+        return int(self.config.get("ollama", {}).get("timeout_seconds", 600))
 
     def get_websocket_hub_host(self):
         self.reload_config()

@@ -260,6 +260,96 @@ async def _record_zork_generated_image(channel, arguments: Dict, data: Dict):
                         image_url=image_url,
                     )
 
+    # Notify the web UI when a callback URL was provided (DTM-routed generation)
+    # or when the webui is enabled and a campaign_id is available.
+    await _notify_webui_image_delivery(
+        campaign_id=campaign_id,
+        image_url=image_url,
+        prompt=arguments.get("image_prompt", ""),
+        ref_type="avatar" if store_avatar else "scene",
+        actor_id=str(avatar_user_id) if avatar_user_id else None,
+        room_key=room_key,
+        arguments=arguments,
+        data=data,
+    )
+
+
+async def _notify_webui_image_delivery(
+    *,
+    campaign_id: str | None,
+    image_url: str,
+    prompt: str,
+    ref_type: str,
+    actor_id: str | None,
+    room_key: str | None,
+    arguments: Dict,
+    data: Dict,
+):
+    """POST the generated image to the web UI's media delivery endpoint."""
+    # Check for an explicit callback URL first (webui-originated jobs).
+    callback_url = _find_first_key(arguments, "zork_webui_callback_url")
+    if callback_url is None:
+        callback_url = _find_first_key(data, "zork_webui_callback_url")
+    callback_secret = _find_first_key(arguments, "zork_webui_callback_secret")
+    if callback_secret is None:
+        callback_secret = _find_first_key(data, "zork_webui_callback_secret")
+    webui_job_id = _find_first_key(arguments, "zork_webui_job_id")
+    if webui_job_id is None:
+        webui_job_id = _find_first_key(data, "zork_webui_job_id")
+
+    # Fall back to the default webui callback if enabled.
+    if not callback_url and campaign_id:
+        cfg = config  # module-level AppConfig instance
+        if cfg.is_text_game_webui_enabled():
+            host = str(cfg.get_text_game_webui_host() or "127.0.0.1").strip() or "127.0.0.1"
+            if host in ("0.0.0.0", "::"):
+                host = "127.0.0.1"
+            port = int(cfg.get_text_game_webui_port() or 8080)
+            callback_url = (
+                f"http://{host}:{port}/api/internal/campaigns"
+                f"/{campaign_id}/media/deliver"
+            )
+            callback_secret = str(cfg.get_text_game_webui_link_secret() or "")
+
+    if not callback_url:
+        return
+
+    payload = {
+        "image_url": image_url,
+        "prompt": prompt or "",
+        "ref_type": ref_type,
+        "actor_id": actor_id,
+        "room_key": room_key,
+        "job_id": str(webui_job_id) if webui_job_id else None,
+    }
+    headers = {}
+    if callback_secret:
+        headers["X-DTM-Link-Secret"] = str(callback_secret)
+
+    try:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                callback_url,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+                ssl=False,
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning(
+                        "WebUI media delivery callback failed (%s %s): %s",
+                        resp.status, callback_url, body[:200],
+                    )
+                else:
+                    logger.info(
+                        "WebUI media delivery callback succeeded: %s", callback_url,
+                    )
+    except Exception as exc:
+        logger.warning("WebUI media delivery callback error (%s): %s", callback_url, exc)
+
 
 def _is_zork_enabled_thread_channel(channel, data) -> bool:
     if channel is None or not isinstance(channel, discord.Thread):
@@ -332,6 +422,30 @@ async def send_message(
 ):
     logger.debug(f"Entering send_message: {arguments} {data}")
     channel = await command_processor.discord.find_channel(data["channel"]["id"])
+    if channel is None:
+        # WebUI-originated job (channel_id=0): no Discord channel to post to,
+        # but still deliver the image back to the web UI via callback.
+        if _is_zork_scene_request(arguments, data) and _has_media_payload(arguments):
+            await _notify_webui_image_delivery(
+                campaign_id=_find_first_key(arguments, "zork_campaign_id")
+                or _find_first_key(data, "zork_campaign_id"),
+                image_url=_extract_primary_image_url(arguments) or "",
+                prompt=arguments.get("image_prompt", ""),
+                ref_type="avatar"
+                if _contains_flag(arguments, {"zork_store_avatar"})
+                else "scene",
+                actor_id=str(
+                    _find_first_key(arguments, "zork_user_id")
+                    or _find_first_key(data, "zork_user_id")
+                    or ""
+                )
+                or None,
+                room_key=_find_first_key(arguments, "zork_room_key")
+                or _find_first_key(data, "zork_room_key"),
+                arguments=arguments,
+                data=data,
+            )
+        return {"success": True, "result": "WebUI callback sent (no Discord channel)."}
     if channel is not None:
         try:
             zork_scene_mode = _is_zork_scene_request(arguments, data)
@@ -626,6 +740,29 @@ async def create_thread(
     wants_variations = 0
     zork_scene_mode = _is_zork_scene_request(arguments, data)
     zork_seed_scene = _is_zork_seed_room_scene(arguments, data)
+    if channel is None:
+        # WebUI-originated job: deliver via callback, skip Discord.
+        if zork_scene_mode and _has_media_payload(arguments):
+            await _notify_webui_image_delivery(
+                campaign_id=_find_first_key(arguments, "zork_campaign_id")
+                or _find_first_key(data, "zork_campaign_id"),
+                image_url=_extract_primary_image_url(arguments) or "",
+                prompt=arguments.get("image_prompt", ""),
+                ref_type="avatar"
+                if _contains_flag(arguments, {"zork_store_avatar"})
+                else "scene",
+                actor_id=str(
+                    _find_first_key(arguments, "zork_user_id")
+                    or _find_first_key(data, "zork_user_id")
+                    or ""
+                )
+                or None,
+                room_key=_find_first_key(arguments, "zork_room_key")
+                or _find_first_key(data, "zork_room_key"),
+                arguments=arguments,
+                data=data,
+            )
+        return {"success": True, "result": "WebUI callback sent (no Discord channel)."}
     if channel is not None:
         try:
             suppress_body = _should_suppress_zork_image_body(

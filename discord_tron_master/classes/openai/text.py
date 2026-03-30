@@ -8,8 +8,10 @@ import threading
 
 import openai
 from openai import OpenAI
+import requests
 
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.remote_ollama_broker import remote_ollama_broker
 
 config = AppConfig()
 logger = logging.getLogger(__name__)
@@ -213,6 +215,45 @@ class GPT:
         if not raw_model or raw_model in {"o3-mini", self._ZAI_MODEL, "text-davinci-003"}:
             return None
         return raw_model
+
+    def _resolve_ollama_model(self) -> str:
+        raw_model = str(getattr(self, "engine", "") or "").strip()
+        if not raw_model or raw_model in {"o3-mini", self._ZAI_MODEL, "text-davinci-003"}:
+            return self.config.get_ollama_model()
+        return raw_model
+
+    def _send_local_ollama_request(self, role: str, prompt: str) -> str | None:
+        base_url = self.config.get_ollama_base_url()
+        model = self._resolve_ollama_model()
+        keep_alive = self.config.get_ollama_keep_alive()
+        messages = []
+        system_text = str(role or "").strip()
+        prompt_text = str(prompt or "").strip()
+        if system_text:
+            messages.append({"role": "system", "content": system_text})
+        messages.append({"role": "user", "content": prompt_text})
+        response = requests.post(
+            f"{base_url}/api/chat",
+            json={
+                "model": model,
+                "stream": False,
+                "keep_alive": keep_alive,
+                "messages": messages,
+                "options": {
+                    "temperature": float(self.temperature),
+                    "num_predict": int(self.max_tokens),
+                },
+            },
+            timeout=self.config.get_ollama_timeout_seconds(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        text = str(
+            payload.get("message", {}).get("content")
+            or payload.get("response")
+            or ""
+        ).strip()
+        return text or None
 
     def _send_zai_request_streaming(self, message_log, *, thinking_enabled: bool = True):
         client = OpenAI(
@@ -693,6 +734,29 @@ class GPT:
             effective_role = ""
         semaphore = _get_backend_semaphore(backend)
         async with semaphore:
+            if backend == "ollama":
+                try:
+                    return await remote_ollama_broker.request_completion(
+                        role=effective_role,
+                        prompt=effective_prompt,
+                        model=self._resolve_ollama_model(),
+                        temperature=float(self.temperature),
+                        max_tokens=int(self.max_tokens),
+                        keep_alive=self.config.get_ollama_keep_alive(),
+                        timeout_seconds=self.config.get_ollama_timeout_seconds(),
+                    )
+                except Exception as remote_exc:
+                    logger.warning(f"Remote Ollama worker unavailable or failed: {remote_exc}")
+                    try:
+                        return await asyncio.to_thread(
+                            self._send_local_ollama_request,
+                            effective_role,
+                            effective_prompt,
+                        )
+                    except Exception as local_exc:
+                        logger.error(f"Error sending request to Ollama: {local_exc}")
+                        return None
+
             if backend == "zai":
                 message_log = [
                     {"role": "assistant", "content": effective_role},
