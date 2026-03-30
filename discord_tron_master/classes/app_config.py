@@ -387,19 +387,17 @@ class AppConfig:
         if normalized not in self.ZORK_BACKEND_OPTIONS:
             raise ValueError(f"Unsupported Zork backend: {backend}")
         model_text = str(model or "").strip() or None
-        # Read current config BEFORE modifying — get_zork_backend_config calls
-        # reload_config() which replaces self.config, so we must read first,
-        # then re-acquire the mapping reference after.
+        # Reload from disk first so we have a fresh self.config.
+        self.reload_config()
         current = self.get_zork_backend_config(channel_id=channel_id, default_backend=normalized)
         if isinstance(thinking_enabled, bool):
             resolved_thinking = thinking_enabled
         else:
             resolved_thinking = bool(current.get("thinking_enabled", True))
-        mapping = self.config.setdefault("zork_backends", {})
-        if not isinstance(mapping, dict):
-            mapping = {}
-            self.config["zork_backends"] = mapping
-        mapping[str(channel_id)] = {
+        # Write directly to self.config — no intermediate references.
+        if not isinstance(self.config.get("zork_backends"), dict):
+            self.config["zork_backends"] = {}
+        self.config["zork_backends"][str(channel_id)] = {
             "backend": normalized,
             "model": model_text,
             "thinking_enabled": resolved_thinking,
