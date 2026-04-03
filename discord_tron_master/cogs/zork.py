@@ -1410,14 +1410,25 @@ class Zork(commands.Cog):
 
     _NARRATION_LINE_FILTERS = ("psychological distress",)
 
-    @staticmethod
-    def _filter_narration(text: str) -> str:
+    # TTS emotive tags to strip from display text
+    _EMOTIVE_TAG_RE = re.compile(
+        r"<(?:giggle|laughter|guffaw|sigh|cry|gasp|groan"
+        r"|inhale|exhale|whisper|mumble|uh|um"
+        r"|singing|humming|cough|sneeze|sniff|clear_throat"
+        r"|shhh)>",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _filter_narration(cls, text: str) -> str:
         lines = text.split("\n")
         filtered = [
             line for line in lines
-            if not any(f in line.lower() for f in Zork._NARRATION_LINE_FILTERS)
+            if not any(f in line.lower() for f in cls._NARRATION_LINE_FILTERS)
         ]
-        return "\n".join(filtered)
+        # Strip TTS emotive tags from display
+        result = "\n".join(filtered)
+        return cls._EMOTIVE_TAG_RE.sub("", result).strip()
 
     @staticmethod
     def _format_scene_speaker_name(raw: object) -> str:
@@ -1492,6 +1503,11 @@ class Zork(commands.Cog):
             if not isinstance(beat, dict):
                 continue
             text = str(beat.get("text") or "").strip()
+            if not text:
+                continue
+            # Strip TTS emotive tags (e.g. <laughter>, <sigh>) from display
+            text = cls._EMOTIVE_TAG_RE.sub("", text).strip()
+            text = re.sub(r"\s{2,}", " ", text)
             if not text:
                 continue
             speaker = cls._format_scene_speaker_name(beat.get("speaker"))
