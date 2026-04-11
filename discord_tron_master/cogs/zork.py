@@ -1381,6 +1381,8 @@ class Zork(commands.Cog):
         return result
 
     def _should_ignore_message(self, message) -> bool:
+        if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
+            return True
         if message.author.bot:
             return True
         content = message.content.strip()
