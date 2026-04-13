@@ -286,7 +286,11 @@ class GPT:
             },
         }
         api_key = config.get_openai_api_key()
-        headers = {"Content-Type": "application/json", "Accept": "*/*"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+        }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         resp = requests.post(
