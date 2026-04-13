@@ -36,7 +36,8 @@ def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
 
 
 class GPT:
-    _ZAI_MODEL = "glm-5.1"
+    _ZAI_MODEL = "glm-5"
+    _ZAI_BASE_URL = "https://chat.z.ai"
     _CLI_TIMEOUT_SECONDS = 300.0
     _CLI_WORKDIR = "/tmp/discord-tron-master-gpt"
     _TEXT_COMPLETION_INSTRUCTIONS = (
@@ -256,24 +257,47 @@ class GPT:
         return text or None
 
     def _send_zai_request_streaming(self, message_log, *, thinking_enabled: bool = True):
-        client = OpenAI(
-            api_key=config.get_openai_api_key(),
-            base_url="https://api.z.ai/api/coding/paas/v4",
-        )
-        request_kwargs = {
+        import uuid
+
+        body = {
+            "stream": True,
             "model": self._resolve_zai_model(),
             "messages": message_log,
-            "max_completion_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": True,
+            "params": {},
+            "extra": {},
+            "features": {
+                "image_generation": False,
+                "web_search": False,
+                "auto_web_search": False,
+                "preview_mode": True,
+                "flags": [],
+                "vlm_tools_enable": False,
+                "vlm_web_search_enable": False,
+                "vlm_website_mode": False,
+                "enable_thinking": bool(thinking_enabled),
+            },
+            "chat_id": str(uuid.uuid4()),
+            "id": str(uuid.uuid4()),
+            "current_user_message_id": str(uuid.uuid4()),
+            "current_user_message_parent_id": str(uuid.uuid4()),
+            "background_tasks": {
+                "title_generation": False,
+                "tags_generation": False,
+            },
         }
-        if thinking_enabled:
-            request_kwargs["extra_body"] = {
-                "thinking": {
-                    "type": "enabled",
-                },
-            }
-        return client.chat.completions.create(**request_kwargs)
+        api_key = config.get_openai_api_key()
+        headers = {"Content-Type": "application/json", "Accept": "*/*"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        resp = requests.post(
+            f"{self._ZAI_BASE_URL}/api/v2/chat/completions",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return resp
 
     _ZAI_TTFT_TIMEOUT = 10  # seconds; kill and retry if no content token arrives
     _CLI_STREAM_TIMEOUT = 120  # seconds; generous for CLI backends (thinking phases)
@@ -281,59 +305,103 @@ class GPT:
     class _TTFTTimeout(Exception):
         """Raised when the first content token takes too long."""
 
-    def _consume_zai_stream(self, stream):
-        """Consume a ZAI streaming response. Returns content text.
+    def _consume_zai_stream(self, resp):
+        """Consume a ZAI WebUI SSE streaming response. Returns content text.
 
-        Detects tool_call JSON early and stops reading once the JSON
-        object closes, avoiding wasted time on trailing tokens.
+        Parses ``data: {...}`` lines and collects only ``phase: "answer"``
+        deltas.  Detects tool_call JSON early and stops reading once the
+        JSON object closes, avoiding wasted time on trailing tokens.
 
-        Raises ``_TTFTTimeout`` if the stream goes silent (no chunks of
-        any kind) for ``_ZAI_TTFT_TIMEOUT`` seconds, indicating a stalled
-        connection.  Thinking-phase chunks count as activity.
+        Raises ``_TTFTTimeout`` if no answer-phase content arrives within
+        ``_ZAI_TTFT_TIMEOUT`` seconds.
         """
         import time
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
-        chunks = []
+        chunks: list[str] = []
         brace_depth = 0
         in_json = False
         found_tool_call = False
-        stream_iter = iter(stream)
+        in_string = False
+        escape_next = False
+        line_iter = resp.iter_lines(decode_unicode=True)
 
-        def _next_chunk():
-            return next(stream_iter)
+        def _next_line():
+            return next(line_iter)
 
         executor = ThreadPoolExecutor(max_workers=1)
         try:
             while True:
-                # Block until the next chunk or timeout
-                future = executor.submit(_next_chunk)
+                future = executor.submit(_next_line)
                 try:
-                    chunk = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
+                    raw_line = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
                 except FuturesTimeout:
                     future.cancel()
-                    stream.close()
+                    resp.close()
                     raise self._TTFTTimeout(
                         f"Stream silent for {self._ZAI_TTFT_TIMEOUT}s"
                     )
                 except StopIteration:
                     break
 
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta is None:
+                if not raw_line:
                     continue
-                text = delta.content
+                line = raw_line
+                if line.startswith("data: "):
+                    line = line[6:]
+                elif line.startswith("data:"):
+                    line = line[5:]
+                else:
+                    continue
+                line = line.strip()
+                if not line or line == "[DONE]":
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                # WebUI format
+                text = None
+                if isinstance(event, dict) and "data" in event:
+                    inner = event["data"]
+                    if isinstance(inner, dict):
+                        if inner.get("phase") != "answer":
+                            continue
+                        delta = inner.get("delta_content")
+                        if delta:
+                            text = str(delta)
+                # OpenAI-style fallback
+                if text is None and isinstance(event, dict) and "choices" in event:
+                    choices = event.get("choices") or []
+                    if choices:
+                        delta_obj = choices[0].get("delta") or {}
+                        text = delta_obj.get("content")
+
                 if not text:
                     continue
                 chunks.append(text)
 
-                # Track JSON brace depth for early exit on tool calls
                 for ch in text:
-                    if ch == '{':
+                    if escape_next:
+                        escape_next = False
+                        continue
+                    if ch == "\\" and in_string:
+                        escape_next = True
+                        continue
+                    if ch == '"':
+                        in_string = not in_string
+                        continue
+                    if in_string:
+                        continue
+                    if ch == "{":
                         if not in_json:
                             in_json = True
                         brace_depth += 1
-                    elif ch == '}':
+                    elif ch == "}":
+                        if not in_json or brace_depth <= 0:
+                            continue
                         brace_depth -= 1
                         if in_json and brace_depth == 0:
                             so_far = "".join(chunks)
@@ -341,7 +409,7 @@ class GPT:
                                 found_tool_call = True
 
                 if found_tool_call:
-                    stream.close()
+                    resp.close()
                     break
         except self._TTFTTimeout:
             raise
@@ -349,6 +417,10 @@ class GPT:
             logger.warning(f"Error during ZAI stream consumption: {e}")
         finally:
             executor.shutdown(wait=False)
+            try:
+                resp.close()
+            except Exception:
+                pass
 
         return "".join(chunks) or None
 
