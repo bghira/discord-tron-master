@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -9,6 +12,40 @@ import threading
 import openai
 from openai import OpenAI
 import requests
+
+_ZAI_SIGNING_SECRET = "key-@@@@)))()((9))-xxxx&&&%%%%%"
+
+
+def _zai_extract_user_id(token: str) -> str:
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return ""
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        for field in ("id", "user_id", "uid", "sub"):
+            val = payload.get(field)
+            if val:
+                return str(val)
+    except Exception:
+        pass
+    return ""
+
+
+def _zai_compute_signature(
+    message_text: str, request_id: str, timestamp_ms: int, user_id: str,
+) -> str:
+    prompt_b64 = base64.b64encode(message_text.encode("utf-8")).decode("ascii")
+    sorted_payload = f"requestId,{request_id},timestamp,{timestamp_ms},user_id,{user_id}"
+    canonical = f"{sorted_payload}|{prompt_b64}|{timestamp_ms}"
+    window_index = timestamp_ms // (5 * 60 * 1000)
+    derived = hmac.new(
+        _ZAI_SIGNING_SECRET.encode(), str(window_index).encode(), hashlib.sha256,
+    ).hexdigest()
+    return hmac.new(
+        derived.encode(), canonical.encode(), hashlib.sha256,
+    ).hexdigest()
 
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.remote_ollama_broker import remote_ollama_broker
@@ -257,12 +294,26 @@ class GPT:
         return text or None
 
     def _send_zai_request_streaming(self, message_log, *, thinking_enabled: bool = True):
+        import time as _time
+        import urllib.parse as _urlparse
         import uuid
+
+        chat_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())
+        message_id = str(uuid.uuid4())
+        parent_id = str(uuid.uuid4())
+
+        last_user_content = ""
+        for msg in reversed(message_log):
+            if msg.get("role") == "user":
+                last_user_content = msg.get("content", "")
+                break
 
         body = {
             "stream": True,
             "model": self._resolve_zai_model(),
             "messages": message_log,
+            "signature_prompt": last_user_content,
             "params": {},
             "extra": {},
             "features": {
@@ -276,26 +327,82 @@ class GPT:
                 "vlm_website_mode": False,
                 "enable_thinking": bool(thinking_enabled),
             },
-            "chat_id": str(uuid.uuid4()),
-            "id": str(uuid.uuid4()),
-            "current_user_message_id": str(uuid.uuid4()),
-            "current_user_message_parent_id": str(uuid.uuid4()),
+            "variables": {},
+            "chat_id": chat_id,
+            "id": request_id,
+            "current_user_message_id": message_id,
+            "current_user_message_parent_id": parent_id,
             "background_tasks": {
                 "title_generation": False,
                 "tags_generation": False,
             },
         }
         api_key = config.get_openai_api_key()
+        ts = int(_time.time() * 1000)
+        user_id = _zai_extract_user_id(api_key or "")
+        signature = _zai_compute_signature(
+            last_user_content, request_id, ts, user_id,
+        )
+        query_params = _urlparse.urlencode({
+            "timestamp": ts,
+            "requestId": request_id,
+            "user_id": user_id,
+            "version": "0.0.1",
+            "platform": "web",
+            "token": api_key or "",
+            "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+            "language": "en-US",
+            "languages": "en-US,en",
+            "timezone": "America/Belize",
+            "cookie_enabled": "true",
+            "screen_width": "3840",
+            "screen_height": "2160",
+            "screen_resolution": "3840x2160",
+            "viewport_height": "1047",
+            "viewport_width": "1920",
+            "viewport_size": "1920x1047",
+            "color_depth": "24",
+            "pixel_ratio": "1",
+            "current_url": f"https://chat.z.ai/c/{chat_id}",
+            "pathname": f"/c/{chat_id}",
+            "search": "",
+            "hash": "",
+            "host": "chat.z.ai",
+            "hostname": "chat.z.ai",
+            "protocol": "https:",
+            "referrer": "",
+            "title": "Z.ai - Free AI Chatbot & Agent powered by GLM-5.1 & GLM-5",
+            "timezone_offset": "360",
+            "is_mobile": "false",
+            "is_touch": "false",
+            "max_touch_points": "0",
+            "browser_name": "Firefox",
+            "os_name": "Linux",
+            "signature_timestamp": ts,
+        })
+        url = f"{self._ZAI_BASE_URL}/api/v2/chat/completions?{query_params}"
         headers = {
             "Content-Type": "application/json",
             "Accept": "*/*",
+            "Accept-Language": "en-US",
+            "Accept-Encoding": "gzip, deflate",
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+            "X-FE-Version": "prod-fe-1.1.7",
+            "X-Signature": signature,
+            "Origin": "https://chat.z.ai",
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "Priority": "u=0",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
             headers["Cookie"] = f"token={api_key}"
         resp = requests.post(
-            f"{self._ZAI_BASE_URL}/api/v2/chat/completions",
+            url,
             headers=headers,
             json=body,
             stream=True,
