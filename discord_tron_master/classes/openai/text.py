@@ -293,6 +293,7 @@ class GPT:
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+            headers["Cookie"] = f"token={api_key}"
         resp = requests.post(
             f"{self._ZAI_BASE_URL}/api/v2/chat/completions",
             headers=headers,
