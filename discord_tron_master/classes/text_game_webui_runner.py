@@ -117,6 +117,9 @@ class TextGameWebUIRunner:
             if backend == "zai":
                 llm_base_url = llm_base_url or _ZAI_DEFAULT_BASE_URL
                 llm_api_key = llm_api_key or self._config.get_openai_api_key()
+            elif backend == "ollama":
+                llm_base_url = llm_base_url or self._config.get_ollama_base_url()
+                llm_api_key = llm_api_key or self._config.get_ollama_api_key()
 
         if completion_mode:
             env["TEXT_GAME_WEBUI_TGE_COMPLETION_MODE"] = completion_mode
