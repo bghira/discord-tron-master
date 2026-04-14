@@ -11,9 +11,9 @@ from discord_tron_master.classes.app_config import AppConfig
 
 logger = logging.getLogger(__name__)
 
-_ZAI_DEFAULT_BASE_URL = "https://chat.z.ai"
+_ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 _BACKEND_DEFAULT_MODELS = {
-    "zai": "glm-5",
+    "zai": "glm-5-turbo",
 }
 
 

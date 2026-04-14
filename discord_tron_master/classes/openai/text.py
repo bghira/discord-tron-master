@@ -1,7 +1,4 @@
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -12,40 +9,6 @@ import threading
 import openai
 from openai import OpenAI
 import requests
-
-_ZAI_SIGNING_SECRET = "key-@@@@)))()((9))-xxxx&&&%%%%%"
-
-
-def _zai_extract_user_id(token: str) -> str:
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            return ""
-        payload_b64 = parts[1]
-        payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        for field in ("id", "user_id", "uid", "sub"):
-            val = payload.get(field)
-            if val:
-                return str(val)
-    except Exception:
-        pass
-    return ""
-
-
-def _zai_compute_signature(
-    message_text: str, request_id: str, timestamp_ms: int, user_id: str,
-) -> str:
-    prompt_b64 = base64.b64encode(message_text.encode("utf-8")).decode("ascii")
-    sorted_payload = f"requestId,{request_id},timestamp,{timestamp_ms},user_id,{user_id}"
-    canonical = f"{sorted_payload}|{prompt_b64}|{timestamp_ms}"
-    window_index = timestamp_ms // (5 * 60 * 1000)
-    derived = hmac.new(
-        _ZAI_SIGNING_SECRET.encode(), str(window_index).encode(), hashlib.sha256,
-    ).hexdigest()
-    return hmac.new(
-        derived.encode(), canonical.encode(), hashlib.sha256,
-    ).hexdigest()
 
 from discord_tron_master.classes.app_config import AppConfig
 from discord_tron_master.classes.remote_ollama_broker import remote_ollama_broker
@@ -61,6 +24,45 @@ _BACKEND_SEMAPHORE_LOCK = threading.Lock()
 _BACKEND_CONCURRENCY_LIMIT = 4  # per backend
 _PROMPT_SECTION_RE = re.compile(r"^([A-Z][A-Z0-9_]+):(?:\s*(.*))?$")
 
+_ZAI_TOKEN_CACHE: dict[str, str] = {}  # original_key -> refreshed_token
+_ZAI_TOKEN_CACHE_TIME: dict[str, float] = {}
+_ZAI_TOKEN_REFRESH_INTERVAL = 120
+
+
+def _zai_get_fresh_token() -> str:
+    """Return a fresh JWT, refreshing via /api/v1/auths/ every 2 minutes."""
+    import time as _time
+    original = config.get_ollama_api_key() or config.get_openai_api_key() or ""
+    now = _time.time()
+    last = _ZAI_TOKEN_CACHE_TIME.get("t", 0)
+    if now - last < _ZAI_TOKEN_REFRESH_INTERVAL and "t" in _ZAI_TOKEN_CACHE:
+        return _ZAI_TOKEN_CACHE["t"]
+    current = _ZAI_TOKEN_CACHE.get("t", original)
+    try:
+        resp = requests.get(
+            "https://chat.z.ai/api/v1/auths/",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+                "Accept": "*/*",
+                "Origin": "https://chat.z.ai",
+                "Authorization": f"Bearer {current}",
+                "Cookie": f"token={current}",
+            },
+            timeout=10,
+        )
+        if resp.ok:
+            new_token = resp.json().get("token")
+            if new_token:
+                _ZAI_TOKEN_CACHE["t"] = new_token
+                _ZAI_TOKEN_CACHE_TIME["t"] = now
+                if new_token != current:
+                    logger.info("ZAI token refreshed")
+                return new_token
+    except Exception as exc:
+        logger.warning("ZAI token refresh failed: %s", exc)
+    _ZAI_TOKEN_CACHE_TIME["t"] = now
+    return current or original
+
 
 def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
     key = (backend or "zai").strip().lower()
@@ -73,8 +75,8 @@ def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
 
 
 class GPT:
-    _ZAI_MODEL = "glm-5"
-    _ZAI_BASE_URL = "https://chat.z.ai"
+    _ZAI_MODEL = "glm-5-turbo"
+    _ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
     _CLI_TIMEOUT_SECONDS = 300.0
     _CLI_WORKDIR = "/tmp/discord-tron-master-gpt"
     _TEXT_COMPLETION_INSTRUCTIONS = (
@@ -238,6 +240,34 @@ class GPT:
     def _normalize_backend(self) -> str:
         return self.config.normalize_zork_backend(getattr(self, "backend", "zai"))
 
+    _OPENCODE_VERSION = "1.4.3"
+
+    def _send_zai_openai_request(self, message_log: list[dict]) -> str | None:
+        """Send a request to ZAI via the OpenAI-compatible coding endpoint."""
+        import uuid as _uuid
+        api_key = _zai_get_fresh_token()
+        session_id = str(_uuid.uuid4())
+        client = OpenAI(
+            api_key=api_key,
+            base_url=self._ZAI_BASE_URL,
+            default_headers={
+                "User-Agent": f"opencode/{self._OPENCODE_VERSION}",
+                "x-session-affinity": session_id,
+            },
+        )
+        model = self._resolve_zai_model()
+        logger.warning("ZAI OpenAI request: model=%s base_url=%s msgs=%d", model, self._ZAI_BASE_URL, len(message_log))
+        resp = client.chat.completions.create(
+            model=model,
+            messages=message_log,
+            temperature=float(self.temperature),
+            max_tokens=int(self.max_tokens),
+            stream=False,
+        )
+        text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        logger.warning("ZAI OpenAI response: len=%d", len(text))
+        return text or None
+
     def _resolve_zai_model(self) -> str:
         raw_model = str(getattr(self, "engine", "") or "").strip()
         if not raw_model or raw_model in {"o3-mini", "text-davinci-003"}:
@@ -264,14 +294,19 @@ class GPT:
         base_url = self.config.get_ollama_base_url()
         model = self._resolve_ollama_model()
         keep_alive = self.config.get_ollama_keep_alive()
+        api_key = self.config.get_ollama_api_key()
         messages = []
         system_text = str(role or "").strip()
         prompt_text = str(prompt or "").strip()
         if system_text:
             messages.append({"role": "system", "content": system_text})
         messages.append({"role": "user", "content": prompt_text})
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         response = requests.post(
             f"{base_url}/api/chat",
+            headers=headers,
             json={
                 "model": model,
                 "stream": False,
@@ -293,248 +328,10 @@ class GPT:
         ).strip()
         return text or None
 
-    def _send_zai_request_streaming(self, message_log, *, thinking_enabled: bool = True):
-        import time as _time
-        import urllib.parse as _urlparse
-        import uuid
-
-        chat_id = str(uuid.uuid4())
-        request_id = str(uuid.uuid4())
-        message_id = str(uuid.uuid4())
-        parent_id = str(uuid.uuid4())
-
-        last_user_content = ""
-        for msg in reversed(message_log):
-            if msg.get("role") == "user":
-                last_user_content = msg.get("content", "")
-                break
-
-        body = {
-            "stream": True,
-            "model": self._resolve_zai_model(),
-            "messages": message_log,
-            "signature_prompt": last_user_content,
-            "params": {},
-            "extra": {},
-            "features": {
-                "image_generation": False,
-                "web_search": False,
-                "auto_web_search": False,
-                "preview_mode": True,
-                "flags": [],
-                "vlm_tools_enable": False,
-                "vlm_web_search_enable": False,
-                "vlm_website_mode": False,
-                "enable_thinking": bool(thinking_enabled),
-            },
-            "variables": {},
-            "chat_id": chat_id,
-            "id": request_id,
-            "current_user_message_id": message_id,
-            "current_user_message_parent_id": parent_id,
-            "background_tasks": {
-                "title_generation": False,
-                "tags_generation": False,
-            },
-        }
-        api_key = config.get_openai_api_key()
-        ts = int(_time.time() * 1000)
-        user_id = _zai_extract_user_id(api_key or "")
-        signature = _zai_compute_signature(
-            last_user_content, request_id, ts, user_id,
-        )
-        query_params = _urlparse.urlencode({
-            "timestamp": ts,
-            "requestId": request_id,
-            "user_id": user_id,
-            "version": "0.0.1",
-            "platform": "web",
-            "token": api_key or "",
-            "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-            "language": "en-US",
-            "languages": "en-US,en",
-            "timezone": "America/Belize",
-            "cookie_enabled": "true",
-            "screen_width": "3840",
-            "screen_height": "2160",
-            "screen_resolution": "3840x2160",
-            "viewport_height": "1047",
-            "viewport_width": "1920",
-            "viewport_size": "1920x1047",
-            "color_depth": "24",
-            "pixel_ratio": "1",
-            "current_url": f"https://chat.z.ai/c/{chat_id}",
-            "pathname": f"/c/{chat_id}",
-            "search": "",
-            "hash": "",
-            "host": "chat.z.ai",
-            "hostname": "chat.z.ai",
-            "protocol": "https:",
-            "referrer": "",
-            "title": "Z.ai - Free AI Chatbot & Agent powered by GLM-5.1 & GLM-5",
-            "timezone_offset": "360",
-            "is_mobile": "false",
-            "is_touch": "false",
-            "max_touch_points": "0",
-            "browser_name": "Firefox",
-            "os_name": "Linux",
-            "signature_timestamp": ts,
-        })
-        url = f"{self._ZAI_BASE_URL}/api/v2/chat/completions?{query_params}"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "*/*",
-            "Accept-Language": "en-US",
-            "Accept-Encoding": "gzip, deflate",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-            "X-FE-Version": "prod-fe-1.1.7",
-            "X-Signature": signature,
-            "Origin": "https://chat.z.ai",
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "Priority": "u=0",
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-        }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-            headers["Cookie"] = f"token={api_key}"
-        resp = requests.post(
-            url,
-            headers=headers,
-            json=body,
-            stream=True,
-            timeout=300,
-        )
-        resp.raise_for_status()
-        return resp
-
-    _ZAI_TTFT_TIMEOUT = 10  # seconds; kill and retry if no content token arrives
     _CLI_STREAM_TIMEOUT = 120  # seconds; generous for CLI backends (thinking phases)
 
     class _TTFTTimeout(Exception):
         """Raised when the first content token takes too long."""
-
-    def _consume_zai_stream(self, resp):
-        """Consume a ZAI WebUI SSE streaming response. Returns content text.
-
-        Parses ``data: {...}`` lines and collects only ``phase: "answer"``
-        deltas.  Detects tool_call JSON early and stops reading once the
-        JSON object closes, avoiding wasted time on trailing tokens.
-
-        Raises ``_TTFTTimeout`` if no answer-phase content arrives within
-        ``_ZAI_TTFT_TIMEOUT`` seconds.
-        """
-        import time
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-
-        chunks: list[str] = []
-        brace_depth = 0
-        in_json = False
-        found_tool_call = False
-        in_string = False
-        escape_next = False
-        line_iter = resp.iter_lines(decode_unicode=True)
-
-        def _next_line():
-            return next(line_iter)
-
-        executor = ThreadPoolExecutor(max_workers=1)
-        try:
-            while True:
-                future = executor.submit(_next_line)
-                try:
-                    raw_line = future.result(timeout=self._ZAI_TTFT_TIMEOUT)
-                except FuturesTimeout:
-                    future.cancel()
-                    resp.close()
-                    raise self._TTFTTimeout(
-                        f"Stream silent for {self._ZAI_TTFT_TIMEOUT}s"
-                    )
-                except StopIteration:
-                    break
-
-                if not raw_line:
-                    continue
-                line = raw_line
-                if line.startswith("data: "):
-                    line = line[6:]
-                elif line.startswith("data:"):
-                    line = line[5:]
-                else:
-                    continue
-                line = line.strip()
-                if not line or line == "[DONE]":
-                    continue
-
-                try:
-                    event = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-                # WebUI format
-                text = None
-                if isinstance(event, dict) and "data" in event:
-                    inner = event["data"]
-                    if isinstance(inner, dict):
-                        if inner.get("phase") != "answer":
-                            continue
-                        delta = inner.get("delta_content")
-                        if delta:
-                            text = str(delta)
-                # OpenAI-style fallback
-                if text is None and isinstance(event, dict) and "choices" in event:
-                    choices = event.get("choices") or []
-                    if choices:
-                        delta_obj = choices[0].get("delta") or {}
-                        text = delta_obj.get("content")
-
-                if not text:
-                    continue
-                chunks.append(text)
-
-                for ch in text:
-                    if escape_next:
-                        escape_next = False
-                        continue
-                    if ch == "\\" and in_string:
-                        escape_next = True
-                        continue
-                    if ch == '"':
-                        in_string = not in_string
-                        continue
-                    if in_string:
-                        continue
-                    if ch == "{":
-                        if not in_json:
-                            in_json = True
-                        brace_depth += 1
-                    elif ch == "}":
-                        if not in_json or brace_depth <= 0:
-                            continue
-                        brace_depth -= 1
-                        if in_json and brace_depth == 0:
-                            so_far = "".join(chunks)
-                            if '"tool_call"' in so_far and '"narration"' not in so_far:
-                                found_tool_call = True
-
-                if found_tool_call:
-                    resp.close()
-                    break
-        except self._TTFTTimeout:
-            raise
-        except Exception as e:
-            logger.warning(f"Error during ZAI stream consumption: {e}")
-        finally:
-            executor.shutdown(wait=False)
-            try:
-                resp.close()
-            except Exception:
-                pass
-
-        return "".join(chunks) or None
 
     @classmethod
     def _build_cli_prompt(cls, role: str, prompt: str) -> str:
@@ -946,29 +743,21 @@ class GPT:
                     {"role": "assistant", "content": effective_role},
                     {"role": "user", "content": effective_prompt},
                 ]
-                max_ttft_retries = 3
-                for attempt in range(1, max_ttft_retries + 1):
+                delay = 2.0
+                while True:
                     try:
-                        stream = await asyncio.to_thread(
-                            self._send_zai_request_streaming,
-                            message_log,
-                            thinking_enabled=bool(thinking_enabled),
-                        )
                         content = await asyncio.to_thread(
-                            self._consume_zai_stream, stream
+                            self._send_zai_openai_request,
+                            message_log,
                         )
                         return content or None
-                    except self._TTFTTimeout:
-                        logger.warning(
-                            f"ZAI TTFT timeout (attempt {attempt}/{max_ttft_retries}), retrying"
-                        )
-                        if attempt == max_ttft_retries:
-                            logger.error("ZAI TTFT timeout after all retries")
-                            return None
+                    except openai.RateLimitError:
+                        logger.warning(f"ZAI 429 rate-limited — retrying in {delay:.0f}s")
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, 120.0)
                     except Exception as e:
                         logger.error(f"Error sending request to ZAI: {e}")
                         return None
-                return None
 
             max_ttft_retries = 3
             for attempt in range(1, max_ttft_retries + 1):

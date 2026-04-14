@@ -205,6 +205,10 @@ class AppConfig:
         self.reload_config()
         return self.config["openai_api"].get("api_key", None)
 
+    def get_ollama_api_key(self):
+        self.reload_config()
+        return self.config.get("ollama", {}).get("api_key", None)
+
     def get_ollama_base_url(self):
         self.reload_config()
         return str(self.config.get("ollama", {}).get("base_url", "http://127.0.0.1:11434")).rstrip("/")
@@ -302,6 +306,7 @@ class AppConfig:
             "z-ai": "zai",
             "glm": "zai",
             "glm-5": "zai",
+            "glm-5-turbo": "zai",
             "openai": "zai",
             "codex-cli": "codex",
             "opencode-ai": "opencode",
