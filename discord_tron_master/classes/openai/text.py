@@ -716,6 +716,18 @@ class GPT:
         semaphore = _get_backend_semaphore(backend)
         async with semaphore:
             if backend == "ollama":
+                # If an Ollama API key is configured, use the direct API
+                # (e.g. Ollama Cloud) instead of the worker cluster.
+                if self.config.get_ollama_api_key():
+                    try:
+                        return await asyncio.to_thread(
+                            self._send_local_ollama_request,
+                            effective_role,
+                            effective_prompt,
+                        )
+                    except Exception as exc:
+                        logger.error(f"Error sending request to Ollama API: {exc}")
+                        return None
                 try:
                     return await remote_ollama_broker.request_completion(
                         role=effective_role,
