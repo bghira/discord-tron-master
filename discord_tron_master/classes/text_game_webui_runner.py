@@ -109,8 +109,9 @@ class TextGameWebUIRunner:
         llm_model = self._config.get_text_game_webui_llm_model()
 
         if sync_with_zork:
-            backend_config = self._config.get_zork_backend_config(default_backend="zai")
-            backend = str(backend_config.get("backend") or "zai").strip().lower() or "zai"
+            fallback_backend = "ollama" if self._config.get_ollama_api_key() else "zai"
+            backend_config = self._config.get_zork_backend_config(default_backend=fallback_backend)
+            backend = str(backend_config.get("backend") or fallback_backend).strip().lower() or fallback_backend
             backend_model = str(backend_config.get("model") or "").strip() or None
             completion_mode = completion_mode or backend
             llm_model = llm_model or backend_model or _BACKEND_DEFAULT_MODELS.get(backend)

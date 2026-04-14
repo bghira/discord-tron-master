@@ -806,6 +806,18 @@ class Zork(commands.Cog):
         if desired_model:
             desired["model"] = desired_model
         desired["thinking_enabled"] = bool(resolved.get("thinking_enabled", True))
+        # Store backend-specific base_url and api_key so the webui can use them.
+        backend_name = desired["backend"]
+        if backend_name == "ollama":
+            desired["base_url"] = self.config.get_ollama_base_url()
+            ollama_key = self.config.get_ollama_api_key()
+            if ollama_key:
+                desired["api_key"] = ollama_key
+        elif backend_name == "zai":
+            desired["base_url"] = "https://api.z.ai/api/coding/paas/v4"
+            zai_key = self.config.get_openai_api_key()
+            if zai_key:
+                desired["api_key"] = zai_key
         if state.get(self.CAMPAIGN_BACKEND_STATE_KEY) != desired:
             state[self.CAMPAIGN_BACKEND_STATE_KEY] = desired
             campaign.state_json = ZorkEmulator._dump_json(state)
