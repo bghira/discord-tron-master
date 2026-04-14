@@ -130,6 +130,14 @@ class TextGameWebUIRunner:
         if llm_model:
             env["TEXT_GAME_WEBUI_TGE_LLM_MODEL"] = llm_model
 
+        # Always pass Ollama Cloud config so the webui can switch at runtime.
+        ollama_base_url = self._config.get_ollama_base_url()
+        ollama_api_key = self._config.get_ollama_api_key()
+        if ollama_base_url and ollama_base_url != "http://127.0.0.1:11434":
+            env["TEXT_GAME_WEBUI_TGE_OLLAMA_BASE_URL"] = ollama_base_url
+        if ollama_api_key:
+            env["TEXT_GAME_WEBUI_TGE_OLLAMA_API_KEY"] = ollama_api_key
+
     def stop(self) -> None:
         process = self._process
         self._process = None
