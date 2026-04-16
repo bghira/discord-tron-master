@@ -290,7 +290,9 @@ class GPT:
             return self.config.get_ollama_model()
         return raw_model
 
-    def _send_local_ollama_request(self, role: str, prompt: str) -> str | None:
+    def _send_local_ollama_request(
+        self, role: str, prompt: str, *, thinking_enabled: bool = True,
+    ) -> str | None:
         base_url = self.config.get_ollama_base_url()
         model = self._resolve_ollama_model()
         keep_alive = self.config.get_ollama_keep_alive()
@@ -304,19 +306,22 @@ class GPT:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        body = {
+            "model": model,
+            "stream": False,
+            "keep_alive": keep_alive,
+            "messages": messages,
+            "options": {
+                "temperature": float(self.temperature),
+                "num_predict": int(self.max_tokens),
+            },
+        }
+        if thinking_enabled:
+            body["think"] = True
         response = requests.post(
             f"{base_url}/api/chat",
             headers=headers,
-            json={
-                "model": model,
-                "stream": False,
-                "keep_alive": keep_alive,
-                "messages": messages,
-                "options": {
-                    "temperature": float(self.temperature),
-                    "num_predict": int(self.max_tokens),
-                },
-            },
+            json=body,
             timeout=self.config.get_ollama_timeout_seconds(),
         )
         response.raise_for_status()
@@ -326,6 +331,10 @@ class GPT:
             or payload.get("response")
             or ""
         ).strip()
+        # Strip <think>...</think> blocks from visible output.
+        if text:
+            import re
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         return text or None
 
     _CLI_STREAM_TIMEOUT = 120  # seconds; generous for CLI backends (thinking phases)
@@ -721,9 +730,11 @@ class GPT:
                 if self.config.get_ollama_api_key():
                     try:
                         return await asyncio.to_thread(
-                            self._send_local_ollama_request,
-                            effective_role,
-                            effective_prompt,
+                            lambda: self._send_local_ollama_request(
+                                effective_role,
+                                effective_prompt,
+                                thinking_enabled=thinking_enabled,
+                            ),
                         )
                     except Exception as exc:
                         logger.error(f"Error sending request to Ollama API: {exc}")
@@ -742,9 +753,11 @@ class GPT:
                     logger.warning(f"Remote Ollama worker unavailable or failed: {remote_exc}")
                     try:
                         return await asyncio.to_thread(
-                            self._send_local_ollama_request,
-                            effective_role,
-                            effective_prompt,
+                            lambda: self._send_local_ollama_request(
+                                effective_role,
+                                effective_prompt,
+                                thinking_enabled=thinking_enabled,
+                            ),
                         )
                     except Exception as local_exc:
                         logger.error(f"Error sending request to Ollama: {local_exc}")
