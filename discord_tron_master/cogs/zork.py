@@ -47,7 +47,7 @@ class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
     CAMPAIGN_BACKEND_STATE_KEY = "zork_backend_config"
-    THINKING_SUPPORTED_BACKENDS = {"zai"}
+    THINKING_SUPPORTED_BACKENDS = {"zai", "ollama"}
     AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
     TURN_BUSY_RETRY_DELAY_SECONDS = 0.5
