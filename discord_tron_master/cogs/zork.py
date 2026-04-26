@@ -1429,7 +1429,7 @@ class Zork(commands.Cog):
         r"<(?:giggle|laughter|guffaw|sigh|cry|gasp|groan"
         r"|inhale|exhale|whisper|mumble|uh|um"
         r"|singing|humming|cough|sneeze|sniff|clear_throat"
-        r"|shhh)>",
+        r"|shhh|quiet)>",
         re.IGNORECASE,
     )
 
