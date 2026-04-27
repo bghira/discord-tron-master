@@ -21,6 +21,7 @@ class DiscordBot:
         self.websocket_hub = None
         self.queue_manager = None
         self.worker_manager = None
+        self.event_loop = None
         intents = discord.Intents.default()
         intents.members = True
         intents.message_content = True

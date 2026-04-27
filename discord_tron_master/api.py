@@ -15,6 +15,7 @@ import io, asyncio
 from scipy.io.wavfile import read as read_wav
 from scipy.io.wavfile import write as write_wav
 import base64
+from discord_tron_master.classes.webui_image_bridge import enqueue_webui_image_job
 
 
 class API:
@@ -208,40 +209,8 @@ class API:
 
             from discord_tron_master.bot import DiscordBot
 
-            discord = DiscordBot.get_instance()
-            if discord is None or discord.worker_manager is None:
-                return jsonify({"error": "Worker system not ready"}), 503
-
-            from discord_tron_master.classes.jobs.webui_image_job import (
-                WebUIImageGenerationJob,
-            )
-
-            job = WebUIImageGenerationJob(
-                prompt=prompt,
-                model=data.get("model", "flux"),
-                ref_type=data.get("ref_type", "scene"),
-                campaign_id=data.get("campaign_id"),
-                room_key=data.get("room_key"),
-                actor_id=data.get("actor_id", "webui"),
-                callback_url=data.get("callback_url", ""),
-                callback_secret=data.get("callback_secret", ""),
-                webui_job_id=data.get("job_id"),
-                reference_images=data.get("reference_images"),
-                metadata=data.get("metadata"),
-            )
-
-            worker = discord.worker_manager.find_best_fit_worker(job)
-            if worker is None:
-                return jsonify({"error": "No GPU workers available"}), 503
-
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(discord.queue_manager.enqueue_job(worker, job))
-            except Exception as e:
-                logging.error("Failed to enqueue WebUI image job: %s", e)
-                return jsonify({"error": str(e)}), 500
-
-            return jsonify({"ok": True, "job_id": job.id})
+            body, status = enqueue_webui_image_job(DiscordBot.get_instance(), data)
+            return jsonify(body), status
 
     def check_auth(self, request):
         try:

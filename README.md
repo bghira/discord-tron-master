@@ -124,6 +124,19 @@ You must ensure that your firewall, if any, is not blocking ports:
 * TCP **5000**
 * TCP **6789**
 
+If `text_game_webui.enabled` is true, `python -m discord_tron_master run`
+starts the web UI sidecar and configures it to use DTM image generation by
+default. The sidecar receives:
+
+* `TEXT_GAME_WEBUI_IMAGE_BACKEND=dtm`
+* `TEXT_GAME_WEBUI_DTM_IMAGE_API_URL` from `text_game_webui.dtm_image_api_url`
+  (defaults to the bot-process bridge at `http://127.0.0.1:5099`)
+* `TEXT_GAME_WEBUI_DTM_LINK_SECRET` for authenticated image callbacks
+
+The image endpoint must run in the Discord bot process so it can see live GPU
+workers. The standalone gunicorn API on port 5000 remains available for the
+older REST API, but it does not own the bot's worker queues.
+
 ## Adding a client worker
 
 Google Colab can be used successfully as a worker for this project.

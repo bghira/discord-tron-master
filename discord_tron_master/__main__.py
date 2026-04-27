@@ -12,6 +12,7 @@ from discord_tron_master.classes.worker_manager import WorkerManager
 from discord_tron_master.classes.queue_manager import QueueManager
 from discord_tron_master.classes.command_processor import CommandProcessor
 from discord_tron_master.classes.text_game_webui_runner import TextGameWebUIRunner
+from discord_tron_master.classes.webui_image_bridge import WebUIImageBridge
 
 config = AppConfig()
 
@@ -48,6 +49,7 @@ websocket_hub = WebSocketHub(
     auth_instance=auth, command_processor=command_processor, discord_bot=discord_bot
 )
 text_game_webui_runner = TextGameWebUIRunner(config)
+webui_image_bridge = WebUIImageBridge(config, discord_bot)
 
 
 import asyncio, concurrent
@@ -79,8 +81,10 @@ def main():
     def run_discord_bot():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        discord_bot.event_loop = loop
         loop.run_until_complete(discord_bot.run())
 
+    webui_image_bridge.start()
     text_game_webui_runner.start()
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -96,6 +100,7 @@ def main():
                     logging.error("An error occurred: %s", e)
     finally:
         text_game_webui_runner.stop()
+        webui_image_bridge.stop()
 
 
 # A simple wrapper to run Flask in a thread.

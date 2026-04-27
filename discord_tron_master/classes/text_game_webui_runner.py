@@ -56,6 +56,10 @@ class TextGameWebUIRunner:
         env["TEXT_GAME_WEBUI_DTM_LINK_AUTH"] = "1"
         env["TEXT_GAME_WEBUI_DTM_LINK_SECRET"] = self._config.get_text_game_webui_link_secret()
         env["TEXT_GAME_WEBUI_DTM_COMMAND_PREFIX"] = str(self._config.get_command_prefix() or "+")
+        env["TEXT_GAME_WEBUI_IMAGE_BACKEND"] = self._config.get_text_game_webui_image_backend()
+        env["TEXT_GAME_WEBUI_DTM_IMAGE_API_URL"] = (
+            self._config.get_text_game_webui_dtm_image_api_url()
+        )
         env["TEXT_GAME_WEBUI_TGE_RUNTIME_PROBE_LLM"] = (
             "1" if self._config.get_text_game_webui_runtime_probe_llm() else "0"
         )
@@ -79,10 +83,12 @@ class TextGameWebUIRunner:
         ]
 
         logger.info(
-            "Starting text-game-webui at http://%s:%s using %s",
+            "Starting text-game-webui at http://%s:%s using %s (image backend=%s, dtm image api=%s)",
             host,
             port,
             project_path,
+            env["TEXT_GAME_WEBUI_IMAGE_BACKEND"],
+            env["TEXT_GAME_WEBUI_DTM_IMAGE_API_URL"],
         )
         self._process = subprocess.Popen(
             command,

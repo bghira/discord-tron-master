@@ -44,3 +44,4 @@ venv/
 Thumbs.db
 output/
 data/
+text-game-webui.db

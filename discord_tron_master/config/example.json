@@ -45,7 +45,11 @@
         "llm_model": null,
         "sync_zork_backend": true,
         "runtime_probe_llm": false,
-        "runtime_probe_timeout_seconds": 8
+        "runtime_probe_timeout_seconds": 8,
+        "image_backend": "dtm",
+        "dtm_image_api_url": null,
+        "dtm_image_bridge_host": "127.0.0.1",
+        "dtm_image_bridge_port": 5099
     },
     "web_root": "/tmp/discord",
     "url_base": "https://localhost.foo/folder",

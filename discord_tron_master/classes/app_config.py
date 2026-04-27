@@ -53,6 +53,10 @@ DEFAULT_CONFIG = {
         "runtime_probe_llm": False,
         "runtime_probe_timeout_seconds": 8,
         "link_secret": None,
+        "image_backend": "dtm",
+        "dtm_image_api_url": None,
+        "dtm_image_bridge_host": "127.0.0.1",
+        "dtm_image_bridge_port": 5099,
     },
 }
 
@@ -602,3 +606,32 @@ class AppConfig:
             ]
         )
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+    def get_text_game_webui_image_backend(self):
+        value = self.get_text_game_webui_config().get("image_backend")
+        text = str(value or "dtm").strip().lower()
+        return text or "dtm"
+
+    def get_text_game_webui_dtm_image_api_url(self):
+        value = self.get_text_game_webui_config().get("dtm_image_api_url")
+        text = str(value or "").strip()
+        if text and text != "https://127.0.0.1:5000":
+            return text
+        return self.get_text_game_webui_dtm_image_bridge_url()
+
+    def get_text_game_webui_dtm_image_bridge_host(self):
+        value = self.get_text_game_webui_config().get("dtm_image_bridge_host")
+        return str(value or "127.0.0.1").strip() or "127.0.0.1"
+
+    def get_text_game_webui_dtm_image_bridge_port(self):
+        try:
+            return int(
+                self.get_text_game_webui_config().get("dtm_image_bridge_port", 5099)
+            )
+        except (TypeError, ValueError):
+            return 5099
+
+    def get_text_game_webui_dtm_image_bridge_url(self):
+        host = self.get_text_game_webui_dtm_image_bridge_host()
+        port = self.get_text_game_webui_dtm_image_bridge_port()
+        return f"http://{host}:{port}"
