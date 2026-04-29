@@ -196,4 +196,50 @@ class WebUIImageGenerationJob:
 
     async def job_lost(self):
         logger.warning("WebUI job %s lost (worker disconnected).", self.job_id)
+        if not self.callback_url or not self.webui_job_id:
+            return True
+
+        payload = {
+            "status": "failed",
+            "error": "Image generation worker disconnected before completing the job.",
+            "prompt": self.prompt or "",
+            "ref_type": self.ref_type,
+            "actor_id": self.actor_id,
+            "room_key": self.room_key,
+            "job_id": self.webui_job_id,
+        }
+        headers = {}
+        if self.callback_secret:
+            headers["X-DTM-Link-Secret"] = str(self.callback_secret)
+
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.callback_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    ssl=False,
+                ) as resp:
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        logger.warning(
+                            "WebUI lost-job callback failed (%s %s): %s",
+                            resp.status,
+                            self.callback_url,
+                            body[:200],
+                        )
+                    else:
+                        logger.info(
+                            "WebUI lost-job callback succeeded: %s",
+                            self.callback_url,
+                        )
+        except Exception as exc:
+            logger.warning(
+                "WebUI lost-job callback error (%s): %s",
+                self.callback_url,
+                exc,
+            )
         return True
