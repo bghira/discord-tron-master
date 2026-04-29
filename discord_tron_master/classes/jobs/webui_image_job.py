@@ -10,6 +10,8 @@ import time
 import uuid
 from typing import Any, Dict
 
+from discord_tron_master.classes.app_config import AppConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +98,22 @@ class WebUIImageGenerationJob:
     def payload_text(self):
         return self.prompt or "(no prompt)"
 
+    def _build_user_config(self) -> dict:
+        try:
+            user_config = AppConfig().get_user_config(user_id=self.actor_id)
+        except Exception:
+            user_config = {}
+
+        user_config["auto_model"] = False
+        user_config["model"] = self.model
+        user_config["steps"] = self.steps
+        user_config["guidance_scaling"] = self.guidance_scaling
+        if not isinstance(user_config.get("resolution"), dict):
+            user_config["resolution"] = {"width": 1024, "height": 1024}
+        if self.ref_type == "avatar":
+            user_config["resolution"] = {"width": 768, "height": 768}
+        return user_config
+
     # ------------------------------------------------------------------
     # Format the WebSocket message sent to the GPU worker.
     # ------------------------------------------------------------------
@@ -124,14 +142,7 @@ class WebUIImageGenerationJob:
         for k, v in self.extra_metadata.items():
             message_flags.setdefault(k, v)
 
-        user_config = {
-            "auto_model": False,
-            "model": self.model,
-            "steps": self.steps,
-            "guidance_scaling": self.guidance_scaling,
-        }
-        if self.ref_type == "avatar":
-            user_config["resolution"] = {"width": 768, "height": 768}
+        user_config = self._build_user_config()
 
         return {
             "job_type": self.job_type,
