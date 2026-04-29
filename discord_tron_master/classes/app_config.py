@@ -337,6 +337,26 @@ class AppConfig:
             )
         )
 
+    @classmethod
+    def normalize_zork_model_spec(cls, value):
+        """Coerce a model spec to str | list[str] | {"research", "narration"} | None."""
+        if isinstance(value, dict):
+            research = str(value.get("research") or "").strip()
+            narration = str(value.get("narration") or "").strip()
+            if research and narration:
+                return {"research": research, "narration": narration}
+            single = research or narration
+            return single or None
+        if isinstance(value, (list, tuple)):
+            cleaned = [str(item).strip() for item in value if str(item or "").strip()]
+            if not cleaned:
+                return None
+            if len(cleaned) == 1:
+                return cleaned[0]
+            return cleaned
+        text = str(value or "").strip()
+        return text or None
+
     def get_zork_backend_config(self, channel_id=None, default_backend="zai"):
         self.reload_config()
         resolved_default = self.normalize_zork_backend(default_backend, default="zai")
@@ -350,7 +370,7 @@ class AppConfig:
                     value.get("backend"),
                     default=resolved_default,
                 )
-                model_value = str(value.get("model") or "").strip() or None
+                model_value = self.normalize_zork_model_spec(value.get("model"))
                 thinking_value = value.get("thinking_enabled")
                 if isinstance(thinking_value, bool):
                     thinking_enabled = thinking_value
@@ -395,7 +415,7 @@ class AppConfig:
         normalized = self.normalize_zork_backend(backend, default="")
         if normalized not in self.ZORK_BACKEND_OPTIONS:
             raise ValueError(f"Unsupported Zork backend: {backend}")
-        model_text = str(model or "").strip() or None
+        model_value = self.normalize_zork_model_spec(model)
         # Reload from disk first so we have a fresh self.config.
         self.reload_config()
         current = self.get_zork_backend_config(channel_id=channel_id, default_backend=normalized)
@@ -408,7 +428,7 @@ class AppConfig:
             self.config["zork_backends"] = {}
         self.config["zork_backends"][str(channel_id)] = {
             "backend": normalized,
-            "model": model_text,
+            "model": model_value,
             "thinking_enabled": resolved_thinking,
         }
         self._save_config()

@@ -334,7 +334,7 @@ async def _notify_webui_image_delivery(
                 callback_url,
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=60),
                 ssl=False,
             ) as resp:
                 if resp.status >= 400:

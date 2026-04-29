@@ -787,22 +787,24 @@ class Zork(commands.Cog):
         *,
         channel_id: int | str | None = None,
         backend: str | None = None,
-        model: str | None = None,
+        model=None,
         thinking_enabled: bool | None = None,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, object]:
         # Start from config defaults, then override with any explicit parameters.
         resolved = self.config.get_zork_backend_config(channel_id, default_backend="zai")
         if backend is not None:
             resolved["backend"] = str(backend or "").strip().lower() or "zai"
         if model is not None:
-            resolved["model"] = str(model or "").strip() or None
+            resolved["model"] = self.config.normalize_zork_model_spec(model)
         if isinstance(thinking_enabled, bool):
             resolved["thinking_enabled"] = thinking_enabled
         state = ZorkEmulator.get_campaign_state(campaign)
         if not isinstance(state, dict):
             state = {}
-        desired = {"backend": str(resolved.get("backend") or "zai").strip().lower() or "zai"}
-        desired_model = str(resolved.get("model") or "").strip() or None
+        desired: dict[str, object] = {
+            "backend": str(resolved.get("backend") or "zai").strip().lower() or "zai",
+        }
+        desired_model = self.config.normalize_zork_model_spec(resolved.get("model"))
         if desired_model:
             desired["model"] = desired_model
         desired["thinking_enabled"] = bool(resolved.get("thinking_enabled", True))
@@ -3228,6 +3230,52 @@ class Zork(commands.Cog):
                 "Web UI linked. Return to the browser and it should unlock automatically."
             )
 
+    @staticmethod
+    def _parse_zork_backend_model_arg(text):
+        """Parse the model portion of `!zork backend <backend> <model>`.
+
+        Returns:
+            None for "no model";
+            str for a single model;
+            list[str] for `[a, b, ...]` random pool;
+            dict {"research", "narration"} for `[[research, narration]]` phased pair.
+
+        Raises ValueError for malformed input (empty brackets, wrong arity in `[[...]]`).
+        """
+        body = str(text or "").strip()
+        if not body:
+            return None
+        if body.startswith("[[") and body.endswith("]]"):
+            inner = body[2:-2].strip()
+            parts = [item.strip() for item in inner.split(",") if item.strip()]
+            if len(parts) != 2:
+                raise ValueError(
+                    "phased model spec `[[research, narration]]` requires exactly two items"
+                )
+            return {"research": parts[0], "narration": parts[1]}
+        if body.startswith("[") and body.endswith("]"):
+            inner = body[1:-1].strip()
+            parts = [item.strip() for item in inner.split(",") if item.strip()]
+            if not parts:
+                raise ValueError("model list `[...]` cannot be empty")
+            if len(parts) == 1:
+                return parts[0]
+            return parts
+        return body
+
+    @staticmethod
+    def _format_zork_backend_model(model_value):
+        if not model_value:
+            return None
+        if isinstance(model_value, dict):
+            return (
+                f"research=`{model_value.get('research')}`, "
+                f"narration=`{model_value.get('narration')}`"
+            )
+        if isinstance(model_value, list):
+            return "random pool: " + ", ".join(f"`{m}`" for m in model_value)
+        return f"`{model_value}`"
+
     @zork.command(name="backend")
     async def zork_backend(self, ctx, *, option: str = None):
         ctx = self._wrap_send(ctx)
@@ -3254,30 +3302,29 @@ class Zork(commands.Cog):
             default_backend="zai",
         )
         current_backend = str(current.get("backend") or "zai").strip() or "zai"
-        current_model = str(current.get("model") or "").strip() or None
+        current_model = current.get("model") or None
         allowed = ", ".join(f"`{item}`" for item in AppConfig.ZORK_BACKEND_OPTIONS)
         if option is None:
-            model_text = f"`{current_model}`" if current_model else "`default`"
+            display = self._format_zork_backend_model(current_model) or "`default`"
             await ctx.send(
                 f"Current Zork backend for this channel/thread: `{current_backend}`.\n"
-                f"Current model override: {model_text}\n"
+                f"Current model override: {display}\n"
                 f"Available backends: {allowed}"
             )
             return
 
-        try:
-            tokens = shlex.split(option)
-        except ValueError:
-            tokens = str(option or "").split()
-        if not tokens:
-            await ctx.send(f"Available backends: {allowed}")
-            return
-        normalized = self.config.normalize_zork_backend(tokens[0], default="")
-        model = " ".join(str(token or "").strip() for token in tokens[1:]).strip() or None
+        body = str(option or "").strip()
+        backend_token, _, raw_model = body.partition(" ")
+        normalized = self.config.normalize_zork_backend(backend_token, default="")
         if normalized not in AppConfig.ZORK_BACKEND_OPTIONS:
             await ctx.send(
                 f"Unknown backend `{option}`. Available backends: {allowed}"
             )
+            return
+        try:
+            model = self._parse_zork_backend_model_arg(raw_model)
+        except ValueError as exc:
+            await ctx.send(f"Invalid model spec: {exc}")
             return
 
         # TODO: campaign.created_by_actor_id is a string actor_id, not a Discord int user ID.
@@ -3298,7 +3345,8 @@ class Zork(commands.Cog):
                     backend=normalized,
                     model=model,
                 )
-        model_text = f" with model `{model}`" if model else " with the backend default model"
+        display = self._format_zork_backend_model(model)
+        model_text = f" with model {display}" if display else " with the backend default model"
         await ctx.send(
             f"Zork backend for `{campaign.name}` in this channel/thread set to `{normalized}`{model_text}."
         )
