@@ -14,6 +14,8 @@ from discord_tron_master.classes.app_config import AppConfig
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WEBUI_IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b"
+
 
 class WebUIImageGenerationJob:
     """Minimal job that satisfies the queue_manager / worker protocol."""
@@ -22,7 +24,7 @@ class WebUIImageGenerationJob:
         self,
         *,
         prompt: str,
-        model: str = "flux",
+        model: str = DEFAULT_WEBUI_IMAGE_MODEL,
         steps: int = 12,
         guidance_scaling: float = 2.5,
         ref_type: str = "scene",
@@ -42,7 +44,7 @@ class WebUIImageGenerationJob:
         self.module_command = "generate_image"
 
         self.prompt = prompt
-        self.model = model
+        self.model = str(model or DEFAULT_WEBUI_IMAGE_MODEL).strip() or DEFAULT_WEBUI_IMAGE_MODEL
         self.steps = steps
         self.guidance_scaling = guidance_scaling
         self.ref_type = ref_type

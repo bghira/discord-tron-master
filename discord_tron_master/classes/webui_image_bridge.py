@@ -8,7 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from discord_tron_master.classes.app_config import AppConfig
-from discord_tron_master.classes.jobs.webui_image_job import WebUIImageGenerationJob
+from discord_tron_master.classes.jobs.webui_image_job import (
+    DEFAULT_WEBUI_IMAGE_MODEL,
+    WebUIImageGenerationJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ def enqueue_webui_image_job(discord: Any, data: dict[str, Any]) -> tuple[dict[st
 
     job = WebUIImageGenerationJob(
         prompt=prompt,
-        model=data.get("model", "flux"),
+        model=data.get("model") or DEFAULT_WEBUI_IMAGE_MODEL,
         ref_type=data.get("ref_type", "scene"),
         campaign_id=data.get("campaign_id"),
         room_key=data.get("room_key"),

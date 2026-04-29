@@ -364,7 +364,7 @@ class MediaGenerationAdapter:
         except Exception:
             user_config = {}
         user_config["auto_model"] = False
-        user_config["model"] = model or "flux"
+        user_config["model"] = model or "black-forest-labs/flux.2-klein-4b"
         user_config["steps"] = 12
         user_config["guidance_scaling"] = 2.5
         job_metadata = dict(metadata or {})
@@ -411,7 +411,7 @@ class MediaGenerationAdapter:
         except Exception:
             user_config = {}
         user_config["auto_model"] = False
-        user_config["model"] = model or "flux"
+        user_config["model"] = model or "black-forest-labs/flux.2-klein-4b"
         user_config["steps"] = 16
         user_config["guidance_scaling"] = 3.0
         user_config["resolution"] = {"width": 768, "height": 768}
