@@ -118,7 +118,13 @@ class TextGameWebUIRunner:
             fallback_backend = "ollama" if self._config.get_ollama_api_key() else "zai"
             backend_config = self._config.get_zork_backend_config(default_backend=fallback_backend)
             backend = str(backend_config.get("backend") or fallback_backend).strip().lower() or fallback_backend
-            backend_model = str(backend_config.get("model") or "").strip() or None
+            raw_backend_model = backend_config.get("model")
+            # Structured specs (list/dict) are per-campaign overrides; leave the
+            # global env var empty and let the campaign state apply at runtime.
+            if isinstance(raw_backend_model, (list, dict)):
+                backend_model = None
+            else:
+                backend_model = str(raw_backend_model or "").strip() or None
             completion_mode = completion_mode or backend
             llm_model = llm_model or backend_model or _BACKEND_DEFAULT_MODELS.get(backend)
             if backend == "zai":
