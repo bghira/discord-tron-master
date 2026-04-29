@@ -222,7 +222,12 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         cls._session_factory = build_session_factory(engine)
 
         def _gpt_factory():
+            import random
             from discord_tron_master.classes.openai.text import GPT
+            from text_game_engine.completion_phase import (
+                PHASE_RESEARCH as _phase_research,
+                current_phase as _current_phase,
+            )
             gpt = GPT()
             overrides = get_tge_completion_overrides()
             backend_config = config.get_zork_backend_config(default_backend="zai")
@@ -230,9 +235,15 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
                 str(overrides.get("backend") or backend_config.get("backend") or "zai").strip()
                 or "zai"
             )
-            model = str(
-                overrides.get("model") or backend_config.get("model") or ""
-            ).strip()
+            raw_model = overrides.get("model") or backend_config.get("model")
+            if isinstance(raw_model, dict):
+                key = "research" if _current_phase() == _phase_research else "narration"
+                model = str(raw_model.get(key) or "").strip()
+            elif isinstance(raw_model, list):
+                cleaned = [str(item).strip() for item in raw_model if str(item or "").strip()]
+                model = random.choice(cleaned) if cleaned else ""
+            else:
+                model = str(raw_model or "").strip()
             gpt.backend = backend
             if model:
                 gpt.engine = model
