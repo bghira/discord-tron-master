@@ -3231,37 +3231,76 @@ class Zork(commands.Cog):
             )
 
     @staticmethod
-    def _parse_zork_backend_model_arg(text):
+    def _split_top_level_csv(text):
+        """Split `text` on commas at bracket depth 0; preserves nested `[...]` groups."""
+        parts: list[str] = []
+        buf: list[str] = []
+        depth = 0
+        for ch in text:
+            if ch == "[":
+                depth += 1
+                buf.append(ch)
+            elif ch == "]":
+                depth -= 1
+                if depth < 0:
+                    raise ValueError("unbalanced brackets in model list")
+                buf.append(ch)
+            elif ch == "," and depth == 0:
+                parts.append("".join(buf))
+                buf = []
+            else:
+                buf.append(ch)
+        if depth != 0:
+            raise ValueError("unbalanced brackets in model list")
+        parts.append("".join(buf))
+        return parts
+
+    @classmethod
+    def _parse_zork_backend_model_arg(cls, text):
         """Parse the model portion of `!zork backend <backend> <model>`.
 
         Returns:
             None for "no model";
             str for a single model;
-            list[str] for `[a, b, ...]` random pool;
-            dict {"research", "narration"} for `[[research, narration]]` phased pair.
+            dict {"research", "narration"} for `[research, narration]` phased pair;
+            list of (str | dict) for a random pool — each element is either a plain
+            model or a phased pair.
 
-        Raises ValueError for malformed input (empty brackets, wrong arity in `[[...]]`).
+        Raises ValueError for malformed input (empty brackets, wrong arity in pairs,
+        unbalanced brackets).
         """
         body = str(text or "").strip()
         if not body:
             return None
-        if body.startswith("[[") and body.endswith("]]"):
-            inner = body[2:-2].strip()
-            parts = [item.strip() for item in inner.split(",") if item.strip()]
-            if len(parts) != 2:
-                raise ValueError(
-                    "phased model spec `[[research, narration]]` requires exactly two items"
-                )
-            return {"research": parts[0], "narration": parts[1]}
-        if body.startswith("[") and body.endswith("]"):
-            inner = body[1:-1].strip()
-            parts = [item.strip() for item in inner.split(",") if item.strip()]
-            if not parts:
-                raise ValueError("model list `[...]` cannot be empty")
-            if len(parts) == 1:
-                return parts[0]
-            return parts
-        return body
+        if not (body.startswith("[") and body.endswith("]")):
+            return body
+        inner = body[1:-1].strip()
+        if not inner:
+            raise ValueError("model list `[...]` cannot be empty")
+        raw_parts = cls._split_top_level_csv(inner)
+        items: list = []
+        for raw in raw_parts:
+            part = raw.strip()
+            if not part:
+                continue
+            if part.startswith("[") and part.endswith("]"):
+                pair = [
+                    item.strip()
+                    for item in part[1:-1].split(",")
+                    if item.strip()
+                ]
+                if len(pair) != 2:
+                    raise ValueError(
+                        "phased pair `[research, narration]` requires exactly two items"
+                    )
+                items.append({"research": pair[0], "narration": pair[1]})
+            else:
+                items.append(part)
+        if not items:
+            raise ValueError("model list `[...]` cannot be empty")
+        if len(items) == 1:
+            return items[0]
+        return items
 
     @staticmethod
     def _format_zork_backend_model(model_value):
@@ -3273,7 +3312,15 @@ class Zork(commands.Cog):
                 f"narration=`{model_value.get('narration')}`"
             )
         if isinstance(model_value, list):
-            return "random pool: " + ", ".join(f"`{m}`" for m in model_value)
+            rendered = []
+            for item in model_value:
+                if isinstance(item, dict):
+                    rendered.append(
+                        f"[research=`{item.get('research')}`, narration=`{item.get('narration')}`]"
+                    )
+                else:
+                    rendered.append(f"`{item}`")
+            return "random pool: " + ", ".join(rendered)
         return f"`{model_value}`"
 
     @zork.command(name="backend")

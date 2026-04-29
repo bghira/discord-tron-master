@@ -236,12 +236,24 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
                 or "zai"
             )
             raw_model = overrides.get("model") or backend_config.get("model")
-            if isinstance(raw_model, dict):
+
+            def _resolve_phased(pair):
                 key = "research" if _current_phase() == _phase_research else "narration"
-                model = str(raw_model.get(key) or "").strip()
+                return str(pair.get(key) or "").strip()
+
+            if isinstance(raw_model, dict):
+                model = _resolve_phased(raw_model)
             elif isinstance(raw_model, list):
-                cleaned = [str(item).strip() for item in raw_model if str(item or "").strip()]
-                model = random.choice(cleaned) if cleaned else ""
+                items = [
+                    item if isinstance(item, dict) else str(item or "").strip()
+                    for item in raw_model
+                ]
+                items = [item for item in items if item]
+                if items:
+                    picked = random.choice(items)
+                    model = _resolve_phased(picked) if isinstance(picked, dict) else picked
+                else:
+                    model = ""
             else:
                 model = str(raw_model or "").strip()
             gpt.backend = backend

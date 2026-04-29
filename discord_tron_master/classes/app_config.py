@@ -339,7 +339,13 @@ class AppConfig:
 
     @classmethod
     def normalize_zork_model_spec(cls, value):
-        """Coerce a model spec to str | list[str] | {"research", "narration"} | None."""
+        """Coerce a model spec to one of:
+
+        - ``None`` for empty;
+        - ``str`` for a single model;
+        - ``{"research": str, "narration": str}`` for a phased pair;
+        - ``list`` of (str | phased-pair dict) for a random pool of mixed items.
+        """
         if isinstance(value, dict):
             research = str(value.get("research") or "").strip()
             narration = str(value.get("narration") or "").strip()
@@ -348,7 +354,16 @@ class AppConfig:
             single = research or narration
             return single or None
         if isinstance(value, (list, tuple)):
-            cleaned = [str(item).strip() for item in value if str(item or "").strip()]
+            cleaned: list = []
+            for item in value:
+                if isinstance(item, dict):
+                    pair = cls.normalize_zork_model_spec(item)
+                    if pair is not None:
+                        cleaned.append(pair)
+                else:
+                    text = str(item or "").strip()
+                    if text:
+                        cleaned.append(text)
             if not cleaned:
                 return None
             if len(cleaned) == 1:
