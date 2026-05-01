@@ -578,27 +578,9 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
 
         config = AppConfig()
         resolved = config.get_zork_backend_config(default_backend="zai")
-        campaign = cls.query_campaign(campaign_id) if campaign_id is not None else None
-        if campaign is not None:
-            state = cls._emu.get_campaign_state(campaign)
-            raw = state.get("zork_backend_config") if isinstance(state, dict) else None
-            if isinstance(raw, dict):
-                backend = config.normalize_zork_backend(
-                    raw.get("backend"),
-                    default=str(resolved.get("backend") or "zai").strip() or "zai",
-                )
-                model = str(raw.get("model") or "").strip() or None
-                thinking_value = raw.get("thinking_enabled")
-                resolved = {
-                    "backend": backend,
-                    "model": model,
-                    "thinking_enabled": (
-                        thinking_value if isinstance(thinking_value, bool) else True
-                    ),
-                }
         return {
             "backend": str(resolved.get("backend") or "zai").strip() or "zai",
-            "model": str(resolved.get("model") or "").strip() or None,
+            "model": resolved.get("model"),
             "thinking_enabled": bool(resolved.get("thinking_enabled", True)),
         }
 

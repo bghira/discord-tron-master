@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -113,20 +114,26 @@ class TextGameWebUIRunner:
         llm_base_url = self._config.get_text_game_webui_llm_base_url()
         llm_api_key = self._config.get_text_game_webui_llm_api_key()
         llm_model = self._config.get_text_game_webui_llm_model()
+        structured_model_spec = False
 
         if sync_with_zork:
             fallback_backend = "ollama" if self._config.get_ollama_api_key() else "zai"
             backend_config = self._config.get_zork_backend_config(default_backend=fallback_backend)
             backend = str(backend_config.get("backend") or fallback_backend).strip().lower() or fallback_backend
             raw_backend_model = backend_config.get("model")
-            # Structured specs (list/dict) are per-campaign overrides; leave the
-            # global env var empty and let the campaign state apply at runtime.
             if isinstance(raw_backend_model, (list, dict)):
+                structured_model_spec = True
+                env["TEXT_GAME_WEBUI_TGE_LLM_MODEL_SPEC_JSON"] = json.dumps(
+                    raw_backend_model,
+                    ensure_ascii=True,
+                )
                 backend_model = None
             else:
                 backend_model = str(raw_backend_model or "").strip() or None
             completion_mode = completion_mode or backend
-            llm_model = llm_model or backend_model or _BACKEND_DEFAULT_MODELS.get(backend)
+            llm_model = llm_model or backend_model
+            if not structured_model_spec:
+                llm_model = llm_model or _BACKEND_DEFAULT_MODELS.get(backend)
             if backend == "zai":
                 llm_base_url = llm_base_url or _ZAI_DEFAULT_BASE_URL
                 llm_api_key = llm_api_key or self._config.get_openai_api_key()

@@ -46,7 +46,9 @@ class _WorldTimeSendProxy:
 class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
+    # Legacy state key. Backend credentials now stay in AppConfig/env only.
     CAMPAIGN_BACKEND_STATE_KEY = "zork_backend_config"
+    SESSION_RUNTIME_CONFIG_KEY = "zork_runtime_config"
     CAMPAIGN_STYLE_STATE_KEY = "style_direction"
     THINKING_SUPPORTED_BACKENDS = {"zai", "ollama"}
     AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
@@ -812,22 +814,15 @@ class Zork(commands.Cog):
         if desired_model:
             desired["model"] = desired_model
         desired["thinking_enabled"] = bool(resolved.get("thinking_enabled", True))
-        # Store backend-specific base_url and api_key so the webui can use them.
-        backend_name = desired["backend"]
-        if backend_name == "ollama":
-            desired["base_url"] = self.config.get_ollama_base_url()
-            ollama_key = self.config.get_ollama_api_key()
-            if ollama_key:
-                desired["api_key"] = ollama_key
-        elif backend_name == "zai":
-            desired["base_url"] = "https://api.z.ai/api/coding/paas/v4"
-            zai_key = self.config.get_openai_api_key()
-            if zai_key:
-                desired["api_key"] = zai_key
         state_changed = False
-        if state.get(self.CAMPAIGN_BACKEND_STATE_KEY) != desired:
-            state[self.CAMPAIGN_BACKEND_STATE_KEY] = desired
+        if self.CAMPAIGN_BACKEND_STATE_KEY in state:
+            state.pop(self.CAMPAIGN_BACKEND_STATE_KEY, None)
             state_changed = True
+        self._sync_session_runtime_config(
+            campaign,
+            channel_id=channel_id,
+            runtime_config=desired,
+        )
 
         desired_style = None
         if sync_style_direction:
@@ -853,6 +848,45 @@ class Zork(commands.Cog):
             "thinking_enabled": desired.get("thinking_enabled"),
             "style_direction": desired_style,
         }
+
+    def _sync_session_runtime_config(
+        self,
+        campaign,
+        *,
+        channel_id: int | str | None,
+        runtime_config: dict[str, object],
+    ) -> None:
+        from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
+
+        ZorkEmulator._ensure_init()
+        with ZorkEmulator._session_factory() as session:
+            query = session.query(GameSession).filter(GameSession.campaign_id == str(campaign.id))
+            if channel_id is not None:
+                channel_text = str(channel_id)
+                query = query.filter(
+                    or_(
+                        GameSession.id == channel_text,
+                        GameSession.surface_channel_id == channel_text,
+                        GameSession.surface_thread_id == channel_text,
+                    )
+                )
+            rows = query.all()
+            changed = False
+            for row in rows:
+                try:
+                    metadata = json.loads(row.metadata_json or "{}")
+                except Exception:
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                if metadata.get(self.SESSION_RUNTIME_CONFIG_KEY) == runtime_config:
+                    continue
+                metadata[self.SESSION_RUNTIME_CONFIG_KEY] = runtime_config
+                row.metadata_json = json.dumps(metadata, ensure_ascii=True)
+                row.updated_at = ZorkEmulator.utcnow()
+                changed = True
+            if changed:
+                session.commit()
 
     def _infer_campaign_id(self, ctx_like) -> str | int | None:
         if ctx_like is None:
