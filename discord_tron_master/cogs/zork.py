@@ -47,6 +47,7 @@ class Zork(commands.Cog):
     QUEUE_PREFIX = "[queue]"
     SMS_NOTICE_REACTIONS = ("🧵", "✉️")
     CAMPAIGN_BACKEND_STATE_KEY = "zork_backend_config"
+    CAMPAIGN_STYLE_STATE_KEY = "style_direction"
     THINKING_SUPPORTED_BACKENDS = {"zai", "ollama"}
     AUDIO_TRANSCRIPTION_REACTIONS = ("✅", "❌")
     TURN_BUSY_TEXT = "Another turn is already resolving. Please retry."
@@ -652,6 +653,7 @@ class Zork(commands.Cog):
                 self._sync_campaign_backend_state(
                     _setup_campaign,
                     channel_id=getattr(message.channel, "id", None),
+                    sync_style_direction=getattr(message, "guild", None) is not None,
                 )
             _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
                 _setup_campaign
@@ -789,6 +791,8 @@ class Zork(commands.Cog):
         backend: str | None = None,
         model=None,
         thinking_enabled: bool | None = None,
+        sync_style_direction: bool = True,
+        style_direction: str | None = None,
     ) -> dict[str, object]:
         # Start from config defaults, then override with any explicit parameters.
         resolved = self.config.get_zork_backend_config(channel_id, default_backend="zai")
@@ -820,14 +824,34 @@ class Zork(commands.Cog):
             zai_key = self.config.get_openai_api_key()
             if zai_key:
                 desired["api_key"] = zai_key
+        state_changed = False
         if state.get(self.CAMPAIGN_BACKEND_STATE_KEY) != desired:
             state[self.CAMPAIGN_BACKEND_STATE_KEY] = desired
+            state_changed = True
+
+        desired_style = None
+        if sync_style_direction:
+            desired_style = AppConfig.normalize_zork_style(
+                style_direction
+                if style_direction is not None
+                else self.config.get_zork_style(
+                    channel_id,
+                    default_value=AppConfig.DEFAULT_ZORK_STYLE,
+                ),
+                default=AppConfig.DEFAULT_ZORK_STYLE,
+            )
+            if state.get(self.CAMPAIGN_STYLE_STATE_KEY) != desired_style:
+                state[self.CAMPAIGN_STYLE_STATE_KEY] = desired_style
+                state_changed = True
+
+        if state_changed:
             campaign.state_json = ZorkEmulator._dump_json(state)
             ZorkEmulator.commit_model(campaign)
         return {
             "backend": desired["backend"],
             "model": desired.get("model"),
             "thinking_enabled": desired.get("thinking_enabled"),
+            "style_direction": desired_style,
         }
 
     def _infer_campaign_id(self, ctx_like) -> str | int | None:
@@ -2447,6 +2471,12 @@ class Zork(commands.Cog):
         # Setup mode intercept
         with app.app_context():
             _setup_campaign = ZorkEmulator.query_campaign(campaign_id)
+            if _setup_campaign is not None:
+                self._sync_campaign_backend_state(
+                    _setup_campaign,
+                    channel_id=getattr(ctx.channel, "id", None),
+                    sync_style_direction=True,
+                )
             _in_setup = _setup_campaign and ZorkEmulator.is_in_setup_mode(
                 _setup_campaign
             )
@@ -3541,6 +3571,14 @@ class Zork(commands.Cog):
 
         if style_text is None:
             self.config.clear_zork_style(ctx.channel.id)
+            if ctx.guild is not None:
+                with app.app_context():
+                    refreshed_campaign = ZorkEmulator.query_campaign(campaign.id)
+                    if refreshed_campaign is not None:
+                        self._sync_campaign_backend_state(
+                            refreshed_campaign,
+                            channel_id=ctx.channel.id,
+                        )
             if ctx.guild is None:
                 await ctx.send(
                     f"Zork style for `{campaign.name}` in this DM reset to "
@@ -3554,6 +3592,15 @@ class Zork(commands.Cog):
             return
 
         self.config.set_zork_style(ctx.channel.id, style_text)
+        if ctx.guild is not None:
+            with app.app_context():
+                refreshed_campaign = ZorkEmulator.query_campaign(campaign.id)
+                if refreshed_campaign is not None:
+                    self._sync_campaign_backend_state(
+                        refreshed_campaign,
+                        channel_id=ctx.channel.id,
+                        style_direction=style_text,
+                    )
         if ctx.guild is None:
             await ctx.send(
                 f"Zork style for `{campaign.name}` in this DM set to `{style_text}`. "
