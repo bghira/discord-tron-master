@@ -3334,38 +3334,7 @@ class Zork(commands.Cog):
         Raises ValueError for malformed input (empty brackets, wrong arity in pairs,
         unbalanced brackets).
         """
-        body = str(text or "").strip()
-        if not body:
-            return None
-        if not (body.startswith("[") and body.endswith("]")):
-            return body
-        inner = body[1:-1].strip()
-        if not inner:
-            raise ValueError("model list `[...]` cannot be empty")
-        raw_parts = cls._split_top_level_csv(inner)
-        items: list = []
-        for raw in raw_parts:
-            part = raw.strip()
-            if not part:
-                continue
-            if part.startswith("[") and part.endswith("]"):
-                pair = [
-                    item.strip()
-                    for item in part[1:-1].split(",")
-                    if item.strip()
-                ]
-                if len(pair) != 2:
-                    raise ValueError(
-                        "phased pair `[research, narration]` requires exactly two items"
-                    )
-                items.append({"research": pair[0], "narration": pair[1]})
-            else:
-                items.append(part)
-        if not items:
-            raise ValueError("model list `[...]` cannot be empty")
-        if len(items) == 1:
-            return items[0]
-        return items
+        return AppConfig.parse_zork_backend_model_arg(text)
 
     @staticmethod
     def _format_zork_backend_model(model_value):

@@ -15,7 +15,10 @@ import io, asyncio
 from scipy.io.wavfile import read as read_wav
 from scipy.io.wavfile import write as write_wav
 import base64
-from discord_tron_master.classes.webui_image_bridge import enqueue_webui_image_job
+from discord_tron_master.classes.webui_image_bridge import (
+    apply_webui_backend_config,
+    enqueue_webui_image_job,
+)
 
 
 class API:
@@ -210,6 +213,22 @@ class API:
             from discord_tron_master.bot import DiscordBot
 
             body, status = enqueue_webui_image_job(DiscordBot.get_instance(), data)
+            return jsonify(body), status
+
+        @self.app.route("/api/zork/backend/config", methods=["POST"])
+        def webui_backend_config():
+            """Accept a non-secret backend/runtime update from the web UI."""
+            provided_secret = request.headers.get("X-DTM-Link-Secret", "")
+            expected_secret = str(
+                self.config.get_text_game_webui_link_secret() or ""
+            ).strip()
+            if not provided_secret or provided_secret != expected_secret:
+                return jsonify({"error": "Invalid link secret"}), 403
+
+            data = request.get_json(force=True, silent=True) or {}
+            if not isinstance(data, dict):
+                return jsonify({"error": "JSON body must be an object"}), 400
+            body, status = apply_webui_backend_config(self.config, data)
             return jsonify(body), status
 
     def check_auth(self, request):

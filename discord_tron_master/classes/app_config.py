@@ -372,6 +372,64 @@ class AppConfig:
         text = str(value or "").strip()
         return text or None
 
+    @staticmethod
+    def _split_top_level_csv(text):
+        parts = []
+        buf = []
+        depth = 0
+        for ch in str(text or ""):
+            if ch == "[":
+                depth += 1
+                buf.append(ch)
+            elif ch == "]":
+                depth -= 1
+                if depth < 0:
+                    raise ValueError("unbalanced brackets in model list")
+                buf.append(ch)
+            elif ch == "," and depth == 0:
+                parts.append("".join(buf))
+                buf = []
+            else:
+                buf.append(ch)
+        if depth != 0:
+            raise ValueError("unbalanced brackets in model list")
+        parts.append("".join(buf))
+        return parts
+
+    @classmethod
+    def parse_zork_backend_model_arg(cls, text):
+        """Parse CLI/WebUI bracket model syntax into a normalized model spec."""
+        body = str(text or "").strip()
+        if not body:
+            return None
+        if not (body.startswith("[") and body.endswith("]")):
+            return body
+        inner = body[1:-1].strip()
+        if not inner:
+            raise ValueError("model list `[...]` cannot be empty")
+        raw_parts = cls._split_top_level_csv(inner)
+        items: list = []
+        for raw in raw_parts:
+            part = raw.strip()
+            if not part:
+                continue
+            if part.startswith("[") and part.endswith("]"):
+                pair = [
+                    item.strip()
+                    for item in part[1:-1].split(",")
+                    if item.strip()
+                ]
+                if len(pair) != 2:
+                    raise ValueError(
+                        "phased pair `[research, narration]` requires exactly two items"
+                    )
+                items.append({"research": pair[0], "narration": pair[1]})
+            else:
+                items.append(part)
+        if not items:
+            raise ValueError("model list `[...]` cannot be empty")
+        return cls.normalize_zork_model_spec(items[0] if len(items) == 1 else items)
+
     def get_zork_backend_config(self, channel_id=None, default_backend="zai"):
         self.reload_config()
         resolved_default = self.normalize_zork_backend(default_backend, default="zai")

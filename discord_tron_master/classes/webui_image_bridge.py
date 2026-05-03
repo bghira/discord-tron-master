@@ -14,6 +14,7 @@ from discord_tron_master.classes.jobs.webui_image_job import (
 )
 
 logger = logging.getLogger(__name__)
+SESSION_RUNTIME_CONFIG_KEY = "zork_runtime_config"
 
 
 class _ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -64,6 +65,112 @@ def enqueue_webui_image_job(discord: Any, data: dict[str, Any]) -> tuple[dict[st
     return {"ok": True, "job_id": job.id}, 200
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enable", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disable", "disabled"}:
+        return False
+    return None
+
+
+def apply_webui_backend_config(config: AppConfig, data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Persist a WebUI-requested non-secret runtime config into TGE sessions."""
+    backend_token = data.get("completion_mode") or data.get("backend")
+    backend = AppConfig.normalize_zork_backend(backend_token, default="")
+    if backend not in AppConfig.ZORK_BACKEND_OPTIONS:
+        allowed = ", ".join(AppConfig.ZORK_BACKEND_OPTIONS)
+        return {"error": f"Unsupported backend `{backend_token}`. Allowed: {allowed}"}, 400
+
+    raw_model = data.get("model_spec") if "model_spec" in data else data.get("model")
+    try:
+        if "model_spec" not in data and isinstance(raw_model, str):
+            model = AppConfig.parse_zork_backend_model_arg(raw_model)
+        else:
+            model = AppConfig.normalize_zork_model_spec(raw_model)
+    except ValueError as exc:
+        return {"error": f"Invalid model spec: {exc}"}, 400
+
+    thinking_enabled = _optional_bool(data.get("thinking_enabled"))
+    runtime_config: dict[str, Any] = {"backend": backend}
+    if model:
+        runtime_config["model"] = model
+    if thinking_enabled is not None:
+        runtime_config["thinking_enabled"] = thinking_enabled
+
+    campaign_id = str(data.get("campaign_id") or "").strip() or None
+    session_id = str(data.get("session_id") or "").strip() or None
+    channel_id = str(data.get("channel_id") or "").strip() or None
+    if not campaign_id and not session_id and not channel_id:
+        return {"error": "campaign_id, session_id, or channel_id is required"}, 400
+
+    if channel_id:
+        try:
+            config.set_zork_backend(
+                channel_id,
+                backend,
+                model=model,
+                thinking_enabled=thinking_enabled,
+            )
+        except Exception as exc:
+            logger.exception("Failed to persist WebUI backend config to AppConfig")
+            return {"error": str(exc)}, 500
+
+    try:
+        from sqlalchemy import or_
+        from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
+        from text_game_engine.zork_emulator import ZorkEmulator
+
+        ZorkEmulator._ensure_init()
+        with ZorkEmulator._session_factory() as session:
+            query = session.query(GameSession)
+            if session_id:
+                query = query.filter(GameSession.id == session_id)
+                if campaign_id:
+                    query = query.filter(GameSession.campaign_id == campaign_id)
+            elif campaign_id:
+                query = query.filter(GameSession.campaign_id == campaign_id)
+            elif channel_id:
+                query = query.filter(
+                    or_(
+                        GameSession.id == channel_id,
+                        GameSession.surface_channel_id == channel_id,
+                        GameSession.surface_thread_id == channel_id,
+                    )
+                )
+
+            rows = query.all()
+            changed = 0
+            for row in rows:
+                try:
+                    metadata = json.loads(row.metadata_json or "{}")
+                except Exception:
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                if metadata.get(SESSION_RUNTIME_CONFIG_KEY) == runtime_config:
+                    continue
+                metadata[SESSION_RUNTIME_CONFIG_KEY] = runtime_config
+                row.metadata_json = json.dumps(metadata, ensure_ascii=True)
+                row.updated_at = ZorkEmulator.utcnow()
+                changed += 1
+            if changed:
+                session.commit()
+    except Exception as exc:
+        logger.exception("Failed to apply WebUI backend config")
+        return {"error": str(exc)}, 500
+
+    return {
+        "ok": True,
+        "runtime_config": runtime_config,
+        "updated_sessions": changed,
+    }, 200
+
+
 class WebUIImageBridge:
     """Small localhost API that lets the web UI enqueue jobs in the bot process."""
 
@@ -76,7 +183,10 @@ class WebUIImageBridge:
     def start(self) -> None:
         if not self._config.is_text_game_webui_enabled():
             return
-        if self._config.get_text_game_webui_image_backend() != "dtm":
+        if (
+            self._config.get_text_game_webui_image_backend() != "dtm"
+            and not self._config.get_text_game_webui_sync_zork_backend()
+        ):
             return
         if self._server is not None:
             return
@@ -85,10 +195,12 @@ class WebUIImageBridge:
         port = self._config.get_text_game_webui_dtm_image_bridge_port()
         expected_secret = self._config.get_text_game_webui_link_secret()
         discord = self._discord
+        config = self._config
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
-                if self.path.rstrip("/") != "/api/zork/image/generate":
+                path = self.path.rstrip("/")
+                if path not in {"/api/zork/image/generate", "/api/zork/backend/config"}:
                     self._send_json({"error": "Not found"}, 404)
                     return
 
@@ -114,7 +226,10 @@ class WebUIImageBridge:
                     self._send_json({"error": "JSON body must be an object"}, 400)
                     return
 
-                body, status = enqueue_webui_image_job(discord, data)
+                if path == "/api/zork/backend/config":
+                    body, status = apply_webui_backend_config(config, data)
+                else:
+                    body, status = enqueue_webui_image_job(discord, data)
                 self._send_json(body, status)
 
             def _send_json(self, body: dict[str, Any], status: int) -> None:
