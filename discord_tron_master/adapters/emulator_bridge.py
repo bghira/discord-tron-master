@@ -539,8 +539,9 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             is_dm=guild is None,
         )
         campaign_id = kwargs.get("campaign_id")
+        channel_id = getattr(channel, "id", None) if channel else None
         completion_token = set_tge_completion_overrides(
-            cls._campaign_completion_overrides(campaign_id)
+            cls._campaign_completion_overrides(campaign_id, channel_id=channel_id)
         )
         try:
             return await cls._emu.play_action(*args, **kwargs)
@@ -563,8 +564,9 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
         )
         campaign_like = args[2] if len(args) > 2 else kwargs.get("campaign")
         campaign_id = getattr(campaign_like, "id", campaign_like)
+        channel_id = getattr(channel, "id", None) if channel else None
         completion_token = set_tge_completion_overrides(
-            cls._campaign_completion_overrides(campaign_id)
+            cls._campaign_completion_overrides(campaign_id, channel_id=channel_id)
         )
         try:
             return await cls._emu.handle_setup_message(*args, **kwargs)
@@ -573,11 +575,16 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
             _zork_log_end(log_token)
 
     @classmethod
-    def _campaign_completion_overrides(cls, campaign_id) -> dict[str, Any]:
+    def _campaign_completion_overrides(
+        cls,
+        campaign_id=None,
+        *,
+        channel_id=None,
+    ) -> dict[str, Any]:
         from discord_tron_master.classes.app_config import AppConfig
 
         config = AppConfig()
-        resolved = config.get_zork_backend_config(default_backend="zai")
+        resolved = config.get_zork_backend_config(channel_id, default_backend="zai")
         return {
             "backend": str(resolved.get("backend") or "zai").strip() or "zai",
             "model": resolved.get("model"),
@@ -1335,7 +1342,14 @@ class EmulatorBridge(metaclass=_EmulatorBridgeMeta):
     @classmethod
     async def start_campaign_setup(cls, *args, **kwargs):
         cls._ensure_init()
-        return await cls._emu.start_campaign_setup(*args, **kwargs)
+        channel_id = kwargs.pop("channel_id", None)
+        completion_token = set_tge_completion_overrides(
+            cls._campaign_completion_overrides(channel_id=channel_id)
+        )
+        try:
+            return await cls._emu.start_campaign_setup(*args, **kwargs)
+        finally:
+            reset_tge_completion_overrides(completion_token)
 
     # -- Avatar & Media --------------------------------------------------------
 

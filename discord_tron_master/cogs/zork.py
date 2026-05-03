@@ -2592,8 +2592,9 @@ class Zork(commands.Cog):
             f"- `{prefix}zork literary-reference --remove <label>` remove a literary style profile (and sub-keys)\n"
             f"- `{prefix}zork literary-reference --clear` remove all literary style profiles\n"
             f"- `{prefix}zork campaign-export [--type full|raw] [--raw-format jsonl|json|markdown|script|loglines]` export the campaign and stored source docs\n"
-            f"- `{prefix}zork backend [zai|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
+            f"- `{prefix}zork backend [zai|ollama|codex|claude|gemini|opencode] [model]` view or set the text backend/model for this channel/thread (creator/admin only to change)\n"
             f"- `{prefix}zork thinking [enable|disable]` view or set backend thinking/reasoning when supported (creator/admin only to change)\n"
+            f"- `{prefix}zork reasoning-history [enable|disable]` include or strip stored reasoning from recent-turn prompt history (creator/admin only to change)\n"
             f"- `{prefix}zork style [prompt|default]` view or set the style direction for this channel/thread (max 120 chars; creator/admin only to change)\n"
             f"- `{prefix}zork private [enable|disable]` bind your DMs to the current campaign so your turns stay private but shared history stays in-world\n"
             f"- `{prefix}zork link-account <uuid>` link your Discord account to the DTM web UI session currently waiting on that code\n"
@@ -3534,6 +3535,74 @@ class Zork(commands.Cog):
             f"LLM thinking set to `{state_text}` for `{campaign.name}` in this channel/thread. {support_note}"
         )
 
+    @zork.command(name="reasoning-history")
+    async def zork_reasoning_history(self, ctx, *, option: str = None):
+        ctx = self._wrap_send(ctx)
+        if not self._ensure_guild(ctx):
+            await ctx.send("Zork is only available in servers.")
+            return
+        app = AppConfig.get_flask()
+        if app is None:
+            await ctx.send("Zork is not ready yet (no Flask app).")
+            return
+
+        with app.app_context():
+            channel = ZorkEmulator.get_or_create_channel(ctx.guild.id, ctx.channel.id)
+            if channel.campaign_id is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            campaign = ZorkEmulator.query_campaign_for_channel(channel)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            state = ZorkEmulator.get_campaign_state(campaign)
+            enabled = ZorkEmulator._reasoning_history_enabled(state)
+
+        if option is None:
+            state_text = "enabled" if enabled else "disabled"
+            await ctx.send(
+                f"Reasoning history is `{state_text}` for `{campaign.name}`.\n"
+                f"When disabled, `reasoning` is stripped from RECENT_TURNS and RECENT_TURNS_LCD.\n"
+                f"Use `{self._prefix()}zork reasoning-history enable` or "
+                f"`{self._prefix()}zork reasoning-history disable` to change it."
+            )
+            return
+
+        normalized = " ".join(str(option or "").strip().lower().split())
+        enable_tokens = {"enable", "enabled", "on", "true", "yes"}
+        disable_tokens = {"disable", "disabled", "off", "false", "no"}
+        if normalized in enable_tokens:
+            new_value = True
+        elif normalized in disable_tokens:
+            new_value = False
+        else:
+            await ctx.send("Use `enable` or `disable`.")
+            return
+
+        if campaign.created_by_actor_id != str(ctx.author.id) and not await self._is_image_admin(ctx):
+            await ctx.send(
+                "Only the campaign creator or an Image Admin can change this setting."
+            )
+            return
+
+        with app.app_context():
+            campaign = ZorkEmulator.query_campaign(campaign.id)
+            if campaign is None:
+                await ctx.send("No active campaign in this channel.")
+                return
+            state = ZorkEmulator.get_campaign_state(campaign)
+            if not isinstance(state, dict):
+                state = {}
+            state[ZorkEmulator.REASONING_HISTORY_STATE_KEY] = new_value
+            campaign.state_json = ZorkEmulator._dump_json(state)
+            campaign.updated_at = ZorkEmulator.utcnow()
+            ZorkEmulator.commit_model(campaign)
+
+        state_text = "enabled" if new_value else "disabled"
+        await ctx.send(
+            f"Reasoning history set to `{state_text}` for `{campaign.name}`."
+        )
+
     @zork.command(name="style")
     async def zork_style(self, ctx, *, option: str = None):
         ctx = self._wrap_send(ctx)
@@ -3715,12 +3784,18 @@ class Zork(commands.Cog):
                     not campaign_state.get("setup_phase")
                     and not campaign_state.get("default_persona")
                 )):
+                    self._sync_campaign_backend_state(
+                        campaign,
+                        channel_id=ctx.channel.id,
+                        sync_style_direction=True,
+                    )
                     setup_message = await ZorkEmulator.start_campaign_setup(
                         campaign,
                         campaign_name,
                         attachment_summary=att_summary,
                         use_imdb=use_imdb,
                         attachment_summary_instructions=summary_instructions,
+                        channel_id=ctx.channel.id,
                     )
                 resolved_campaign_name = campaign.name
             if setup_message:
@@ -3793,12 +3868,18 @@ class Zork(commands.Cog):
                     ZorkEmulator.commit_model(campaign)
             setup_message = None
             if not create_empty:
+                self._sync_campaign_backend_state(
+                    campaign,
+                    channel_id=thread.id,
+                    sync_style_direction=True,
+                )
                 setup_message = await ZorkEmulator.start_campaign_setup(
                     campaign,
                     parsed_name or thread_name,
                     attachment_summary=att_summary,
                     use_imdb=use_imdb,
                     attachment_summary_instructions=summary_instructions,
+                    channel_id=thread.id,
                 )
             resolved_campaign_name = campaign.name
 
