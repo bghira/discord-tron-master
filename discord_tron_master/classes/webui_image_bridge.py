@@ -122,8 +122,10 @@ def apply_webui_backend_config(config: AppConfig, data: dict[str, Any]) -> tuple
 
     try:
         from sqlalchemy import or_
+        from discord_tron_master.adapters.emulator_bridge import (
+            EmulatorBridge as ZorkEmulator,
+        )
         from text_game_engine.persistence.sqlalchemy.models import Session as GameSession
-        from text_game_engine.zork_emulator import ZorkEmulator
 
         ZorkEmulator._ensure_init()
         with ZorkEmulator._session_factory() as session:
