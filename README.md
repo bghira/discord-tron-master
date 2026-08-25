@@ -11,8 +11,8 @@ This codebase is capable of:
   + Create incredible results with little effort!
 * Self-hosting images, when accompanied with a companion webserver
 * Integrating OpenAI's GPT API into a Discord interface with conversation
-  history tracking and pruning, so that the history properly rolls over
-  without overrunning the API token limit.
+  history tracking and pruning, retaining up to 800K GLM-tokenized history so
+  that the conversation rolls over without overrunning the API token limit.
   + Older exchanges are retained in scoped SQLite/Snowflake semantic memory.
     `!clear` resets recent chat history; `!clear memory` deletes long-term memory.
 * Img2Img and upscaling via Stable Diffusion workers

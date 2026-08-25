@@ -16,7 +16,7 @@ class ChatML:
     def __init__(
         self,
         conversation: Conversations,
-        token_limit: int = 120000,
+        token_limit: int = 800000,
         config_user_id: int = None,
     ):
         self.conversations = conversation
@@ -29,7 +29,7 @@ class ChatML:
         # Pick up their current role from their profile.
         self.role = self.user_config["gpt_role"]
         self.reply = {}
-        self.tokenizer = TokenTester()
+        self.tokenizer = TokenTester(engine="glm")
         self.token_limit = token_limit
 
     # Pick up a DB connector and store it. Create the conversation, if needed.
