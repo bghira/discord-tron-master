@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "openai_api": {
         "api_key": None,
         "model": "glm-5-turbo",
+        "enable_mcp_tools": True,
     },
     "ollama": {
         "base_url": "http://127.0.0.1:11434",
@@ -216,6 +217,10 @@ class AppConfig:
         self.reload_config()
         value = self.config["openai_api"].get("model")
         return str(value).strip() if value else "glm-5-turbo"
+
+    def get_openai_mcp_tools_enabled(self):
+        self.reload_config()
+        return bool(self.config["openai_api"].get("enable_mcp_tools", True))
 
     def get_ollama_api_key(self):
         self.reload_config()

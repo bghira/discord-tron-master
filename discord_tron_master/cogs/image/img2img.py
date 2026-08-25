@@ -171,6 +171,7 @@ class Img2img(commands.Cog):
             response = await gpt.discord_bot_response(
                 prompt=await chat_ml.get_prompt(), ctx=message
             )
+            response = GPT.ensure_requested_discord_mentions(message.content, response)
             await chat_ml.add_assistant_reply(response)
             await DiscordBot.send_large_message(
                 message, message.author.mention + " " + ChatML.clean(response)

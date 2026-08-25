@@ -45,6 +45,15 @@ class GPT:
         "from nearby repositories unless the prompt explicitly asks for that. "
         "Respond directly to the prompt content only."
     )
+    _DISCORD_CAPABILITIES = (
+        "You are responding directly inside Discord. Your response will be posted by the bot, "
+        "so you can mention a user or app by copying an exact Discord mention token such as "
+        "<@123> or <@!123> from the user's request. Never claim that you cannot send a Discord "
+        "mention. Do not invent IDs or mention tokens that were not provided. You also have tools "
+        "for current web search, reading webpages, and exploring public GitHub repositories. Use "
+        "them when the request needs current or repository-specific information, and include source "
+        "links in the answer."
+    )
 
     def __init__(self):
         self.engine = "o3-mini"
@@ -188,9 +197,28 @@ class GPT:
             user_temperature = self.config.get_user_setting(
                 ctx.author.id, "temperature", self.temperature
             )
+        user_role = f"{user_role}\n\n{self._DISCORD_CAPABILITIES}"
         return await self.turbo_completion(
-            user_role, prompt, temperature=user_temperature, max_tokens=4096
+            user_role,
+            prompt,
+            temperature=user_temperature,
+            max_tokens=4096,
+            enable_tools=self.config.get_openai_mcp_tools_enabled(),
         )
+
+    @staticmethod
+    def ensure_requested_discord_mentions(prompt: str, response: str) -> str:
+        """Preserve explicitly requested user mentions in the Discord response."""
+        if not isinstance(response, str):
+            return response
+        if not re.search(r"\b(?:ping|mention|tag)\b", str(prompt or ""), re.IGNORECASE):
+            return response
+        requested = list(dict.fromkeys(re.findall(r"<@!?\d+>", str(prompt or ""))))
+        missing = [mention for mention in requested if mention not in response]
+        if not missing:
+            return response
+        suffix = " ".join(missing)
+        return f"{response.rstrip()}\n{suffix}".strip()
 
     @classmethod
     def _ensure_cli_workdir(cls) -> str:
@@ -200,9 +228,54 @@ class GPT:
     def _normalize_backend(self) -> str:
         return self.config.normalize_zork_backend(getattr(self, "backend", "zai"))
 
-    _OPENCODE_VERSION = "1.4.3"
+    _OPENCODE_VERSION = "1.15.13"
 
-    def _send_zai_openai_request(self, message_log: list[dict]) -> str:
+    @staticmethod
+    def _zai_mcp_tools(api_key: str) -> list[dict]:
+        authorization = {"Authorization": f"Bearer {api_key}"}
+        return [
+            {
+                "type": "mcp",
+                "mcp": {
+                    "server_label": "web-search-prime",
+                    "server_url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+                    "transport_type": "streamable-http",
+                    "headers": authorization,
+                    "allowed_tools": ["webSearchPrime"],
+                },
+            },
+            {
+                "type": "mcp",
+                "mcp": {
+                    "server_label": "web-reader",
+                    "server_url": "https://api.z.ai/api/mcp/web_reader/mcp",
+                    "transport_type": "streamable-http",
+                    "headers": authorization,
+                    "allowed_tools": ["webReader"],
+                },
+            },
+            {
+                "type": "mcp",
+                "mcp": {
+                    "server_label": "zread",
+                    "server_url": "https://api.z.ai/api/mcp/zread/mcp",
+                    "transport_type": "streamable-http",
+                    "headers": authorization,
+                    "allowed_tools": [
+                        "search_doc",
+                        "get_repo_structure",
+                        "read_file",
+                    ],
+                },
+            },
+        ]
+
+    def _send_zai_openai_request(
+        self,
+        message_log: list[dict],
+        *,
+        enable_tools: bool = False,
+    ) -> str:
         """Send a request to ZAI via the OpenAI-compatible coding endpoint."""
         import uuid as _uuid
         api_key = self.config.get_openai_api_key()
@@ -219,13 +292,17 @@ class GPT:
         )
         model = self._resolve_zai_model()
         logger.warning("ZAI OpenAI request: model=%s base_url=%s msgs=%d", model, self._ZAI_BASE_URL, len(message_log))
-        resp = client.chat.completions.create(
+        completion_options = dict(
             model=model,
             messages=message_log,
             temperature=float(self.temperature),
             max_tokens=int(self.max_tokens),
             stream=False,
         )
+        if enable_tools:
+            completion_options["tools"] = self._zai_mcp_tools(api_key.strip())
+            completion_options["tool_choice"] = "auto"
+        resp = client.chat.completions.create(**completion_options)
         text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         logger.warning("ZAI OpenAI response: len=%d", len(text))
         if not text:
@@ -677,6 +754,7 @@ class GPT:
 
     async def turbo_completion(self, role, prompt, **kwargs):
         thinking_enabled = kwargs.pop("thinking_enabled", True)
+        enable_tools = bool(kwargs.pop("enable_tools", False))
         if kwargs:
             self.set_values(**kwargs)
 
@@ -738,6 +816,7 @@ class GPT:
                         content = await asyncio.to_thread(
                             self._send_zai_openai_request,
                             message_log,
+                            enable_tools=enable_tools,
                         )
                         return content or None
                     except openai.RateLimitError:

@@ -3,7 +3,7 @@ import sys
 import types
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 try:
     import openai  # noqa: F401
@@ -22,15 +22,27 @@ from discord_tron_master.classes.openai.text import GPT
 
 
 class FakeConfig:
-    def __init__(self, api_key="test-key", model="glm-5-turbo"):
+    def __init__(
+        self,
+        api_key="test-key",
+        model="glm-5-turbo",
+        enable_mcp_tools=True,
+    ):
         self.api_key = api_key
         self.model = model
+        self.enable_mcp_tools = enable_mcp_tools
 
     def get_openai_api_key(self):
         return self.api_key
 
     def get_openai_model(self):
         return self.model
+
+    def get_openai_mcp_tools_enabled(self):
+        return self.enable_mcp_tools
+
+    def get_user_setting(self, _user_id, _setting, default=None):
+        return default
 
     def normalize_zork_backend(self, backend):
         return backend
@@ -74,7 +86,7 @@ class GPTRequestTests(unittest.TestCase):
             api_key="test-key",
             base_url="https://api.z.ai/api/coding/paas/v4",
             default_headers={
-                "User-Agent": "opencode/1.4.3",
+                "User-Agent": "opencode/1.15.13",
                 "x-session-affinity": "session-id",
             },
         )
@@ -107,7 +119,72 @@ class GPTRequestTests(unittest.TestCase):
             [
                 {"role": "system", "content": "system prompt"},
                 {"role": "user", "content": "hello"},
-            ]
+            ],
+            enable_tools=False,
+        )
+
+    def test_discord_chat_enables_tools_and_mentions(self):
+        gpt = make_gpt()
+        gpt.turbo_completion = AsyncMock(return_value="<@123>")
+        ctx = SimpleNamespace(author=SimpleNamespace(id=42))
+
+        result = asyncio.run(
+            gpt.discord_bot_response('ping <@123>', ctx=ctx)
+        )
+
+        self.assertEqual(result, "<@123>")
+        role, prompt = gpt.turbo_completion.await_args.args
+        options = gpt.turbo_completion.await_args.kwargs
+        self.assertIn("responding directly inside Discord", role)
+        self.assertIn("Never claim that you cannot send a Discord mention", role)
+        self.assertEqual(prompt, 'ping <@123>')
+        self.assertTrue(options["enable_tools"])
+
+    def test_explicit_discord_mention_is_preserved_in_response(self):
+        response = GPT.ensure_requested_discord_mentions(
+            "can you ping <@123>",
+            "Sure, one moment.",
+        )
+
+        self.assertEqual(response, "Sure, one moment.\n<@123>")
+
+    def test_unrequested_discord_mention_is_not_added(self):
+        response = GPT.ensure_requested_discord_mentions(
+            "what did <@123> say?",
+            "I don't know.",
+        )
+
+        self.assertEqual(response, "I don't know.")
+
+    def test_zai_chat_exposes_search_reader_and_github_tools(self):
+        gpt = make_gpt()
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="result"))]
+        )
+        create = Mock(return_value=response)
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+
+        with patch(
+            "discord_tron_master.classes.openai.text.OpenAI",
+            return_value=client,
+        ):
+            gpt._send_zai_openai_request(
+                [{"role": "user", "content": "search the web"}],
+                enable_tools=True,
+            )
+
+        options = create.call_args.kwargs
+        self.assertEqual(options["tool_choice"], "auto")
+        tools = {tool["mcp"]["server_label"]: tool for tool in options["tools"]}
+        self.assertEqual(
+            set(tools),
+            {"web-search-prime", "web-reader", "zread"},
+        )
+        self.assertEqual(
+            tools["zread"]["mcp"]["allowed_tools"],
+            ["search_doc", "get_repo_structure", "read_file"],
         )
 
     def test_zai_rejects_empty_provider_content(self):

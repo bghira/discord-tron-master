@@ -10,7 +10,8 @@
     },
     "openai_api": {
         "api_key": null,
-        "model": "glm-5-turbo"
+        "model": "glm-5-turbo",
+        "enable_mcp_tools": true
     },
     "huggingface_api": {
         "api_key": null
