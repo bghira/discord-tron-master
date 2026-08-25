@@ -2,7 +2,9 @@ from discord.ext import commands
 from discord_tron_master.models.conversation import Conversations
 from discord_tron_master.classes.text_replies import return_random as random_fact
 from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.discord_memory import DiscordMemory
 
+import asyncio
 import logging
 import discord
 
@@ -114,11 +116,28 @@ class User(commands.Cog):
         return ctx.channel.id
 
     @commands.command(
-        name="clear", help="Clear your GPT conversation history and start again."
+        name="clear",
+        help="Clear GPT chat history, or use `!clear memory` for long-term memory.",
     )
-    async def clear_history(self, ctx):
+    async def clear_history(self, ctx, target: str = None):
         user_id = self._get_conversation_owner(ctx)
         try:
+            target_key = str(target or "").strip().lower()
+            if target_key == "memory":
+                deleted = await asyncio.to_thread(
+                    DiscordMemory.delete_conversation,
+                    user_id,
+                )
+                noun = "memory" if deleted == 1 else "memories"
+                await ctx.send(
+                    f"{ctx.author.mention} Cleared {deleted} long-term {noun}. Selective amnesia: complete."
+                )
+                return
+            if target_key:
+                await ctx.send(
+                    f"{ctx.author.mention} Use `!clear` for chat history or `!clear memory` for long-term memory."
+                )
+                return
             with app.app_context():
                 Conversations.clear_history_by_owner(owner=user_id)
                 await ctx.send(

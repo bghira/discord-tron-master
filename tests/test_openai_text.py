@@ -147,6 +147,87 @@ class GPTRequestTests(unittest.TestCase):
         self.assertEqual(prompt, 'ping <@123>')
         self.assertTrue(options["enable_tools"])
 
+    def test_discord_chat_can_cycle_through_local_memory(self):
+        gpt = make_gpt()
+        gpt.turbo_completion = AsyncMock(
+            side_effect=[
+                '{"tool_call":"memory_search","queries":["blue widget project"]}',
+                "We called it Cobalt. Dramatic, I know.",
+            ]
+        )
+        memory_hits = [
+            {
+                "memory_id": 7,
+                "created_at": "2026-08-20 10:00:00",
+                "author_name": "Kash",
+                "score": 0.91,
+                "content": "User Kash: name it\nAssistant: Call it Cobalt.",
+            }
+        ]
+        ctx = SimpleNamespace(author=SimpleNamespace(id=42))
+
+        with patch(
+            "discord_tron_master.classes.openai.text.DiscordMemory.search",
+            return_value=memory_hits,
+        ) as memory_search:
+            result = asyncio.run(
+                gpt.discord_bot_response(
+                    '[{"role":"user","content":"what did we call the blue widget?"}]',
+                    ctx=ctx,
+                    memory_scope_id=42,
+                )
+            )
+
+        self.assertEqual(result, "We called it Cobalt. Dramatic, I know.")
+        memory_search.assert_called_once_with(
+            conversation_id=42,
+            queries=["blue widget project"],
+            top_k=6,
+        )
+        second_prompt = gpt.turbo_completion.await_args_list[1].args[1]
+        self.assertIn("LOCAL_MEMORY_RECALL", second_prompt)
+        self.assertIn("Call it Cobalt", second_prompt)
+        first_role = gpt.turbo_completion.await_args_list[0].args[0]
+        self.assertIn("Before claiming you do not know", first_role)
+
+    def test_missing_context_claim_forces_memory_search(self):
+        gpt = make_gpt()
+        gpt.turbo_completion = AsyncMock(
+            side_effect=[
+                "I don't know; you haven't told me.",
+                "You said the launch was Friday.",
+            ]
+        )
+        ctx = SimpleNamespace(author=SimpleNamespace(id=42))
+
+        with patch(
+            "discord_tron_master.classes.openai.text.DiscordMemory.search",
+            return_value=[],
+        ) as memory_search:
+            result = asyncio.run(
+                gpt.discord_bot_response(
+                    '[{"role":"user","content":"when was our launch?"}]',
+                    ctx=ctx,
+                    memory_scope_id=42,
+                )
+            )
+
+        self.assertEqual(result, "You said the launch was Friday.")
+        memory_search.assert_called_once_with(
+            conversation_id=42,
+            queries=["when was our launch?"],
+            top_k=6,
+        )
+        retry_prompt = gpt.turbo_completion.await_args_list[1].args[1]
+        self.assertIn("about to claim missing context", retry_prompt)
+
+    def test_prior_context_claim_forces_memory_search(self):
+        self.assertTrue(
+            GPT._response_claims_missing_context(
+                "I don't have any prior context or code here."
+            )
+        )
+
     def test_explicit_discord_mention_is_preserved_in_response(self):
         response = GPT.ensure_requested_discord_mentions(
             "can you ping <@123>",

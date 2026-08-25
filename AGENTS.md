@@ -50,6 +50,7 @@ Quick map of where things live and how data flows.
   - History: `models/user_history.py`
 - Migrations: `discord_tron_master/migrations/`
 - OpenAI text client + prompt helpers: `discord_tron_master/classes/openai/text.py`, `classes/openai/tokens.py`, `classes/openai/chat_ml.py`
+- Discord LLM long-term memory: `discord_tron_master/classes/discord_memory.py` (SQLite + Snowflake Arctic embeddings)
 - Utilities: `classes/resolution.py`, `classes/text_replies.py`, `classes/message.py`, `classes/log_format.py`, `classes/custom_help.py`
 - Ollama broker: `discord_tron_master/classes/remote_ollama_broker.py`
 - Text game web UI: `discord_tron_master/classes/text_game_webui_runner.py`
@@ -68,3 +69,4 @@ Quick map of where things live and how data flows.
 - `!generate` -> `Generate.generate` -> `ImageGenerationJob` -> `QueueManager.enqueue_job` -> `Worker.process_jobs` -> websocket send
 - Mention + image -> `Img2img.on_message` -> `PromptVariationJob` / `PromptlessVariationJob` / `ImageUpscalingJob`
 - Mention + text -> `Img2img._handle_mentioned_message` -> `ChatML` + `GPT.discord_bot_response`
+- Mention + text memory -> `GPT.discord_bot_response` local `memory_search` loop -> response -> `DiscordMemory.store_exchange`

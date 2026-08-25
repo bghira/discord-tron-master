@@ -3,6 +3,7 @@
 # Path: discord_tron_master/cogs/image/img2img.py
 # Compare this snippet from discord_tron_master/cogs/image/img2img.py:
 from io import BytesIO
+import asyncio
 from discord.ext import commands
 from discord_tron_master.classes.app_config import AppConfig
 import logging, traceback, discord
@@ -23,6 +24,7 @@ from discord_tron_master.classes.discord.url_helpers import (
     remove_url,
     suppress_url_embeds,
 )
+from discord_tron_master.classes.discord_memory import DiscordMemory
 
 # For queue manager, etc.
 discord_wrapper = DiscordBot.get_instance()
@@ -162,14 +164,31 @@ class Img2img(commands.Cog):
                 chat_ml = ChatML(user_conversation, config_user_id=message.author.id)
             await chat_ml.add_user_reply(message.content)
             response = await gpt.discord_bot_response(
-                prompt=await chat_ml.get_prompt(), ctx=message
+                prompt=await chat_ml.get_prompt(),
+                ctx=message,
+                memory_scope_id=conversation_owner,
             )
             response = GPT.ensure_requested_discord_mentions(message.content, response)
             response = suppress_url_embeds(response)
             await chat_ml.add_assistant_reply(response)
-            await DiscordBot.send_large_message(
+            sent_message = await DiscordBot.send_large_message(
                 message, message.author.mention + " " + ChatML.clean(response)
             )
+            try:
+                await asyncio.to_thread(
+                    DiscordMemory.store_exchange,
+                    conversation_id=conversation_owner,
+                    user_message_id=message.id,
+                    assistant_message_id=getattr(sent_message, "id", None),
+                    guild_id=getattr(message.guild, "id", None),
+                    channel_id=getattr(message.channel, "id", None),
+                    author_id=message.author.id,
+                    author_name=getattr(message.author, "display_name", str(message.author)),
+                    user_text=message.content,
+                    assistant_text=response,
+                )
+            except Exception:
+                logging.exception("Failed to store Discord conversation memory")
         except Exception as e:
             await message.channel.send(
                 f"{message.author.mention} I am sorry, friend. I had an error while generating text inference: {e}"
