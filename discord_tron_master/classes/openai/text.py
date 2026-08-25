@@ -55,8 +55,10 @@ class GPT:
         "Respond directly to the prompt content only."
     )
     _DISCORD_CAPABILITIES = (
-        "You are responding directly inside Discord. Your response will be posted by the bot, "
-        "so you can mention a user or app by copying an exact Discord mention token such as "
+        "You are responding directly inside Discord. Your response will be posted by the bot. "
+        "Be concise, use as few words as practical, and add a little playful sass. Do not be "
+        "rude; include extra detail only when necessary to answer correctly. You can mention a "
+        "user or app by copying an exact Discord mention token such as "
         "<@123> or <@!123> from the user's request. Never claim that you cannot send a Discord "
         "mention. Do not invent IDs or mention tokens that were not provided. You also have tools "
         "for current web search, reading webpages, and exploring public GitHub repositories. Use "

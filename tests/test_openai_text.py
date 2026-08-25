@@ -136,6 +136,8 @@ class GPTRequestTests(unittest.TestCase):
         role, prompt = gpt.turbo_completion.await_args.args
         options = gpt.turbo_completion.await_args.kwargs
         self.assertIn("responding directly inside Discord", role)
+        self.assertIn("use as few words as practical", role)
+        self.assertIn("a little playful sass", role)
         self.assertIn("Never claim that you cannot send a Discord mention", role)
         self.assertEqual(prompt, 'ping <@123>')
         self.assertTrue(options["enable_tools"])
