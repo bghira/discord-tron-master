@@ -69,4 +69,5 @@ Quick map of where things live and how data flows.
 - `!generate` -> `Generate.generate` -> `ImageGenerationJob` -> `QueueManager.enqueue_job` -> `Worker.process_jobs` -> websocket send
 - Mention + image -> `Img2img.on_message` -> `PromptVariationJob` / `PromptlessVariationJob` / `ImageUpscalingJob`
 - Mention + text -> `Img2img._handle_mentioned_message` -> `ChatML` + `GPT.discord_bot_response`
+- Mention + document -> `attachment_helpers.build_attachment_context` -> ordinary GPT chat context
 - Mention + text memory -> `GPT.discord_bot_response` local `memory_search` loop -> response -> `DiscordMemory.store_exchange`

@@ -15,6 +15,7 @@ This codebase is capable of:
   that the conversation rolls over without overrunning the API token limit.
   + Older exchanges are retained in scoped SQLite/Snowflake semantic memory.
     `!clear` resets recent chat history; `!clear memory` deletes long-term memory.
+  + Mentioned text/code/config attachments are read directly into chat context.
 * Img2Img and upscaling via Stable Diffusion workers
 * As-deterministic-as-possible generation, when desired
 * Reliable and exceptional results, out of the box, compared to other

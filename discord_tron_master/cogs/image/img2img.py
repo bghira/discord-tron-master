@@ -24,6 +24,10 @@ from discord_tron_master.classes.discord.url_helpers import (
     remove_url,
     suppress_url_embeds,
 )
+from discord_tron_master.classes.discord.attachment_helpers import (
+    build_attachment_context,
+    is_image_attachment,
+)
 from discord_tron_master.classes.discord_memory import DiscordMemory
 
 # For queue manager, etc.
@@ -119,23 +123,43 @@ class Img2img(commands.Cog):
             .replace(f"<@!{self.bot.user.id}>", "")
             .strip()
         )
+        direct_url_source = message.content
         # Log the content
         logging.debug(f"Message content: {message.content}")
-        # Handle image attachments
+        # Read document attachments into chat context. Image-only messages retain
+        # the existing variation/upscale workflow.
         if message.attachments:
-            attachment = message.attachments[0]
-            if attachment.content_type.startswith("image/"):
+            attachment_context = await build_attachment_context(message.attachments)
+            if attachment_context:
+                message.content = (
+                    f"{message.content}\n\n{attachment_context}".strip()
+                )
+            else:
+                attachment = next(
+                    (
+                        item
+                        for item in message.attachments
+                        if is_image_attachment(item)
+                    ),
+                    None,
+                )
+                if attachment is None:
+                    await message.channel.send(
+                        f"{message.author.mention} I couldn't read that attachment. "
+                        "Try a text, Markdown, code, JSON, YAML, CSV, or config file."
+                    )
+                    return
                 try:
                     return await self._handle_image_attachment(message, attachment)
                 except Exception as e:
                     await message.channel.send(
                         f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
                     )
-            return
+                    return
 
         # Direct image URLs are consumed by the image path. Other URLs must remain
         # in the prompt so the chat model and its web/repository tools can read them.
-        for url in find_urls(message.content):
+        for url in find_urls(direct_url_source):
             if not is_direct_image_url(url):
                 continue
             message.content = remove_url(message.content, url)
