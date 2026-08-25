@@ -70,4 +70,5 @@ Quick map of where things live and how data flows.
 - Mention + image -> `Img2img.on_message` -> `PromptVariationJob` / `PromptlessVariationJob` / `ImageUpscalingJob`
 - Mention + text -> `Img2img._handle_mentioned_message` -> `ChatML` + `GPT.discord_bot_response`
 - Mention + document -> `attachment_helpers.build_attachment_context` -> ordinary GPT chat context
+- Reply implicitly mentioning this bot but addressing another mention -> model `discord_decline` -> `🔇`, no text reply
 - Mention + text memory -> `GPT.discord_bot_response` local `memory_search` loop -> response -> `DiscordMemory.store_exchange`

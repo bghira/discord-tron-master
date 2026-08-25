@@ -117,6 +117,31 @@ class Img2img(commands.Cog):
             await generator.generate(message, prompt=prompt)
 
     async def _handle_mentioned_message(self, message):
+        bot_user_id = int(self.bot.user.id)
+        raw_message_content = str(message.content or "")
+        bot_was_explicitly_mentioned = any(
+            token in raw_message_content
+            for token in (f"<@{bot_user_id}>", f"<@!{bot_user_id}>")
+        )
+        replied_message = getattr(getattr(message, "reference", None), "resolved", None)
+        replied_author_id = getattr(getattr(replied_message, "author", None), "id", None)
+        other_mentions = [
+            mention
+            for mention in list(getattr(message, "mentions", []) or [])
+            if int(getattr(mention, "id", 0) or 0) != bot_user_id
+        ]
+        discord_routing_context = {
+            "current_bot_explicitly_mentioned": bot_was_explicitly_mentioned,
+            "reply_to_current_bot_message": replied_author_id == bot_user_id,
+            "other_mention_ids": [
+                str(getattr(mention, "id", "")) for mention in other_mentions
+            ],
+            "other_bot_mention_ids": [
+                str(getattr(mention, "id", ""))
+                for mention in other_mentions
+                if bool(getattr(mention, "bot", False))
+            ],
+        }
         # Clean the message content
         message.content = (
             message.content.replace(f"<@{self.bot.user.id}>", "")
@@ -191,7 +216,14 @@ class Img2img(commands.Cog):
                 prompt=await chat_ml.get_prompt(),
                 ctx=message,
                 memory_scope_id=conversation_owner,
+                discord_routing_context=discord_routing_context,
             )
+            if GPT.is_discord_decline_response(response):
+                try:
+                    await message.add_reaction("🔇")
+                except Exception:
+                    logging.exception("Failed to add Discord decline reaction")
+                return
             response = GPT.ensure_requested_discord_mentions(message.content, response)
             response = suppress_url_embeds(response)
             await chat_ml.add_assistant_reply(response)

@@ -147,6 +147,45 @@ class GPTRequestTests(unittest.TestCase):
         self.assertEqual(prompt, 'ping <@123>')
         self.assertTrue(options["enable_tools"])
 
+    def test_discord_decline_tool_receives_routing_context(self):
+        gpt = make_gpt()
+        gpt.turbo_completion = AsyncMock(
+            return_value='{"tool_call":"discord_decline"}'
+        )
+        ctx = SimpleNamespace(author=SimpleNamespace(id=42))
+        routing = {
+            "current_bot_explicitly_mentioned": False,
+            "reply_to_current_bot_message": True,
+            "other_mention_ids": ["99"],
+            "other_bot_mention_ids": ["99"],
+        }
+
+        result = asyncio.run(
+            gpt.discord_bot_response(
+                "ask <@99> what it thinks",
+                ctx=ctx,
+                discord_routing_context=routing,
+            )
+        )
+
+        self.assertTrue(GPT.is_discord_decline_response(result))
+        role = gpt.turbo_completion.await_args.args[0]
+        self.assertIn("discord_decline", role)
+        self.assertIn('"reply_to_current_bot_message": true', role)
+        self.assertIn('"other_bot_mention_ids": ["99"]', role)
+
+    def test_discord_decline_parser_rejects_extra_actions(self):
+        self.assertTrue(
+            GPT.is_discord_decline_response(
+                '```json\n{"tool_call":"discord_decline"}\n```'
+            )
+        )
+        self.assertFalse(
+            GPT.is_discord_decline_response(
+                '{"tool_call":"discord_decline","message":"also say this"}'
+            )
+        )
+
     def test_discord_chat_can_cycle_through_local_memory(self):
         gpt = make_gpt()
         gpt.turbo_completion = AsyncMock(
