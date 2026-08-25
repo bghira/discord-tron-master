@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 
 URL_RE = re.compile(r"(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+BARE_URL_RE = re.compile(r"(?<!<)(https?://[^\s<>\)\]]+)")
+TRAILING_URL_PUNCTUATION = ".,!?;:"
 
 
 def find_urls(text: str) -> list[str]:
@@ -21,3 +23,15 @@ def remove_url(text: str, url: str) -> str:
         if candidate in value:
             return value.replace(candidate, "", 1).strip()
     return value.strip()
+
+
+def suppress_url_embeds(text: str) -> str:
+    """Wrap outbound URLs in angle brackets so Discord does not embed them."""
+
+    def wrap(match: re.Match) -> str:
+        url = match.group(1)
+        trimmed = url.rstrip(TRAILING_URL_PUNCTUATION)
+        punctuation = url[len(trimmed) :]
+        return f"<{trimmed}>{punctuation}"
+
+    return BARE_URL_RE.sub(wrap, str(text or ""))

@@ -21,6 +21,7 @@ from discord_tron_master.classes.discord.url_helpers import (
     find_urls,
     is_direct_image_url,
     remove_url,
+    suppress_url_embeds,
 )
 
 # For queue manager, etc.
@@ -164,6 +165,7 @@ class Img2img(commands.Cog):
                 prompt=await chat_ml.get_prompt(), ctx=message
             )
             response = GPT.ensure_requested_discord_mentions(message.content, response)
+            response = suppress_url_embeds(response)
             await chat_ml.add_assistant_reply(response)
             await DiscordBot.send_large_message(
                 message, message.author.mention + " " + ChatML.clean(response)

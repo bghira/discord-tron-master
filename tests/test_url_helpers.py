@@ -4,6 +4,7 @@ from discord_tron_master.classes.discord.url_helpers import (
     find_urls,
     is_direct_image_url,
     remove_url,
+    suppress_url_embeds,
 )
 
 
@@ -37,6 +38,30 @@ class URLHelperTests(unittest.TestCase):
 
         self.assertNotIn(image_url, cleaned)
         self.assertIn(repo_url, cleaned)
+
+    def test_bare_outbound_url_is_wrapped_to_suppress_embed(self):
+        text = "Source: https://github.com/example/project."
+
+        result = suppress_url_embeds(text)
+
+        self.assertEqual(result, "Source: <https://github.com/example/project>.")
+
+    def test_already_wrapped_url_is_unchanged(self):
+        text = "Source: <https://github.com/example/project>"
+
+        result = suppress_url_embeds(text)
+
+        self.assertEqual(result, text)
+
+    def test_markdown_link_destination_is_wrapped(self):
+        text = "See [the repository](https://github.com/example/project)."
+
+        result = suppress_url_embeds(text)
+
+        self.assertEqual(
+            result,
+            "See [the repository](<https://github.com/example/project>).",
+        )
 
 
 if __name__ == "__main__":
