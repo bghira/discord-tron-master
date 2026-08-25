@@ -187,6 +187,64 @@ class GPTRequestTests(unittest.TestCase):
             ["search_doc", "get_repo_structure", "read_file"],
         )
 
+    def test_exact_github_repo_url_injects_direct_readme_context(self):
+        gpt = make_gpt()
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
+        )
+        create = Mock(return_value=response)
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        github_response = Mock(text="# huggingface-hub-rvc\nRVC pipeline")
+        github_response.raise_for_status = Mock()
+
+        with (
+            patch(
+                "discord_tron_master.classes.openai.text.OpenAI",
+                return_value=client,
+            ),
+            patch(
+                "discord_tron_master.classes.openai.text.requests.get",
+                return_value=github_response,
+                create=True,
+            ) as github_get,
+        ):
+            gpt._send_zai_openai_request(
+                [
+                    {"role": "system", "content": "system prompt"},
+                    {
+                        "role": "user",
+                        "content": (
+                            "explain https://github.com/"
+                            "SimpleTuner-io/huggingface-hub-rvc"
+                        ),
+                    },
+                ],
+                enable_tools=True,
+            )
+
+        github_get.assert_called_once()
+        request_messages = create.call_args.kwargs["messages"]
+        direct_context = request_messages[1]["content"]
+        self.assertIn("The repository exists", direct_context)
+        self.assertIn("# huggingface-hub-rvc", direct_context)
+
+    def test_mcp_placeholder_scaffolding_is_reduced_to_final_answer(self):
+        leaked = (
+            "</assistant_reply_placeholder>Search Results from Perplexity\n"
+            "No result. Here's my answer:intermediate"
+            "</assistant_reply_placeholder>Web search found nothing. "
+            "Here's my response:The repository provides an RVC pipeline."
+        )
+
+        result = GPT._clean_zai_tool_response(leaked)
+
+        self.assertEqual(
+            result,
+            "The repository provides an RVC pipeline.",
+        )
+
     def test_zai_rejects_empty_provider_content(self):
         gpt = make_gpt()
         response = SimpleNamespace(
