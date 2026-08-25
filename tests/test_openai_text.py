@@ -27,10 +27,12 @@ class FakeConfig:
         api_key="test-key",
         model="glm-5-turbo",
         enable_mcp_tools=True,
+        hf_api_key="hf-test-key",
     ):
         self.api_key = api_key
         self.model = model
         self.enable_mcp_tools = enable_mcp_tools
+        self.hf_api_key = hf_api_key
 
     def get_openai_api_key(self):
         return self.api_key
@@ -40,6 +42,9 @@ class FakeConfig:
 
     def get_openai_mcp_tools_enabled(self):
         return self.enable_mcp_tools
+
+    def get_huggingface_api_key(self):
+        return self.hf_api_key
 
     def get_user_setting(self, _user_id, _setting, default=None):
         return default
@@ -231,6 +236,65 @@ class GPTRequestTests(unittest.TestCase):
         direct_context = request_messages[1]["content"]
         self.assertIn("The repository exists", direct_context)
         self.assertIn("# huggingface-hub-rvc", direct_context)
+
+    def test_huggingface_space_url_retries_429_and_injects_readme(self):
+        gpt = make_gpt()
+        completion_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
+        )
+        create = Mock(return_value=completion_response)
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        rate_limited = Mock(status_code=429, headers={"Retry-After": "3"})
+        readme_response = Mock(
+            status_code=200,
+            headers={},
+            text="# MiniMax Music Training\nMultiple training approaches.",
+        )
+        readme_response.raise_for_status = Mock()
+
+        with (
+            patch(
+                "discord_tron_master.classes.openai.text.OpenAI",
+                return_value=client,
+            ),
+            patch(
+                "discord_tron_master.classes.openai.text.requests.get",
+                side_effect=[rate_limited, readme_response],
+                create=True,
+            ) as hf_get,
+            patch("discord_tron_master.classes.openai.text.time.sleep") as sleep,
+        ):
+            gpt._send_zai_openai_request(
+                [
+                    {"role": "system", "content": "system prompt"},
+                    {
+                        "role": "user",
+                        "content": (
+                            "explain https://huggingface.co/spaces/"
+                            "MiniMaxMusicTraining/README"
+                        ),
+                    },
+                ],
+                enable_tools=True,
+            )
+
+        self.assertEqual(hf_get.call_count, 2)
+        hf_get.assert_called_with(
+            "https://huggingface.co/spaces/MiniMaxMusicTraining/README/"
+            "resolve/main/README.md",
+            headers={
+                "User-Agent": "opencode/1.15.13",
+                "Authorization": "Bearer hf-test-key",
+            },
+            timeout=15,
+        )
+        sleep.assert_called_once_with(3.0)
+        direct_context = create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("The repository exists", direct_context)
+        self.assertIn("# MiniMax Music Training", direct_context)
+        self.assertIn("do not fetch this URL again with tools", direct_context)
 
     def test_mcp_placeholder_scaffolding_is_reduced_to_final_answer(self):
         leaked = (
