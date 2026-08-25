@@ -24,46 +24,6 @@ _BACKEND_SEMAPHORE_LOCK = threading.Lock()
 _BACKEND_CONCURRENCY_LIMIT = 4  # per backend
 _PROMPT_SECTION_RE = re.compile(r"^([A-Z][A-Z0-9_]+):(?:\s*(.*))?$")
 
-_ZAI_TOKEN_CACHE: dict[str, str] = {}  # original_key -> refreshed_token
-_ZAI_TOKEN_CACHE_TIME: dict[str, float] = {}
-_ZAI_TOKEN_REFRESH_INTERVAL = 120
-
-
-def _zai_get_fresh_token() -> str:
-    """Return a fresh JWT, refreshing via /api/v1/auths/ every 2 minutes."""
-    import time as _time
-    original = config.get_ollama_api_key() or config.get_openai_api_key() or ""
-    now = _time.time()
-    last = _ZAI_TOKEN_CACHE_TIME.get("t", 0)
-    if now - last < _ZAI_TOKEN_REFRESH_INTERVAL and "t" in _ZAI_TOKEN_CACHE:
-        return _ZAI_TOKEN_CACHE["t"]
-    current = _ZAI_TOKEN_CACHE.get("t", original)
-    try:
-        resp = requests.get(
-            "https://chat.z.ai/api/v1/auths/",
-            headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-                "Accept": "*/*",
-                "Origin": "https://chat.z.ai",
-                "Authorization": f"Bearer {current}",
-                "Cookie": f"token={current}",
-            },
-            timeout=10,
-        )
-        if resp.ok:
-            new_token = resp.json().get("token")
-            if new_token:
-                _ZAI_TOKEN_CACHE["t"] = new_token
-                _ZAI_TOKEN_CACHE_TIME["t"] = now
-                if new_token != current:
-                    logger.info("ZAI token refreshed")
-                return new_token
-    except Exception as exc:
-        logger.warning("ZAI token refresh failed: %s", exc)
-    _ZAI_TOKEN_CACHE_TIME["t"] = now
-    return current or original
-
-
 def _get_backend_semaphore(backend: str) -> asyncio.Semaphore:
     key = (backend or "zai").strip().lower()
     with _BACKEND_SEMAPHORE_LOCK:
@@ -242,13 +202,15 @@ class GPT:
 
     _OPENCODE_VERSION = "1.4.3"
 
-    def _send_zai_openai_request(self, message_log: list[dict]) -> str | None:
+    def _send_zai_openai_request(self, message_log: list[dict]) -> str:
         """Send a request to ZAI via the OpenAI-compatible coding endpoint."""
         import uuid as _uuid
-        api_key = _zai_get_fresh_token()
+        api_key = self.config.get_openai_api_key()
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError("The ZAI API key is not configured.")
         session_id = str(_uuid.uuid4())
         client = OpenAI(
-            api_key=api_key,
+            api_key=api_key.strip(),
             base_url=self._ZAI_BASE_URL,
             default_headers={
                 "User-Agent": f"opencode/{self._OPENCODE_VERSION}",
@@ -266,7 +228,9 @@ class GPT:
         )
         text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         logger.warning("ZAI OpenAI response: len=%d", len(text))
-        return text or None
+        if not text:
+            raise ValueError("ZAI returned an empty text response.")
+        return text
 
     def _resolve_zai_model(self) -> str:
         raw_model = str(getattr(self, "engine", "") or "").strip()
@@ -765,7 +729,7 @@ class GPT:
 
             if backend == "zai":
                 message_log = [
-                    {"role": "assistant", "content": effective_role},
+                    {"role": "system", "content": effective_role},
                     {"role": "user", "content": effective_prompt},
                 ]
                 delay = 2.0
@@ -782,7 +746,7 @@ class GPT:
                         delay = min(delay * 2, 120.0)
                     except Exception as e:
                         logger.error(f"Error sending request to ZAI: {e}")
-                        return None
+                        raise
 
             max_ttft_retries = 3
             for attempt in range(1, max_ttft_retries + 1):

@@ -148,6 +148,8 @@ class ChatML:
     # Clean the txt in a manner it can be inserted into the DB.
     @staticmethod
     def clean(text):
+        if not isinstance(text, str):
+            raise ValueError("Cannot store an empty or non-text LLM response.")
         # Clean the newlines.
         return text.replace("\\n", "\n")
 
