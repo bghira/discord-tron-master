@@ -17,6 +17,11 @@ from discord_tron_master.classes.jobs.image_upscaling_job import ImageUpscalingJ
 from discord_tron_master.bot import clean_traceback
 from discord_tron_master.cogs.image.generate import Generate
 from discord_tron_master.adapters.emulator_bridge import EmulatorBridge as ZorkEmulator
+from discord_tron_master.classes.discord.url_helpers import (
+    find_urls,
+    is_direct_image_url,
+    remove_url,
+)
 
 # For queue manager, etc.
 discord_wrapper = DiscordBot.get_instance()
@@ -125,32 +130,19 @@ class Img2img(commands.Cog):
                     )
             return
 
-        # There might be URLs in the message body, grab them via regex and check if they're images. The images may be surrounded by <> or () or [] or nothing.
-        import re
-
-        url_list = re.findall(
-            r"(?:<|\(|\[)?(https?://[^\s<>\)\]]+)(?:>|\)|\])?", message.content
-        )
-
-        if len(url_list) > 0:
-            # Remove the URLs from the original string:
-            message.content = re.sub(r"(https?://[^\s]+)", "", message.content).strip()
-            for url in url_list:
-                # Remove any ?query=string from the URL:
-                test_url = url.split("?")[0]
-                if (
-                    test_url.endswith(".png")
-                    or test_url.endswith(".jpg")
-                    or test_url.endswith(".jpeg")
-                    or test_url.endswith(".webp")
-                ):
-                    try:
-                        return await self._handle_image_attachment(message, url)
-                    except Exception as e:
-                        await message.channel.send(
-                            f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
-                        )
-                    return
+        # Direct image URLs are consumed by the image path. Other URLs must remain
+        # in the prompt so the chat model and its web/repository tools can read them.
+        for url in find_urls(message.content):
+            if not is_direct_image_url(url):
+                continue
+            message.content = remove_url(message.content, url)
+            try:
+                return await self._handle_image_attachment(message, url)
+            except Exception as e:
+                await message.channel.send(
+                    f"Error generating image: {e}\n\nStack trace:\n{await clean_traceback(traceback.format_exc())}"
+                )
+            return
 
         # Handle conversation
         try:
