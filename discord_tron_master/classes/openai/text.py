@@ -235,7 +235,7 @@ class GPT:
     def _resolve_zai_model(self) -> str:
         raw_model = str(getattr(self, "engine", "") or "").strip()
         if not raw_model or raw_model in {"o3-mini", "text-davinci-003"}:
-            return self._ZAI_MODEL
+            return self.config.get_openai_model()
         return raw_model
 
     def _resolve_cli_model(self, backend: str) -> str | None:

@@ -11,7 +11,10 @@ DEFAULT_CONFIG = {
         "port": 6789,
         "tls": False,
     },
-    "openai_api": {"api_key": None},
+    "openai_api": {
+        "api_key": None,
+        "model": "glm-5-turbo",
+    },
     "ollama": {
         "base_url": "http://127.0.0.1:11434",
         "model": "llama3.1",
@@ -208,6 +211,11 @@ class AppConfig:
     def get_openai_api_key(self):
         self.reload_config()
         return self.config["openai_api"].get("api_key", None)
+
+    def get_openai_model(self):
+        self.reload_config()
+        value = self.config["openai_api"].get("model")
+        return str(value).strip() if value else "glm-5-turbo"
 
     def get_ollama_api_key(self):
         self.reload_config()

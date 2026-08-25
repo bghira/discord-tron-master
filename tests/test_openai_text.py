@@ -22,19 +22,23 @@ from discord_tron_master.classes.openai.text import GPT
 
 
 class FakeConfig:
-    def __init__(self, api_key="test-key"):
+    def __init__(self, api_key="test-key", model="glm-5-turbo"):
         self.api_key = api_key
+        self.model = model
 
     def get_openai_api_key(self):
         return self.api_key
+
+    def get_openai_model(self):
+        return self.model
 
     def normalize_zork_backend(self, backend):
         return backend
 
 
-def make_gpt(api_key="test-key"):
+def make_gpt(api_key="test-key", model="glm-5-turbo"):
     gpt = object.__new__(GPT)
-    gpt.config = FakeConfig(api_key)
+    gpt.config = FakeConfig(api_key, model)
     gpt.engine = "o3-mini"
     gpt.temperature = 0.9
     gpt.max_tokens = 4096
@@ -45,7 +49,7 @@ def make_gpt(api_key="test-key"):
 
 class GPTRequestTests(unittest.TestCase):
     def test_zai_uses_api_key_directly_with_coding_endpoint(self):
-        gpt = make_gpt("  test-key  ")
+        gpt = make_gpt("  test-key  ", model="glm-5.1")
         response = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="hello"))]
         )
@@ -75,7 +79,7 @@ class GPTRequestTests(unittest.TestCase):
             },
         )
         create.assert_called_once_with(
-            model="glm-5-turbo",
+            model="glm-5.1",
             messages=[{"role": "user", "content": "hello"}],
             temperature=0.9,
             max_tokens=4096,

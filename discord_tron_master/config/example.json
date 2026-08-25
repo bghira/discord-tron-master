@@ -9,7 +9,8 @@
         "protocol": "wss"
     },
     "openai_api": {
-        "api_key": null
+        "api_key": null,
+        "model": "glm-5-turbo"
     },
     "huggingface_api": {
         "api_key": null
