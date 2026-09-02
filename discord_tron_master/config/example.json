@@ -13,6 +13,13 @@
         "model": "glm-5-turbo",
         "enable_mcp_tools": true
     },
+    "ollama": {
+        "api_key": null,
+        "base_url": "http://127.0.0.1:11434",
+        "model": "gemma4:cloud",
+        "keep_alive": "30m",
+        "timeout_seconds": 600
+    },
     "huggingface_api": {
         "api_key": null
     },

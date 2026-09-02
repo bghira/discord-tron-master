@@ -3,6 +3,8 @@ import json, logging, os
 from pathlib import Path
 from urllib.parse import quote_plus
 
+DEFAULT_OLLAMA_MODEL = "gemma4:cloud"
+
 DEFAULT_CONFIG = {
     "concurrent_slots": 1,
     "cmd_prefix": "+",
@@ -18,7 +20,7 @@ DEFAULT_CONFIG = {
     },
     "ollama": {
         "base_url": "http://127.0.0.1:11434",
-        "model": "llama3.1",
+        "model": DEFAULT_OLLAMA_MODEL,
         "keep_alive": "30m",
         "timeout_seconds": 600,
     },
@@ -232,7 +234,8 @@ class AppConfig:
 
     def get_ollama_model(self):
         self.reload_config()
-        return self.config.get("ollama", {}).get("model", "llama3.1")
+        value = self.config.get("ollama", {}).get("model")
+        return str(value).strip() if value else DEFAULT_OLLAMA_MODEL
 
     def get_ollama_keep_alive(self):
         self.reload_config()

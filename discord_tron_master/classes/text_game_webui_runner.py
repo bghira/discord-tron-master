@@ -8,13 +8,14 @@ import sys
 import time
 from pathlib import Path
 
-from discord_tron_master.classes.app_config import AppConfig
+from discord_tron_master.classes.app_config import AppConfig, DEFAULT_OLLAMA_MODEL
 
 logger = logging.getLogger(__name__)
 
 _ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 _BACKEND_DEFAULT_MODELS = {
     "zai": "glm-5-turbo",
+    "ollama": DEFAULT_OLLAMA_MODEL,
 }
 
 
@@ -133,6 +134,8 @@ class TextGameWebUIRunner:
             completion_mode = completion_mode or backend
             llm_model = llm_model or backend_model
             if not structured_model_spec:
+                if backend == "ollama":
+                    llm_model = llm_model or self._config.get_ollama_model()
                 llm_model = llm_model or _BACKEND_DEFAULT_MODELS.get(backend)
             if backend == "zai":
                 llm_base_url = llm_base_url or _ZAI_DEFAULT_BASE_URL
