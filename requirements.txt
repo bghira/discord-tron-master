@@ -8,5 +8,5 @@ Flask-Migrate
 mysql-connector-python
 python-dotenv
 openai-whisper
--e ../text-game-engine
--e ../text-game-webui
+text-game-engine @ git+https://github.com/bghira/text-game-engine.git@main
+text-game-webui @ git+https://github.com/bghira/text-game-webui.git@main

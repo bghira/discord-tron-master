@@ -8,7 +8,7 @@ readme = "README.md"
 packages = [{include = "discord_tron_master"}]
 
 [tool.poetry.dependencies]
-python = ">3.10,<3.12"
+python = ">=3.11,<3.12"
 pyopenssl = "^26.0.0"
 bcrypt = "^4.0.1"
 pillow = "^12.1.1"
@@ -39,8 +39,8 @@ setuptools = ">=65"
 numpy = ">=1.24,<2"
 sentence-transformers = "^5.2.2"
 openai-whisper = "*"
-"text-game-engine" = { path = "../text-game-engine", develop = true }
-"text-game-webui" = { path = "../text-game-webui", develop = true }
+"text-game-engine" = { git = "https://github.com/bghira/text-game-engine.git", branch = "main" }
+"text-game-webui" = { git = "https://github.com/bghira/text-game-webui.git", branch = "main" }
 
 
 [build-system]
