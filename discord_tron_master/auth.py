@@ -66,7 +66,7 @@ class Auth:
             elif key_data and key_data.expires > datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None):
                 logging.debug("The api key has not expired yet.")
                 return True
-            logging.error("API Key was Invalid: %s" % api_key)
+            logging.error("API Key was Invalid: [REDACTED]")
         return False
 
     def validate_access_token(self, access_token):
