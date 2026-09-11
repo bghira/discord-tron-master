@@ -58,9 +58,9 @@ def enqueue_webui_image_job(discord: Any, data: dict[str, Any]) -> tuple[dict[st
             loop,
         )
         future.result(timeout=5)
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to enqueue WebUI image job")
-        return {"error": str(exc)}, 500
+        return {"error": "Failed to enqueue image job"}, 500
 
     return {"ok": True, "job_id": job.id}, 200
 
@@ -116,9 +116,9 @@ def apply_webui_backend_config(config: AppConfig, data: dict[str, Any]) -> tuple
                 model=model,
                 thinking_enabled=thinking_enabled,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Failed to persist WebUI backend config to AppConfig")
-            return {"error": str(exc)}, 500
+            return {"error": "Failed to persist backend config"}, 500
 
     try:
         from sqlalchemy import or_
@@ -162,9 +162,9 @@ def apply_webui_backend_config(config: AppConfig, data: dict[str, Any]) -> tuple
                 changed += 1
             if changed:
                 session.commit()
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to apply WebUI backend config")
-        return {"error": str(exc)}, 500
+        return {"error": "Failed to apply backend config"}, 500
 
     return {
         "ok": True,
