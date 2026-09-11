@@ -5,7 +5,7 @@ from OpenSSL import crypto
 
 def generate_config_file(filename, data):
     output = json.dumps(data, indent=4)
-    logging.info(f"Generated client TLS details:\n" + str(output))
+    logging.info(f"Generated client TLS details for file: {filename}")
     with open(filename, "w") as f:
         json.dump(data, f, indent=4)
 

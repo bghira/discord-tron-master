@@ -181,7 +181,7 @@ def create_client_tokens(username: str):
             logging.info("No API Key found, generating one...")
             api_key = ApiKey.generate_by_user_id(existing_user.id)
         logging.info(
-            f"API key for client/user:\n" + json.dumps(api_key.to_dict(), indent=4)
+            f"API key for client/user (id={api_key.client_id}, user_id={api_key.user_id}, expires={api_key.expires})"
         )
         # Do we have tokens for this user?
         logging.info("Checking for existing tokens...")
